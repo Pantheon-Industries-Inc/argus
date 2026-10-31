@@ -169,8 +169,20 @@ from label import pieces, wording
     ('The pickup-to-transport transition is partly between samples.', False,
      'The pickup-to-transport transition is partly between samples.'),
     # names argus-wording-1 garbled ("Final hair-fitting pass in retain connection", "remains loose at the")
+    # one part's negated claim keeps its scope in a stitched review: without it, it reads as the whole recording's
     ('Final hair-fitting pass in this window does not retain connection', True,
-     'Final hair-fitting pass does not retain connection'),
+     'Final hair-fitting pass in this window does not retain connection'),
+    ('No grasp in this window.', False, 'No grasp in this window.'),
+    ('During the window, nothing happens.', False, 'During the window, nothing happens.'),
+    # review round 4: a leading Neither or No, a real window after throughout, a place something is put
+    ('Neither grasp nor release inferred between samples', True, 'Neither grasp nor release inferred between samples'),
+    ('No release between samples.', False, 'No release between samples.'),
+    ('No contact between sampled frames.', False, 'No contact between sampled frames.'),
+    ('Wipe throughout the window and the sill.', False, 'Wipe throughout the window and the sill.'),
+    ('Clean throughout the window.', False, 'Clean throughout the window.'),
+    ('Spray cleaner throughout the window, then wipe.', False, 'Spray cleaner throughout the window, then wipe.'),
+    ('Place the plant in this window.', False, 'Place the plant in this window.'),
+    ('Put the cup in this window', True, 'Put the cup in this window'),
     ('A further working loop remains loose at the request boundary', True,
      'A further working loop remains loose at the request boundary'),
     ('Much of the later window consists of repeated fitting attempts.', False,

@@ -166,10 +166,7 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     r'(?:in|within|during|throughout)\s+(?:all\s+of\s+)?(?:this|that|each|the\s+current)\s+' + _WIN +
     r"(?!'s|\s+" + _EDGE + r'\b)(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|or|while|when|where|then|as|before|after|until|'
     r'is|are|was|were|does|do|did|remains?|stays?|shows?|appears?|seems?|has|have|had)\b|\w+ed\b))',
-    # "throughout the window": bare "the window" after a preposition of scope, only where it ends the phrase
-    # ("until the window is clean" and "reaches within the window and grabs" are real ones)
-    r'(?:during|throughout)\s+(?:all\s+of\s+)?the\s+' + _WIN +
-    r'(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|while|when|where|then)\b))',
+    # bare "the window" after "during" or "throughout" is never cut: "Clean throughout the window." is a real one
     r'(?:before|by|in|at|until)\s+the\s+next\s+(?:sample|sampled\s+(?:frame|view|image))\b',
     r'inside\s+(?:this|the\s+supplied)\s+' + _WIN + r'\b',
     r'by\s+the\s+(?:next|following)\s+(?:sample|sampled\s+(?:frame|view|image))\b',
@@ -329,6 +326,16 @@ def _rest(s: str) -> list[str]:
 _AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
 # a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
+# a claim that something did not happen: cutting its scope widens it ("No grasp in this window." in part 1 of a
+# stitched review is not "No grasp." over the recording), and a leading "No" or "Neither" names what did not happen
+_NEG_ANY = re.compile(r"\b(?:not|never|no|nor|neither|none|nothing|nobody|without|cannot|can't|isn't|aren't|wasn't|"
+                      r"weren't|doesn't|don't|didn't|won't|absent|lacks?)\b", I)
+_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b', I)   # a scope that is one part's, not the samples'
+_LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
+# a thing put somewhere: "Place the plant in this window." names where it went
+_PLACED = re.compile(r'\b(?:plac|put|set|hang|hung|hangs|mount|lean|rest|stand|sit|sat|mov|carr|bring|brought|insert|'
+                     r'position|stack|lay|laid|drop|store|leav|left)\w*\b[^.;:]*\b(?:in|into|within|onto|on)\s+'
+                     r'(?:this|that|each|the)\s+window\b', I)
 _HANGING = re.compile(r"\b(?:not|never|no|nor|isn't|aren't|wasn't|weren't|doesn't|don't|didn't|can't|cannot|won't|"
                       r"wouldn't|couldn't|shouldn't|is|are|was|were|be|been|being|can|could|will|would|may|might|"
                       r"must|should|does|do|did|has|have|had)\s*$", I)
@@ -351,7 +358,15 @@ def _event_name(head: str) -> str | None:
     return y if any(w in _EVENT_WORDS for w in _rest(y)) else None
 
 
-def _clause(c: str) -> str | None:
+def _clause(c: str, whole: bool = False) -> str | None:
+    k = _clause_cut(c)
+    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or
+                         (not whole and _NEG_ANY.search(c) and _UNIT_WORD.search(c))):
+        return c
+    return k
+
+
+def _clause_cut(c: str) -> str | None:
     """One clause, without its closing punctuation, without its process wording. None only when every word of it is
     the labelling's; a clause about the samples that only names events keeps their names ("Release inferred between
     samples" -> "Release"); a clause with anything else in it keeps it, losing at most a phrase that places it in the
@@ -382,7 +397,7 @@ def _named(y: str) -> str:
     return y
 
 
-def _prose(y: str) -> str | None:
+def _prose(y: str, whole: bool = False) -> str | None:
     out = []
     parts = SENTENCE_SEP.split(y)
     for i in range(0, len(parts), 2):
@@ -396,7 +411,7 @@ def _prose(y: str) -> str | None:
             semi = c.endswith(';')
             c = c[:-1].rstrip() if semi else c
             first = c if first is None else first
-            k = _clause(c) if c.strip(' ;') else None
+            k = _clause(c, whole) if c.strip(' ;') else None
             if k:
                 kept.append(k)
         if kept:
@@ -422,10 +437,12 @@ def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | Non
         z = ABOUT_CUT.sub(lambda m: m.group(0) if _rest(m.group(0)) or _EDGE_ABOUT.search(m.group(0)) or
                           _NEGATION.search(m.group(0)) or _AUX_BEFORE.search(y[:m.start()]) else '', y)
         z = _tidy(CUT.sub('', z)).strip(' ,;:')
-        if z != y and (_HANGING.search(z) or re.match(r'\s*no\b', y, I)):   # "Release isn't", "No release"
+        # "Release isn't", "Neither grasp nor release", "Put the cup", one part's "No grasp" in a stitched review
+        if z != y and (_HANGING.search(z) or _LEAD_NEG.match(y) or _PLACED.search(y) or
+                       (not whole and _NEG_ANY.search(y) and _UNIT_WORD.search(y))):
             return _late(y)
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
-    z = _prose(y)
+    z = _prose(y, whole)
     if z and z == _cap(y):          # only a capital letter changed: nothing was cut
         return _late(y)
     return _late(z) if z else z
