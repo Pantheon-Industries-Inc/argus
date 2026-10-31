@@ -147,7 +147,7 @@ ABOUT_EVIDENCE = re.compile('|'.join(_ABOUT_EVIDENCE), I)
 ABOUT_CUT = re.compile(r'\s*,?\s*(?:' + ABOUT.pattern + r')', I)     # the same, with its comma, for cutting from a name
 
 # phrases that only place a claim in the labelling: cut out, the claim kept
-CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
+_CUT_ALTS = [
     SAMPLES,
     r'at\s+(?:sample|(?:the\s+)?(?:next|following|previous|last|first)\s+sample)\b',
     r'(?:at|by|with)\s+(?:this\s+|the\s+)?(?:supplied\s+)?(?:(?:one|1|two|2|half)[- ]?(?:second|s)\s+)?sampl(?:ing|e)\s+'
@@ -177,7 +177,35 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     r'labell?ing|preparation)\s+cut\b' + _NOTPHYS,
     r'(?:in|from|across|within|throughout)\s+(?:all\s+|the\s+|these\s+)?(?:supplied|provided|given|sampled)\s+(?:frames?|'
     r'views?|images?|footage|clip|video|stills?|instants?|samples)\b',
-]) + r')', I)
+]
+CUT = re.compile(r'\s*,?\s*(?:' + '|'.join(_CUT_ALTS) + r')', I)
+
+# In a stitched review every scope is one part's: "No grasp in this window." or "Only one grasp is seen in the supplied
+# frames." in part 1 is not a claim over the recording. There a cut applies only where the text it takes holds no scope,
+# a preposition of place or extent before the part, its frames, footage, views or samples, whatever words come between;
+# the sampling itself ("between samples", "within the sampled interval", "at the preparation cut") is still cut
+_SCOPE_IN = re.compile(r'\b(?:in|within|inside|across|from|throughout|during|over|for|on|by\s+the\s+end\s+of)\s+'
+                       r'(?:[\w-]+\s+){0,4}?(?:windows?|parts?|clips?|requests?|segments?|excerpts?|portions?|'
+                       r'sections?|frames?|footage|videos?|recordings?|views?|images?|stills?|samples?|instants?)\b', I)
+
+
+class _Unscoped:
+    """rx, matching only where the text it would take holds no scope (_SCOPE_IN): the cuts of a stitched review."""
+
+    def __init__(self, rx):
+        self.rx = rx
+
+    def _ok(self, m):
+        return not _SCOPE_IN.search(m.group(0))
+
+    def search(self, s):
+        return next((m for m in self.rx.finditer(s) if self._ok(m)), None)
+
+    def sub(self, repl, s):
+        return self.rx.sub(lambda m: (repl(m) if callable(repl) else repl) if self._ok(m) else m.group(0), s)
+
+
+_CUT_S, _ABOUT_CUT_S = _Unscoped(CUT), _Unscoped(ABOUT_CUT)
 
 # a claim scoped to the part or the samples keeps its predicate: "not shown in this part" -> "not shown". "the part"
 # alone is a physical one ("the hole is visible in the part"), so only this part, the supplied part and the samples
@@ -322,16 +350,6 @@ def _rest(s: str) -> list[str]:
 # seen, and "Release does not." would say it never happened
 _AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
-# a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
-# In a stitched review every scope is one part's: "No grasp in this window.", "Only one grasp is seen in the supplied
-# frames." or "The lid remains closed throughout this part." in part 1 is not a claim over the recording, so there a
-# clause with a scope phrase keeps its wording. The sampling itself ("between samples", "within the sampled interval",
-# "at the preparation cut") is no scope and is still cut
-_SCOPE = re.compile(r'\b(?:in|within|during|throughout|across|over|from|for|on|inside|by\s+the\s+end\s+of)\s+'
-                    r'(?:(?:all|each|every|any|both)\s+(?:of\s+)?)?(?:the\s+|this\s+|these\s+|that\s+|those\s+)?'
-                    r'(?:(?:supplied|sampled|provided|given|current|available|shown)\s+)?'
-                    r'(?:windows?|parts?|clips?|requests?|segments?|frames?|footage|videos?|recordings?|views?|'
-                    r'images?|stills?|samples?)\b', I)
 # a leading "No" or "Neither" names what did not happen
 _LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
 # a thing put somewhere: "Place the plant in this window." names where it went
@@ -364,28 +382,29 @@ def _event_name(head: str) -> str | None:
 
 
 def _clause(c: str, whole: bool = False) -> str | None:
-    k = _clause_cut(c)
-    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or (not whole and _SCOPE.search(c))):
+    k = _clause_cut(c) if whole else _clause_cut(c, ABOUT, _CUT_S)
+    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c)):
         return c
     return k
 
 
-def _clause_cut(c: str) -> str | None:
+def _clause_cut(c: str, about=None, cut=None) -> str | None:
     """One clause, without its closing punctuation, without its process wording. None only when every word of it is
     the labelling's; a clause about the samples that only names events keeps their names ("Release inferred between
     samples" -> "Release"); a clause with anything else in it keeps it, losing at most a phrase that places it in the
     labelling, and stays as written when that phrase cannot be cut alone."""
-    if ABOUT.search(c):
+    about, cut = about or ABOUT, cut or CUT
+    if about.search(c):
         if not _rest(c):
             return None
         m = _timed_events(c)
         if m:
             return _event_name(c[:m.start()]) or c
-        y = _tidy(CUT.sub('', c)).rstrip(' ,')
-        return _named(y) if y != c and _rest(y) and not ABOUT.search(y) and not _DANGLING.search(y) else c
-    if not CUT.search(c):
+        y = _tidy(cut.sub('', c)).rstrip(' ,')
+        return _named(y) if y != c and _rest(y) and not about.search(y) and not _DANGLING.search(y) else c
+    if not cut.search(c):
         return c
-    y = _tidy(CUT.sub('', c)).rstrip(' ,')
+    y = _tidy(cut.sub('', c)).rstrip(' ,')
     rest = _rest(y)
     if not rest:
         return None
@@ -427,7 +446,7 @@ def _prose(y: str, whole: bool = False) -> str | None:
 
 
 def _brackets(s: str) -> tuple:
-    return tuple(s.count(c) for c in '()[]{}"“”')
+    return tuple(s.count(c) for c in '()[]{}“”‘’"')
 
 
 def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | None:
@@ -439,8 +458,8 @@ def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | Non
     out = _normalize_text(s, name, whole)
     if isinstance(out, str) and isinstance(s, str) and out != s:
         b, a = _brackets(s), _brackets(out)   # a cut takes a bracket only with its pair, and leaves none empty
-        if (any(x - y != p - q for x, y, p, q in zip(b[0:6:2], a[0:6:2], b[1:6:2], a[1:6:2])) or (b[6] - a[6]) % 2
-                or b[7] - a[7] != b[8] - a[8] or re.search(r'[(\[{"“]\s*[.,;:!?)\]}]|[(\[{"“]\s*$', out)):
+        if (any(x - y != p - q for x, y, p, q in zip(b[0:10:2], a[0:10:2], b[1:10:2], a[1:10:2])) or (b[10] - a[10]) % 2
+                or re.search('[(\\[{"“‘]\\s*[.,;:!?)\\]}"”’]|[(\\[{"“‘]\\s*$', out)):
             return s
     return out
 
@@ -453,12 +472,12 @@ def _normalize_text(s: str, name: bool = False, whole: bool = False) -> str | No
         return _late(y)
     if name:
         # a part's edge stays in a name: "Window ends with the border incomplete" without "Window ends" loses its time
-        z = ABOUT_CUT.sub(lambda m: m.group(0) if _rest(m.group(0)) or _EDGE_ABOUT.search(m.group(0)) or
+        about_cut, cut = (ABOUT_CUT, CUT) if whole else (_ABOUT_CUT_S, _CUT_S)
+        z = about_cut.sub(lambda m: m.group(0) if _rest(m.group(0)) or _EDGE_ABOUT.search(m.group(0)) or
                           _NEGATION.search(m.group(0)) or _AUX_BEFORE.search(y[:m.start()]) else '', y)
-        z = _tidy(CUT.sub('', z)).strip(' ,;:')
-        # "Release isn't", "Neither grasp nor release", "Put the cup", one part's "No grasp" in a stitched review
-        if z != y and (_HANGING.search(z) or _LEAD_NEG.match(y) or _PLACED.search(y) or
-                       (not whole and _SCOPE.search(y))):
+        z = _tidy(cut.sub('', z)).strip(' ,;:')
+        # "Release isn't", "Neither grasp nor release", "Put the cup"
+        if z != y and (_HANGING.search(z) or _LEAD_NEG.match(y) or _PLACED.search(y)):
             return _late(y)
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
     z = _prose(y, whole)
