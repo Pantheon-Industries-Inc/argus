@@ -163,7 +163,7 @@ def test_stitch_preserves_current_proven_and_legacy_saved_short_results(tmp_path
     saved.write_text(json.dumps(record))
     final = tmp_path / "final"
     # published as saved, with only the labels' wording about the labelling taken out (label/wording.py)
-    published = lambda: wording.normalize_result(json.loads(saved.read_text()))
+    published = lambda: wording.normalize_result(json.loads(saved.read_text()), whole=True)
     pieces.stitch_run(tmp_path / "job", source.parent, {}, final)
     assert json.loads((final / saved.name).read_text()) == published()
     record.pop("input_identity")
