@@ -55,7 +55,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 
 from board.label_projection import LABEL_SCHEMA, derive_completion
@@ -2341,8 +2341,14 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                          "parse_ok": False, "no_reply": why})
 
     ex = ThreadPoolExecutor(max_workers=concurrency)
-    futures = [ex.submit(work, ep) for ep in todo]
+    warm = cache_warmup(todo, concurrency=concurrency, dry=dry)
+    futures = [ex.submit(work, ep) for ep in warm]
     try:
+        if warm:
+            print(f"cache warm-up: {len(warm)} episode(s) first, one per prompt variant, then the other "
+                  f"{len(todo) - len(warm)}", flush=True)
+            wait(futures)
+        futures += [ex.submit(work, ep) for ep in todo if ep not in warm]
         for f in as_completed(futures):
             status, ep, info = f.result()
             no_reply(ep, None if status in ("ok", "invalid") else str(info), kind='spend_cap' if status == 'skip' else None)
@@ -2382,6 +2388,42 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
     if fails:
         print("failures:\n  " + "\n  ".join(fails), file=sys.stderr)
     return 1 if failed or cap_refused else 0
+
+
+def cache_variant(ep: Path) -> tuple | None:
+    """The facts in an episode's context.json that choose its shared instructions (label/prompts.py
+    fixed_instructions): the rig, a whole-body robot, an instruction and timed steps. Episodes with the same variant send
+    the same instructions first, which the provider serves from its prompt cache once one of them has been answered.
+    The recorded or video only variant and the sensor evidence contract are left out: they need the episode's plan,
+    and an episode that differs only in them pays for one more uncached wave at most. None when context.json does
+    not read."""
+    try:
+        ctx = json.loads((Path(ep) / "context.json").read_text())
+    except (OSError, ValueError):
+        return None
+    from label.task_claims import claims
+    try:
+        read = claims(ctx)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return ctx.get("profile"), bool(ctx.get("whole_body")), bool(read["instruction"]), bool(read["steps"])
+
+
+def cache_warmup(todo: list[Path], *, concurrency: int, dry: bool) -> list[Path]:
+    """The episodes sent alone ahead of the rest: the first of each cache variant (cache_variant). A batch sent all at
+    once finds nothing cached, since no request has been answered when the others go out: 18 HIW-500 episodes sent
+    together on 2026-11-01 had 0 cached prompt tokens and cost $2.97, against 79% cached and $1.93 for the same
+    episodes sent after a warm prefix. None for a dry run, one request at a time, a batch of one variant per episode,
+    or with ARGUS_CACHE_WARMUP=0."""
+    if dry or concurrency <= 1 or len(todo) <= 1 or os.environ.get("ARGUS_CACHE_WARMUP") == "0":
+        return []
+    seen, first = set(), []
+    for ep in todo:
+        v = cache_variant(ep)
+        if v not in seen:
+            seen.add(v)
+            first.append(ep)
+    return first if len(first) < len(todo) else []
 
 
 def inherited_review_lease(folder: Path) -> int | None:

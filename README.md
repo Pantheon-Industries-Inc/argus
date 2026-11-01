@@ -108,7 +108,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--dataset-note`](label/policy.py) | The source's own collection note, if any | A description of the recordings given to the model as context |
 | [`--max-tokens`](review/__main__.py) | 64,000 | The output limit of each labelling request; a smaller limit reserves less against the cap |
 | [`--timeout`](review/__main__.py) | 6060s | Idle limit for a labelling request's connection, at least 6060s (Cloudflare's 6000s idle limit plus a minute) |
-| [`--concurrency`](review/__main__.py) | 8 | Labelling requests in flight at once |
+| [`--concurrency`](review/__main__.py) | 8 | Labelling requests in flight at once. The first episode of each prompt variant is sent alone and the others wait for its reply, so they find the shared instructions in the provider's prompt cache ([`cache_warmup`](label/harness.py)); `ARGUS_CACHE_WARMUP=0` sends every episode at once |
 | [`--jobs`](review/__main__.py) | 2 | Decode processes per preparation step |
 | [`--grouping`](review/__main__.py) | Inferred from file names | JSON such as `{"cam_folder": "cameras"}` or `{"take_folder": "takes"}`, for folders whose file names cannot tell separate takes from cameras of one take |
 | [`--free`](review/__main__.py) | Off | Builds the base requests and stops before any model call |
