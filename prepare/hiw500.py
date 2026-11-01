@@ -121,16 +121,23 @@ def sample_packs(ep: pd.DataFrame, hours: float) -> list[int]:
     return sorted(set(chosen))
 
 
-def subtasks(entries, task: str, duration_s: float) -> list[dict]:
-    """language_persistent's timed subtasks as annotation_subtasks; the entry repeating the task at 0 is dropped."""
+def subtasks(entries, task: str, duration_s: float) -> tuple[list[dict], list[dict]]:
+    """language_persistent's timed subtasks as annotation_subtasks, and the steps the recording ends before. The
+    entry repeating the task at 0 is the instruction, not a step. A step runs until the next one starts; one that
+    starts at or after the recording's end is not a timed step of it (a sample of 2,031 episodes had them in about
+    13% of normal-speed episodes, the recording stopping before the last steps) and is returned apart, as the dataset
+    wrote it."""
     items = sorted(((float(e["timestamp"]), str(e["content"]).strip()) for e in entries if e.get("content")),
                    key=lambda x: x[0])
     items = [x for x in items if not (x[0] == 0.0 and x[1] == task)]
-    out = []
+    inside, after = [], []
     for k, (t0, label) in enumerate(items):
+        if t0 >= duration_s:
+            after.append({"t0": round(t0, 2), "label": label})
+            continue
         t1 = items[k + 1][0] if k + 1 < len(items) else duration_s
-        out.append({"t0": round(t0, 2), "t1": round(min(t1, duration_s), 2), "label": label})
-    return out
+        inside.append({"t0": round(t0, 2), "t1": round(min(t1, duration_s), 2), "label": label})
+    return inside, after
 
 
 def cut(pack: Path, base_s: float, n: int, out: Path, key: str, crop: str | None = None) -> dict:
@@ -178,10 +185,16 @@ def prepare_one(row, raw: Path, out_root: Path, info: dict, force: bool) -> str:
         sources[view] = cut(pk, base_s, n, ep_dir / f"{VKEYS[view]}.mp4", k,
                             f"crop={EYE_W}:480:0:0" if view == "exo" else None)
     task = task_of(row)
+    steps, after = subtasks(df["language_persistent"].iloc[0], task, n / FPS)
+    note = NOTE
+    if after:
+        note += (" The dataset's annotation also lists steps that start after this recording ends ("
+                 + ", ".join(f"{s['label']} at {s['t0']:.1f}s" for s in after)
+                 + "); the recording stops before them.")
     feats = info.get("features") or {}
     from prepare import formats
     names = formats.value_names(feats.get("observation.state", {}).get("names"), 29)
-    kind, note = formats.state_layout(29, "teleop_arms", names)
+    kind, layout_note = formats.state_layout(29, "teleop_arms", names)
     ctx = {
         "dataset": REPO,
         "profile": "teleop_arms",
@@ -192,16 +205,17 @@ def prepare_one(row, raw: Path, out_root: Path, info: dict, force: bool) -> str:
         "fps": FPS,
         "task_label": [task],
         "instruction": task,
-        "instruction_note": NOTE,
-        "annotation_subtasks": subtasks(df["language_persistent"].iloc[0], task, n / FPS),
+        "instruction_note": note,
+        "annotation_subtasks": steps,
+        "annotation_steps_after_end": after,
         "n_state_frames": n,
         "cameras": {v: {"key": f"observation.images.{VKEYS[v]}", "name": VKEYS[v],
                         "width": EYE_W if v == "exo" else 640, "height": 480, "desc": CAMERA_DESC[v]}
                     for v in VKEYS},
         "source": {"episode_index": eidx, "head_stereo": "left eye of the 1280x480 side-by-side pair"},
     }
-    if note:
-        formats.no_state(ctx, formats.StateNote(note, "layout"))
+    if layout_note:
+        formats.no_state(ctx, formats.StateNote(layout_note, "layout"))
     skip = {"language_persistent", "language_events", "task_index"}
     formats.write_signals(ep_dir, ctx, formats.recorded_signals(df, skip, n, features=feats))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
