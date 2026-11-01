@@ -704,7 +704,7 @@ def what_this_is(r: str) -> str:
             "  by the declared acting part. This is an annotation contract, not an inferred limit of a physical\n"
             "  robot. Anyone else touching the scene is reported as usual.\n"
             "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself,\n"
-            "  except a face that could be recognised, which is a data issue (PHONES, BARE HANDS, PARKED GRIPPERS AND FACES, below).\n")
+            "  except a face, which is a data issue (PHONES, BARE HANDS, PARKED GRIPPERS AND FACES, below).\n")
 
 
 _WHY = {
@@ -760,9 +760,9 @@ _VISIBILITY = {
         "  from the moment. The operator holding or using their own phone is at least medium severity. A gripper set down,\n"
         "  parked or taken off while the demonstration goes on (the other gripper or a bare hand keeps working) is at least\n"
         "  medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper taken off and the\n"
-        "  bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. A\n"
-        "  person's face that could be recognised, the operator's or anyone else's, in any camera is high severity: the\n"
-        "  footage carries personal data.\n"
+        "  bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. Any\n"
+        "  face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly\n"
+        "  face_visible, over its span; report every one, and anything that may be a face.\n"
         "  Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or\n"
         "  end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how\n"
         "  the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task\n"
