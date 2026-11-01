@@ -22,7 +22,8 @@ the commanded walking velocity of the base, pivot_height its height, then each h
 Annotation: each episode has one task (meta/tasks.parquet), given as the instruction, and LeRobot's
 language_persistent column holds its timed subtasks (move to bed, pick pillow, place pillow to bed, ...), each with a
 start time. The first entry repeats the task at time 0 and is the instruction, not a subtask; each other entry runs
-until the next one starts, the last until the episode ends. They are given as the dataset's timed steps to check.
+until the next one starts, the last until the episode ends. They are kept in context["source"] as the dataset
+wrote them and are not given to the model, because their times often lag the footage (see prepare_one).
 
 `sample` reads meta/ only and picks whole video packs spread across each task's pack range, one pack per task per
 pass, until --hours, so every downloaded byte is used. It is deterministic. The dataset needs no token.
@@ -59,8 +60,7 @@ CAMERA_DESC = {
 }
 ROBOT = ("Unitree G1 humanoid: two legs, a waist and two 7-DoF arms, each ending in a two-finger gripper with black "
          "rubber fingers; teleoperated by a person in VR in real homes")
-NOTE = ("This is the dataset's task for the whole episode. The dataset's timed steps name the walks to each place "
-        "(move to the bed, move to the trash can) as steps of the task.")
+NOTE = "This is the dataset's task for the whole episode."
 
 
 def ensure_meta(raw: Path) -> Path:
@@ -122,7 +122,7 @@ def sample_packs(ep: pd.DataFrame, hours: float) -> list[int]:
 
 
 def subtasks(entries, task: str, duration_s: float) -> tuple[list[dict], list[dict]]:
-    """language_persistent's timed subtasks as annotation_subtasks, and the steps the recording ends before. The
+    """language_persistent's timed subtasks, and the steps the recording ends before. The
     entry repeating the task at 0 is the instruction, not a step. A step runs until the next one starts; one that
     starts at or after the recording's end is not a timed step of it (a sample of 2,031 episodes had them in about
     13% of normal-speed episodes, the recording stopping before the last steps) and is returned apart, as the dataset
@@ -186,11 +186,6 @@ def prepare_one(row, raw: Path, out_root: Path, info: dict, force: bool) -> str:
                             f"crop={EYE_W}:480:0:0" if view == "exo" else None)
     task = task_of(row)
     steps, after = subtasks(df["language_persistent"].iloc[0], task, n / FPS)
-    note = NOTE
-    if after:
-        note += (" The dataset's annotation also lists steps that start after this recording ends ("
-                 + ", ".join(f"{s['label']} at {s['t0']:.1f}s" for s in after)
-                 + "); the recording stops before them.")
     feats = info.get("features") or {}
     from prepare import formats
     names = formats.value_names(feats.get("observation.state", {}).get("names"), 29)
@@ -205,14 +200,17 @@ def prepare_one(row, raw: Path, out_root: Path, info: dict, force: bool) -> str:
         "fps": FPS,
         "task_label": [task],
         "instruction": task,
-        "instruction_note": note,
-        "annotation_subtasks": steps,
-        "annotation_steps_after_end": after,
+        "instruction_note": NOTE,
         "n_state_frames": n,
         "cameras": {v: {"key": f"observation.images.{VKEYS[v]}", "name": VKEYS[v],
                         "width": EYE_W if v == "exo" else 640, "height": 480, "desc": CAMERA_DESC[v]}
                     for v in VKEYS},
-        "source": {"episode_index": eidx, "head_stereo": "left eye of the 1280x480 side-by-side pair"},
+        # HIW's timed steps (language_persistent) are kept as the dataset wrote them and not given to the model: on
+        # the 2026-11-01 test their times lagged the visible actions in 14 of 18 normal-speed episodes (a step at
+        # 71.8s for a keychain visibly hung by 52s), and each task judged against them came out as an instruction
+        # mismatch. steps_after_end are the ones that start after the recording ends.
+        "source": {"episode_index": eidx, "head_stereo": "left eye of the 1280x480 side-by-side pair",
+                   "language_persistent_steps": steps, "language_persistent_steps_after_end": after},
     }
     if layout_note:
         formats.no_state(ctx, formats.StateNote(layout_note, "layout"))
