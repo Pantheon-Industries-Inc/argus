@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use Argus or the labels it produces, please cite it as below."
+title: Argus
+authors:
+  - given-names: Eric
+    family-names: Li
+repository-code: "https://github.com/Pantheon-Industries-Inc/argus"
+url: "https://pantheon.inc/research/argus"
+license: Apache-2.0
+preferred-citation:
+  type: article
+  title: "Argus: A Dense Annotator for Robotics Data"
+  authors:
+    - given-names: Eric
+      family-names: Li
+  journal: Pantheon Research
+  year: 2026
+  month: 10
+  url: "https://pantheon.inc/research/argus"
