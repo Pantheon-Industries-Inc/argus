@@ -211,8 +211,8 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   parked or taken off while the demonstration goes on (the other gripper or a bare hand keeps working) is at least
   medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper taken off and the
   bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. Any
-  face in any camera, whole or partial, anyone's, even printed, is medium, tagged face_visible, over its span;
-  report every one, and anything that may be a face.
+  face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
+  face_visible, over its span; report every one, and anything that may be a face.
   Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or
   end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how
   the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task
