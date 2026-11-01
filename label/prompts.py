@@ -1111,7 +1111,71 @@ def lean(r: str, has_instruction: bool = True) -> str:
                          else "(tasks, goal_alignment,")
 
 
-def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True, has_steps: bool = False) -> str:
+# A robot that moves its whole body (a humanoid, a robot on a mobile base; context["whole_body"]) is teleop_arms with
+# these words changed: it walks, turns and crouches between places, so there is no fixed workspace, every camera
+# moves with the body, a walk to the next place is an engaged step of its own (arm "body"), and the people who live or
+# work there are the surroundings. Checked on HIW-500 (a G1 humanoid in homes) frames, 2026-11-01: the head view walks
+# around beds, fridges and tables, blurs on turns, and family members sit and pass in the background.
+WHOLE_BODY_WORDING = [
+    ("- WHAT THIS EPISODE IS: robot-arm activity; the profile alone does not establish the control method.\n"
+     "  The recording is a demonstration collected to train robots. In the workspace the scene should change only\n"
+     "  through the robot, unless the episode's own description (after these instructions) says a person\n"
+     "  takes part in the task, in which case their part is intended. The room\n"
+     "  around the workspace (walls, furniture, people further away) is sometimes visible, for\n"
+     "  example when a gripper camera points up; that is the surroundings, not a problem by itself.\n",
+     "- WHAT THIS EPISODE IS: the activity of a robot that moves its whole body, such as a humanoid or a robot on a\n"
+     "  mobile base. It walks or drives between places, turns, crouches and stands to reach things, and works with\n"
+     "  its two arms and their grippers. The recording is a demonstration collected to train robots. There is no\n"
+     "  fixed workspace: the scene is the rooms the robot moves through. Every camera is carried on the robot, so\n"
+     "  every view moves and turns with its body and blurs during fast turns; that is how the rig works and never a\n"
+     "  camera fault. The scene should change only through the robot. People who live or work in the place\n"
+     "  (sitting, passing, playing nearby) are the surroundings; a person matters only when they touch or move an\n"
+     "  object of the task or the robot itself, unless the episode's own description (after these instructions)\n"
+     "  says a person takes part in the task. A timeline step in which the robot moves its whole body (walks,\n"
+     "  turns, crouches or stands up) while neither arm acts on an object has arm \"body\"; a step in which an arm\n"
+     "  acts, holds or carries something while the robot walks names that arm.\n"),
+    ("(an approach, a grasp, a transport, a placement, a pour, a\nrelease, a retreat)",
+     "(a walk to the next place, a turn, a crouch, an approach, a grasp, a\ntransport, a placement, a pour, a "
+     "release, a retreat)"),
+    ('"location": "<where in the workspace>"', '"location": "<where in the room>"'),
+    ('"setting": "<one line describing the workspace>"', '"setting": "<one line describing the place>"'),
+    ('"left" | "right" | "both", "<free-form verb phrase for what the arm does>"',
+     '"left" | "right" | "both" | "body", "<free-form verb phrase for what the arm, or with body the whole robot, does>"'),
+    ('"idle": the arm is not engaged in the task. Lack of object contact alone does not establish idle:',
+     '"idle": the robot is not engaged in the task. A walk, turn or crouch that takes the robot to where its next\n'
+     '      step happens is engaged and advances the task even while both arms hold still, and so is carrying an\n'
+     '      object to where it goes. Lack of object contact alone does not establish idle:'),
+    ("The camera\n  that is not mounted on a gripper, where there is one, is what keeps the task observable.",
+     "The camera\n  that is not mounted on a gripper, where there is one, is what keeps the task observable. On this robot it\n"
+     "  is the head camera, which turns with the body, so objects leave every view while the robot walks or turns\n"
+     "  to its next place; that is how the rig works and never an issue."),
+    ("the scene (a person reaching in or moving objects, except where the episode's\n"
+     "  own description, given after these instructions, makes a person part of the setting or the task;",
+     "the scene (a person touching or moving an object of the task or the robot, except where the episode's\n"
+     "  own description, given after these instructions, makes a person part of the task; people in the place\n"
+     "  who touch neither are the surroundings and never an issue;"),
+    ("unintended drops, knock-overs or collisions, fumbling,",
+     "unintended drops, knock-overs or collisions (an arm or the body bumping furniture, walls or people while\n"
+     "  walking or turning), losing balance, walking past the place and back, fumbling,"),
+    ("Merge contiguous frames of ONE continuous action by ONE arm into a SINGLE segment: a whole\n  reach is one "
+     "segment,",
+     "Merge contiguous frames of ONE continuous action by ONE arm (or by the body) into a SINGLE segment: a whole\n"
+     "  walk to one place is one segment, a whole reach is one segment,"),
+]
+
+
+def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True, has_steps: bool = False,
+                       whole_body: bool = False) -> str:
+    """fixed_instructions_for_rig, with WHOLE_BODY_WORDING for a teleop robot that moves its whole body."""
+    s = fixed_instructions_for_rig(r, has_instruction=has_instruction, recorded=recorded, has_steps=has_steps)
+    if whole_body and r == "teleop_arms":
+        for old, new in WHOLE_BODY_WORDING:
+            s = _replace_once(s, old, new)
+    return s
+
+
+def fixed_instructions_for_rig(r: str, *, has_instruction: bool = True, recorded: bool = True,
+                               has_steps: bool = False) -> str:
     """Everything before the episode's own facts. A robot request keeps the episode prompt when the episode has an
     instruction (the completion judges the recording against it, INSTRUCTION_RULES) and adds its list of tasks
     (TASK_RULES); with no instruction it asks only for tasks (NO_INSTRUCTION_RULES); when the dataset times its own

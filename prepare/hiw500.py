@@ -51,15 +51,16 @@ VKEYS = {"exo": "head", "left": "left_wrist", "right": "right_wrist"}
 EYE_W = 640       # the left eye: x 0..639 of the 1280-wide head frame
 CAMERA_DESC = {
     "exo": ("the robot's head camera (left eye of its stereo pair), looking forward and down from the humanoid's "
-            "head. The robot's own forearms and hands reach in from the bottom. The head is on a walking robot, so "
-            "this view moves and turns whenever the robot walks, turns or bends."),
-    "left": "the camera on the LEFT wrist, looking along that hand toward what it reaches for.",
-    "right": "the camera on the RIGHT wrist, looking along that hand toward what it reaches for.",
+            "head. Both arms and grippers reach in from the bottom, and its own legs show when it looks down."),
+    "left": ("the camera on the LEFT wrist, looking along that arm's two black rubber gripper fingers, which are at "
+             "the bottom of its image."),
+    "right": ("the camera on the RIGHT wrist, looking along that arm's two black rubber gripper fingers, which are at "
+              "the bottom of its image."),
 }
-ROBOT = ("Unitree G1 humanoid (two legs, waist, two 7-DoF arms with hands), teleoperated by a person in VR in a "
-         "real home; it walks between places in the room as part of each task")
-NOTE = ("This is the dataset's task for the whole episode. The robot walks to each place it works at; the dataset's "
-        "timed steps name those walks (move to ...) as steps of the task.")
+ROBOT = ("Unitree G1 humanoid: two legs, a waist and two 7-DoF arms, each ending in a two-finger gripper with black "
+         "rubber fingers; teleoperated by a person in VR in real homes")
+NOTE = ("This is the dataset's task for the whole episode. The dataset's timed steps name the walks to each place "
+        "(move to the bed, move to the trash can) as steps of the task.")
 
 
 def ensure_meta(raw: Path) -> Path:
@@ -184,6 +185,7 @@ def prepare_one(row, raw: Path, out_root: Path, info: dict, force: bool) -> str:
     ctx = {
         "dataset": REPO,
         "profile": "teleop_arms",
+        "whole_body": True,        # walks, turns and crouches between places (label/prompts.py WHOLE_BODY_WORDING)
         "state_kind": kind,
         "episode_index": eidx,
         "robot_type": ROBOT,

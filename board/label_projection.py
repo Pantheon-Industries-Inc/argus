@@ -289,7 +289,7 @@ def _arm_names(config=None):
 
 
 def allowed_arms(config=None):
-    return set(_arm_names(config).values()) | {'left', 'right', 'both'}
+    return set(_arm_names(config).values()) | {'left', 'right', 'both', 'body'}   # body: a whole-body robot's walk
 TEXT = {
     'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
