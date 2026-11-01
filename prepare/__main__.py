@@ -21,6 +21,7 @@ ADAPTERS = {
     "molmo": "allenai/MolmoAct2-BimanualYAM-Dataset (teleop, packed LeRobot v3)",
     "abc130k": "XDOF/ABC-130k (teleop, one MCAP per episode)",
     "galaxea": "RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 (teleop, LeRobot v2.1 per collection)",
+    "hiw500": "BitRobot/HIW-500-LeRobot (teleoperated G1 humanoid, packed LeRobot v3, stereo head)",
     "habit": "configinc/HABIT (teleop with a person in the task, LeRobot v2.0)",
     "fastumi": "IPEC-COMMUNITY/FastUMI_100k_lerobot (handheld grippers, LeRobot v2.1)",
     "realomin": "genrobot2025/10Kh-RealOmin-OpenData (handheld grippers, one MCAP per episode)",
