@@ -1,13 +1,16 @@
 """Prepare a LeRobot dataset on your own disk (v2.0, v2.1 or v3.0) as episode sidecars.
 
     python -m prepare lerobot prepare --root DATASET --rig teleop_arms --out EPISODES [--episodes LIST]
-        [--dataset NAME] [--jobs N] [--force]
+        [--dataset NAME] [--whole-body humanoid|legged_no_arms] [--robot TEXT] [--jobs N] [--force]
 
 DATASET is the dataset's folder (meta/info.json, the episode metadata, data/ and videos/). LIST, if given, has one
 episode index per line; without it every episode whose files are present is prepared. --rig says what recorded
 it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by a person) or ego_head
 (a camera worn on a person's head). --dataset is the name written into context.json and shown to the model
-(default: the folder's name).
+(default: the folder's name). --whole-body says the robot moves its whole body rather than only its arms: humanoid
+for a legged robot with arms, legged_no_arms for one with no arms (a quadruped walking); the labels then use the
+"body" arm and the whole-body wording (label/prompts.py). --robot replaces the metadata's robot_type, which the
+model reads as the robot's description (default: the dataset's own robot_type).
 
 It is read exactly as Data Review reads an uploaded LeRobot dataset (prepare/formats.py). Cameras are the
 features of dtype "video" (or images stored in the data files), assigned to the harness views by name: a name
@@ -24,12 +27,15 @@ copied; only cameras stored as images in the data files are written to H.264, at
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from prepare import cli
 from prepare import formats
+from label.atomic import write_atomic
 
 RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
+WHOLE_BODY = {"humanoid": True, "legged_no_arms": "legged_no_arms"}
 
 
 def main() -> int:
@@ -40,6 +46,10 @@ def main() -> int:
     p.add_argument("--rig", required=True, choices=RIGS, help="what recorded the dataset")
     p.add_argument("--dataset", default=None, metavar="NAME",
                    help="the dataset name written into context.json (default: the folder's name)")
+    p.add_argument("--whole-body", choices=WHOLE_BODY, default=None,
+                   help="the robot moves its whole body: humanoid (legs and arms) or legged_no_arms")
+    p.add_argument("--robot", default=None, metavar="TEXT",
+                   help="the robot's description shown to the model (default: the metadata's robot_type)")
     a = ap.parse_args()
     det = formats.detect(a.root)
     if det["format"] != "lerobot":
@@ -66,11 +76,25 @@ def main() -> int:
             return "skip"
         it = items[n]
         (formats.convert_lerobot_item if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
+        describe(a.out / formats.episode_name(n), a.whole_body, a.robot)
         return "ok"
     rc = cli.run(picks, one, a.jobs)
     # the gripper's range across the dataset, as Data Review measures it across an upload (formats.convert)
     formats.measure_gripper_range(a.out, [formats.episode_name(n) for n in picks])
     return rc
+
+def describe(ep: Path, whole_body: str | None, robot: str | None) -> None:
+    """Write the robot's body and description into the episode's context.json."""
+    if not whole_body and not robot:
+        return
+    f = ep / "context.json"
+    ctx = json.loads(f.read_text())
+    if whole_body:
+        ctx["whole_body"] = WHOLE_BODY[whole_body]
+    if robot:
+        ctx["robot_type"] = robot
+    write_atomic(f, ctx, indent=1, default=str)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
