@@ -102,6 +102,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--reasoning`](label/policy.py) | Medium for Astra, high for every other model | `none`, `minimal`, `low`, `medium`, `high` or `xhigh` |
 | [`--sample-fps`](label/policy.py) | A frame every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus the edges of still spans and the first and last frames; Sol samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
 | [`--inspection`](label/policy.py) | `auto`, for recordings with depth or a touch sensor, or with fields the prompt does not carry | `all` also inspects recordings with no depth or touch sensor, such as one with only force/torque, arm signals, actions or source metadata; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
+| [`--resolution-route`](label/route.py) | `off`, every teleop episode at the narrow cells (224 px) with contact detail views and no routing call | `on` asks a small model, from the episode's task text alone, whether judging it needs fine detail such as lettering or which side of an object is up, and sends those episodes at 448 px |
 | [`--cap`](review/__main__.py) | $20 | The most the job may spend, counting every call and outstanding reservation |
 | [`--max-minutes`](review/__main__.py) | All footage | Reads at most this many minutes of footage |
 | [`--dataset`](review/__main__.py) | The name of `--data` | The name shown on the board and told to the model |
@@ -315,7 +316,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`checks.timebase scan`](checks/timebase.py) | `--raw`, `--out`, `--jobs` |
 | [`label`](label/run.py) | `--dataset`, `--episodes`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--note`, `--label`, `--resume`, `--why` |
 | [`label.catalog`](label/catalog.py) | `--label`, `--out`, `--base`, `--cap`, `--model`, `--reasoning`, `--judge-model`, `--check`, `--concurrency`, `--dry-run` |
-| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--route-seeds`, `--max-spend`, `--dry-run` |
+| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run` |
 | [`label.issue_groups`](label/issue_groups.py) | `--label`, `--dump`, `--out`, `--takes`, `--seed`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--dry-run` |
 | [`board build`](board/build.py) | `--no-cache` |
 | [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--name-prefix`, `--labels` |

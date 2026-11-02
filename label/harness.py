@@ -2415,11 +2415,16 @@ def main() -> int:
                     help='explicitly retry this received unusable or truncated reply; repeat for each episode')
     ap.add_argument("--cell-w", type=int, default=0,
                     help="grid cell width in px for every episode, with no routing; 0 keeps the per-rig width (teleop "
-                         "224 or 448 by its task text, handheld 320, head camera 256), stepped down for an episode "
+                         "224, or 224 or 448 by its task text with --resolution-route on, handheld 320, head camera "
+                         "256), stepped down for an episode "
                          "whose grids would pass the image-size cap")
     ap.add_argument("--example-dir", default=None,
                     help="folder with example_<rig>.json: one complete annotation per rig, shown to the model as an "
                          "example of the density expected (the model comparison's with-example runs); off by default")
+    ap.add_argument("--resolution-route", choices=("on", "off"), default=None,
+                    help="route each teleop episode's cell width by its task text with a small model call (on), or send "
+                         "every teleop episode at the narrow cells with no call (off, the default; ARGUS_RESOLUTION_ROUTE "
+                         "when not given)")
     ap.add_argument("--route-seeds", type=Path, default=None,
                     help="JSON {task text: routing answer} of another run (a model comparison's reference run), used "
                          "instead of routing, so this run sends the same widths and frames (label/route.py)")
@@ -2435,6 +2440,8 @@ def main() -> int:
     if not args.dry_run and not is_openrouter_key(keys[0]) and args.model and not args.model.startswith("openai/"):
         print(f"{args.model} is not an OpenAI model, so it needs OPENROUTER_API_KEYS", file=sys.stderr)
         return 2
+    if args.resolution_route is not None:
+        os.environ["ARGUS_RESOLUTION_ROUTE"] = args.resolution_route
     if args.route_seeds:
         from label import route
         n = route.seed(json.loads(args.route_seeds.read_text()), args.route_seeds.name)
