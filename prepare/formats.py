@@ -18,8 +18,9 @@ Accepted uploads, in the order they are recognised:
    Cameras stored as images inside the parquet are written to H.264 at their frame times.
    LeRobot episodes use the generic reader with recorded task tables and publisher claims kept under their sources.
    Complete named arm and scalar gripper columns are joined structurally by the generic reader.
-2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), read
-   by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
+2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), and
+   a ROS 2 bag stored as SQLite (.db3), which holds the same messages in another container and is copied into one
+   MCAP per bag before planning (prepare/ros2_bag.py). Either is read by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
    whose topic it shares), its arm joints on a teleoperated rig (joint_state: any channel whose messages carry a joint
    vector and a gripper reading, its side from the topic, a leader or command channel as the action), every other
    number it records as a signal (mcap_signals), and its text channels (the task topic, and on a head camera a step
@@ -13842,6 +13843,11 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     selected_file = root if root.is_file() and not ARCHIVE_RE.search(root.name) else None
     root = archive_read_root(root, out)
     root, opened, apart = open_archives(root, out.parent / "upload_unpacked")
+    # a ROS 2 bag stored as SQLite (.db3) is the same messages as an MCAP one in another container, so it is copied
+    # into an MCAP and read by the MCAP reader (prepare/ros2_bag.py)
+    from prepare import ros2_bag
+    root, bag_notes = ros2_bag.stage(root, out.parent / "upload_unpacked")
+    opened = opened + bag_notes
     from prepare.hdf_metadata import authorized_sources
     with authorized_sources([*files_under(root), *(p for folder in apart for p in files_under(folder))]):
         return _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_context,
