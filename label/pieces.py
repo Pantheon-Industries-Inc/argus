@@ -24,8 +24,8 @@ the whole recording, so a part is shown it as context, not as its goal.
 
     python -m label.pieces plan EP_DIR            # print the cuts
 
-The path for your own data (python -m review) cuts every episode that needs it, labels the parts and stitches
-them, and Data Review runs the same functions on uploads. No episode on the published board is longer than 450s,
+The path for your own data (python -m review) and the staged command (python -m label) both cut every episode that
+needs it, label the parts and stitch them, and Data Review runs the same functions on uploads. No episode on the published board is longer than 450s,
 so none of them is cut.
 """
 from __future__ import annotations
@@ -697,8 +697,9 @@ def _carry_part_billing(result: dict, parts: list) -> None:
         route['cost_is_conservative_estimate'] = True
 
 
-def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
-    """out/: the short episodes' replies from job/run/out as they came, and one stitched result per long recording.
+def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None = None) -> dict:
+    """out/: the short episodes' replies from src (job/run/out for a review, run/parts for python -m label) as they
+    came, and one stitched result per long recording.
 
     A recording is stitched from the parts that parsed; a part that did not parse, was cut off or never came is a gap,
     named in the result's stitched["missing"] with its span and why (the board flags it at that span, board/build.py
@@ -709,7 +710,7 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     stitched recording that report one condition or one event several times (each part reporting a whole-take
     condition, or both parts reporting an event at a cut) are then grouped into one issue that keeps every report
     (label/issue_groups.py), with the answers kept in job/issue_groups.json; ARGUS_ISSUE_GROUPS=0 turns that off."""
-    src = Path(job) / "run" / "out"
+    src = Path(src) if src is not None else Path(job) / "run" / "out"
     seams = None
     if (Path(job) / "seams.json").is_file():
         seams = json.loads((Path(job) / "seams.json").read_text()).get("seams") or {}
