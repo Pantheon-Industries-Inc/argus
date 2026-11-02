@@ -10436,8 +10436,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
             for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
                 if ch.id not in decs:
                     decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                if decs[ch.id] is None:
+                    # a channel no installed decoder reads (no schema, or an encoding none knows) is named, never
+                    # dropped without a word
+                    schema_errors[(Path(p), ch.topic)] = (f"no decoder reads {ch.message_encoding or 'its'} messages "
+                                                          f"with {f'the schema {schema.name}' if schema else 'no schema'}")
+                    continue
                 try:
-                    decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                    decoded = decs[ch.id](msg.data)
                 except McapSchemaError as error:
                     schema_errors[(Path(p), ch.topic)] = str(error)
                     continue

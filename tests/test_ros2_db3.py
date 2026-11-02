@@ -39,7 +39,8 @@ def _imu(ts, t_ns: int, k: int):
 
 TOPICS = [(1, '/camera/color/image_raw', 'sensor_msgs/msg/Image'),
           (2, '/camera/depth/image_rect_raw', 'sensor_msgs/msg/Image'),
-          (3, '/imu/data', 'sensor_msgs/msg/Imu')]
+          (3, '/imu/data', 'sensor_msgs/msg/Imu'),
+          (4, '/vendor/status', 'vendor_msgs/msg/Status')]
 
 
 def _write_db3(path: Path, first: int) -> None:
@@ -65,6 +66,7 @@ def _write_db3(path: Path, first: int) -> None:
                               (3, _imu(ts, t, k), 'sensor_msgs/msg/Imu')]:
             con.execute("INSERT INTO messages(topic_id, timestamp, data) VALUES (?, ?, ?)",
                         (tid, t, bytes(ts.serialize_cdr(msg, typ))))
+        con.execute("INSERT INTO messages(topic_id, timestamp, data) VALUES (4, ?, ?)", (t, b'\x00\x01\x00\x00' + bytes(8)))
     con.commit()
     con.close()
 
@@ -77,7 +79,7 @@ METADATA = """rosbag2_bagfile_information:
     - walk_1.db3
   duration:
     nanoseconds: 1900000000
-  message_count: 60
+  message_count: 80
   compression_format: ""
   compression_mode: ""
 """
@@ -106,6 +108,10 @@ def test_split_db3_bag_is_one_episode_read_as_mcap(tmp_path, with_metadata):
     # the IMU's numbers are signals, as on an MCAP
     names = {s['name'] for s in ctx['signals']}
     assert {'/imu/data angular_velocity', '/imu/data linear_acceleration'} <= names, names
+    # a vendor type with no definition anywhere is named on the episode and in the report, never dropped silently
+    assert any(i['kind'] == 'mcap_schema_unreadable' and i.get('signal') == '/vendor/status'
+               for i in ctx['reader_issues']), ctx['reader_issues']
+    assert any('vendor_msgs/msg/Status' in line and '/vendor/status' in line for line in report['used'])
 
 def test_db3_in_subfolder_named_by_bag_and_metadata_consumed(tmp_path):
     root = tmp_path / 'upload'

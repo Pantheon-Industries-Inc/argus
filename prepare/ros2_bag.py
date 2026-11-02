@@ -8,8 +8,8 @@ signals, its text channels). Nothing is decoded or re-encoded here.
 A bag is the .db3 files its metadata.yaml lists (relative_file_paths), or without one the .db3 files of one folder
 that share a name up to the split index (rosbag2_2025_07_30-09_54_44_0.db3, _1.db3, ...), read in split order as one
 recording. Each message type's definition comes from the bag's own message_definitions table (written since Jazzy),
-else from the standard ROS 2 definitions rosbags ships; a type with neither keeps its channel, and the MCAP reader
-names it as unreadable. A compressed bag, or a file that does not open as a bag, is left out and named.
+else from the standard ROS 2 definitions rosbags ships. A type with neither (a vendor's own message) keeps its
+channel without a schema, so the MCAP reader names it as unreadable, and the report names the type. A compressed bag, or a file that does not open as a bag, is left out and named.
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def _standard_definition(name: str) -> str | None:
 def write_mcap(bag: dict, target: Path) -> list[str]:
     """Copy every message of the bag's .db3 files into one MCAP at target; returns what could not be copied."""
     from mcap.writer import CompressionType, Writer
-    notes, schemas, channels = [], {}, {}
+    notes, schemas, channels, unknown = [], {}, {}, {}
     with open(target, "wb") as fh:
         writer = Writer(fh, compression=CompressionType.NONE)
         writer.start(profile="ros2", library="argus prepare.ros2_bag")
@@ -110,8 +110,12 @@ def write_mcap(bag: dict, target: Path) -> list[str]:
                         "SELECT id, name, type, serialization_format FROM topics"):
                     if (name, type_) not in channels:
                         if type_ not in schemas:
-                            text = defs.get(type_) or _standard_definition(type_) or ""
-                            schemas[type_] = writer.register_schema(type_, "ros2msg", text.encode())
+                            text = defs.get(type_) or _standard_definition(type_)
+                            # schema 0 is MCAP's "no schema"; an empty definition would decode as a message with no
+                            # fields and lose the channel without a word
+                            schemas[type_] = writer.register_schema(type_, "ros2msg", text.encode()) if text else 0
+                        if not schemas[type_]:
+                            unknown.setdefault(type_, []).append(name)
                         channels[name, type_] = writer.register_channel(name, fmt or "cdr", schemas[type_])
                     topics[tid] = channels[name, type_]
                 n = 0
@@ -125,6 +129,8 @@ def write_mcap(bag: dict, target: Path) -> list[str]:
                 notes.append(f"{path.name} stopped reading as a ROS 2 bag ({error}); the messages before that were "
                              "kept.")
         writer.finish()
+    notes += [f"No definition of {type_} is recorded in the bag or known as a standard ROS 2 type, so "
+              f"{', '.join(topics)} could not be decoded." for type_, topics in sorted(unknown.items())]
     return notes
 
 
