@@ -4893,7 +4893,9 @@ def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
                 assert len(ctx['recorded_metadata'][str(path)]) == 1
                 info_path = root / 'meta/info.json'
                 assert ctx['recorded_metadata'][str(info_path)] == json.loads(info_path.read_text())
-                assert ctx['uploader_notes']['recorded episode metadata'][str(path)][0]['fields'] == expected
+                # the row's own LeRobot columns reach the prompt as the instruction and length, never again as notes
+                noted = ((ctx.get('uploader_notes') or {}).get('recorded episode metadata') or {}).get(str(path))
+                assert not noted or not {'tasks', 'length', 'episode_index'} & set(noted[0].get('fields') or {})
                 assert not any(i['kind'] == 'metadata_unreadable' for i in ctx.get('reader_issues', []))
 
 

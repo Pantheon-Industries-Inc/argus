@@ -66,3 +66,18 @@ def test_a_column_beyond_lerobot_bookkeeping_still_opts_the_recording_in(tmp_pat
     assert needs_extra_evidence(ctx)
     left = [p for paths in uncovered(ctx).values() for p in paths]
     assert len(left) == 1 and _covered(left[0], ['/0/fields/' + key.replace('/', '~1')])
+
+
+def test_the_go2_depth_recording_is_not_inspected_by_default_and_is_with_all(tmp_path):
+    """realworld_go2_task0: its depth video and that video's calibration in info.json follow the depth rule, so only
+    --inspection all buys the selection call."""
+    ctx = prepared(tmp_path, 'rgb_and_depth')
+    ctx['depth'] = {'exo': {'units': 'relative', 'scale_m': None, 'kind': 'depth', 'paired_camera': 'exo',
+                            'source': 'observation.images.front_depth',
+                            'source_key': 'observation.images.front_depth'}}
+    ep = {'dir': tmp_path, 'context': ctx, 'signals': {}, 'sources': {}, 'depth': ctx['depth']}
+    assert ea.inspection_reason(ep, {}, 'auto') is None
+    assert ea.inspection_reason(ep, {}, 'all') == 'all'
+    # a calibration the prompt does not carry still opts in a recording whose stream is not depth
+    rgb = {**ep, 'depth': {}, 'context': {**ctx, 'depth': {}}}
+    assert ea.inspection_reason(rgb, {}, 'auto') == 'unrepresented'

@@ -507,6 +507,9 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     }
     if pricing_quote is not None:
         fields['config']['pricing_quote'] = pricing_quote
+    if dry_run:
+        # why this episode will or will not pay for an evidence selection, counted by review before it spends
+        fields['inspection'] = req.get('inspection_reason')
     return _call_and_record(ep_dir, out_path, req["content"], req["image_bytes"], fields, model=model,
                             reasoning=reasoning, api_key=api_key, max_tokens=max_tokens, timeout=timeout,
                             dry_run=dry_run, prompt_text=req["prompt"], evidence_access=req["evidence_access"],
