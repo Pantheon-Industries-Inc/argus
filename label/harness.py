@@ -63,6 +63,7 @@ from label import episode as me, policy
 from label.atomic import write_atomic
 from label.errors import DispatchError, KeyExhausted, SpendCap, Truncated
 from label.route import route_width
+from label import inflight
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -2139,6 +2140,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
             print(f"STALE {name}: {reason}", file=sys.stderr, flush=True)
         saved_failures.update(stale)
     skipped = len(episodes) - len(todo)
+    concurrency = inflight.in_flight(concurrency, len(todo))
     print(f"episodes={len(episodes)} skipped(done)={skipped} todo={len(todo)} "
           f"keys={len(keys)} concurrency={concurrency} dry_run={dry}", flush=True)
     if not todo:
@@ -2408,7 +2410,7 @@ def main() -> int:
                     help="seconds a request's connection may carry no bytes before it is closed as dead; never below "
                          f"{SILENT_CONNECTION_LIMIT_S} (the provider's longest possible silence), and a reply still "
                          "arriving is never cut off")
-    ap.add_argument("--concurrency", type=int, default=0, help="episodes in flight (default 4 per key)")
+    inflight.add_argument(ap, "episodes")
     ap.add_argument("--limit", type=int, default=0, help="label at most the first N episodes (0 = all)")
     ap.add_argument("--force", action="store_true", help="relabel episodes that already have a parsed output")
     ap.add_argument('--retry-received', action='append', default=[], metavar='EPISODE',
@@ -2463,7 +2465,7 @@ def main() -> int:
         return 2
     if args.limit > 0:
         episodes = episodes[:args.limit]
-    return run_batch(episodes, args.out_dir, keys=keys, concurrency=args.concurrency or 4 * len(keys),
+    return run_batch(episodes, args.out_dir, keys=keys, concurrency=args.concurrency,
                      force=args.force, max_spend=args.max_spend, retry_received=args.retry_received,
                      execution_lease_fd=inherited_review_lease(args.out_dir), **label_kw)
 

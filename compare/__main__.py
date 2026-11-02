@@ -43,6 +43,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from label import inflight
+
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -212,7 +214,7 @@ def main() -> int:
     p.add_argument("--kind", default="full", choices=["dry", "smoke", "full"], help="as for python -m label")
     p.add_argument("--cap", type=float, default=0.0, help="spend cap per model run, USD (required unless dry)")
     p.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
-    p.add_argument("--concurrency", type=int, default=8, help="episodes in flight per model")
+    inflight.add_argument(p, "episodes per model")
     p.add_argument("--routes", type=Path, default=None,
                    help="configs/compare/routes_<selection>.json: the reference run's routing answer for each task "
                         "text, so every model is sent the frames the reference was (label/route.py)")
