@@ -83,7 +83,11 @@ def test_rich_owned_metadata_and_530_frame_annotations_keep_distinct_sources(tmp
             assert span['t0'] == pytest.approx(first / 10)
             if last < 529:
                 assert span['t1'] == pytest.approx((last + 1) / 10)
-    assert path not in ctx['represented_source_members'].get('json', {})
+    # only LeRobot's own columns of the episode row are represented; the publisher's extra fields stay evidence
+    assert ctx['represented_source_members']['json'][path] == [
+        '/0/source', '/0/row', '/0/fields/episode_index', '/0/fields/tasks', '/0/fields/length']
+    from label.source_eligibility import needs_extra_evidence
+    assert needs_extra_evidence(ctx)
     assert len(json.dumps(ctx)) < 200_000
     assert source_hashes(root) == before
 
