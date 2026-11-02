@@ -20,6 +20,17 @@ def test_every_teleop_variant_takes_every_change(has_instruction, recorded, has_
     assert "a person reaching in or moving objects" not in body
 
 
+@pytest.mark.parametrize("has_instruction,recorded,has_steps", VARIANTS)
+def test_a_robot_with_no_arms_gets_every_change_on_top(has_instruction, recorded, has_steps):
+    kw = dict(has_instruction=has_instruction, recorded=recorded, has_steps=has_steps)
+    body = prompts.fixed_instructions("teleop_arms", whole_body=True, **kw)
+    legged = prompts.fixed_instructions("teleop_arms", whole_body="legged_no_arms", **kw)
+    for old, new in prompts.NO_ARMS_WORDING:
+        assert body.count(old) == 1 and legged.count(new) == 1
+    assert '"left" | "right" | "both"' not in legged and "two arms and their grippers" not in legged
+    assert "both arms hold still" not in legged
+
+
 @pytest.mark.parametrize("rig", ["handheld_gripper", "ego_head"])
 def test_other_rigs_ignore_the_flag(rig):
     assert prompts.fixed_instructions(rig, whole_body=True) == prompts.fixed_instructions(rig)

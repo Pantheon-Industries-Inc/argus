@@ -1164,13 +1164,56 @@ WHOLE_BODY_WORDING = [
 ]
 
 
+# A whole-body robot with no arms (context["whole_body"] == "legged_no_arms", such as a Unitree Go2 quadruped): the
+# whole-body words with the arms taken out. Every step is something the whole robot does, a task is getting somewhere
+# or to an object, and its camera is low at the front of its body with none of the robot in view. Checked on public
+# Go2 front-camera footage, 2026-11-01: an office corridor with the operator beside the robot, a road walked along its
+# centre line past parked cars, and close approaches to a pillar and a cup, the view bobbing and blurring with each step.
+NO_ARMS_WORDING = [
+    ("  mobile base. It walks or drives between places, turns, crouches and stands to reach things, and works with\n"
+     "  its two arms and their grippers.",
+     "  mobile base. This one is a legged robot with no arms: it walks, turns, stops, backs up and climbs, and it\n"
+     "  acts on the world only through where it goes."),
+    ("  camera fault. The scene should change only through the robot.",
+     "  camera fault, and so is the view bobbing with each step. Its camera is low at the front of its body, looking\n"
+     "  ahead, and none of the robot shows in it. A task is getting to a place or to an object; its outcome is whether\n"
+     "  the robot got there, and whether it hit, brushed or got stuck on anything on the way. The person who drives\n"
+     "  the robot often walks beside or behind it with a controller; they are surroundings unless they block, hold or\n"
+     "  move it. The scene should change only through the robot."),
+    ("  says a person takes part in the task. A timeline step in which the robot moves its whole body (walks,\n"
+     "  turns, crouches or stands up) while neither arm acts on an object has arm \"body\"; a step in which an arm\n"
+     "  acts, holds or carries something while the robot walks names that arm.\n",
+     "  says a person takes part in the task. Every timeline step has arm \"body\": the robot has no arms, so each\n"
+     "  step is something the whole robot does (walks toward a place, turns, stops, goes around an obstacle,\n"
+     "  approaches an object).\n"),
+    ("(a walk to the next place, a turn, a crouch, an approach, a grasp, a\ntransport, a placement, a pour, a "
+     "release, a retreat)",
+     "(a walk toward a place, a turn, a stop, an approach to an object, a\ndetour around an obstacle, a retreat)"),
+    ('"left" | "right" | "both" | "body", "<free-form verb phrase for what the arm, or with body the whole robot, does>"',
+     '"body", "<free-form verb phrase for what the robot does>"'),
+    ('"idle": the robot is not engaged in the task. A walk, turn or crouch that takes the robot to where its next\n'
+     '      step happens is engaged and advances the task even while both arms hold still, and so is carrying an\n'
+     '      object to where it goes.',
+     '"idle": the robot is not engaged in the task, such as standing still with no evident aim. A walk, turn or\n'
+     '      stop that serves getting where it is going is engaged and advances the task.'),
+    ("collisions (an arm or the body bumping furniture, walls or people while\n"
+     "  walking or turning), losing balance, walking past the place and back,",
+     "collisions (the body bumping furniture, walls, objects or people while\n"
+     "  walking or turning), getting stuck, losing balance or falling, walking off course or past the place and back,"),
+]
+
+
 def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True, has_steps: bool = False,
-                       whole_body: bool = False) -> str:
-    """fixed_instructions_for_rig, with WHOLE_BODY_WORDING for a teleop robot that moves its whole body."""
+                       whole_body=False) -> str:
+    """fixed_instructions_for_rig, with WHOLE_BODY_WORDING for a teleop robot that moves its whole body, and
+    NO_ARMS_WORDING on top when that robot has no arms (whole_body "legged_no_arms")."""
     s = fixed_instructions_for_rig(r, has_instruction=has_instruction, recorded=recorded, has_steps=has_steps)
     if whole_body and r == "teleop_arms":
         for old, new in WHOLE_BODY_WORDING:
             s = _replace_once(s, old, new)
+        if whole_body == "legged_no_arms":
+            for old, new in NO_ARMS_WORDING:
+                s = _replace_once(s, old, new)
     return s
 
 
