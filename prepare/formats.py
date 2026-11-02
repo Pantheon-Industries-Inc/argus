@@ -6185,6 +6185,40 @@ def constant_index_task(values, labels) -> list[str]:
     return []
 
 
+# LeRobot itself writes these fields into an episode's metadata row; the uploader never chose them. stats are the
+# per-episode statistics of every recorded column (stats/<column>/min, max, mean, std, count, q01 to q99 in a v3
+# meta/episodes row, one nested stats object in a v2.1 episodes_stats.jsonl row), and the recorded signals section
+# already gives each column's range and values. The rest say where the episode's rows and frames sit in the storage
+# files. Dropping them from the prompt notes keeps a long row from pushing the uploader's own fields (tasks, tags,
+# success flags, custom columns) past ANNOTATION_MAX_CHARS. context.json keeps every row whole in recorded_metadata.
+LEROBOT_DERIVED_FIELD = re.compile(r"stats(/.*)?|dataset_(from|to)_index|(data|meta/episodes)/(chunk|file)_index"
+                                   r"|videos/.+/((chunk|file)_index|(from|to)_timestamp)")
+# Dataset totals in meta/info.json are the same in every episode's request and describe none of them.
+LEROBOT_DATASET_TOTALS = frozenset({"total_episodes", "total_frames", "total_tasks", "total_chunks", "total_videos",
+                                    "data_files_size_in_mb", "video_files_size_in_mb", "splits"})
+
+
+def lerobot_note_claims(value, info: bool):
+    """One recorded metadata source as the prompt notes show it: without LeRobot's own derived fields, and without a
+    row left holding nothing but its episode_index."""
+    if info:
+        if not isinstance(value, dict):
+            return value
+        return {k: v for k, v in value.items() if k not in LEROBOT_DATASET_TOTALS} or None
+    if not isinstance(value, list):
+        return value
+    kept = []
+    for claim in value:
+        fields = claim.get("fields") if isinstance(claim, dict) else None
+        if not isinstance(fields, dict):
+            kept.append(claim)
+            continue
+        own = {k: v for k, v in fields.items() if not LEROBOT_DERIVED_FIELD.fullmatch(str(k))}
+        if set(own) - {"episode_index"}:
+            kept.append({**claim, "fields": own})
+    return kept or None
+
+
 def lerobot_metadata(ctx, root):
     """Keep only matching owned rows, plus explicitly unassigned source claims and dataset calibration."""
     from prepare.annotations import original
@@ -6224,6 +6258,8 @@ def lerobot_metadata(ctx, root):
     prompt_recorded = {}
     for path, value in recorded.items():
         selected = unrepresented_json(value, represented.get('json', {}).get(path, []))
+        if selected is not None:
+            selected = lerobot_note_claims(selected, info=path == info_path)
         if selected is not None:
             prompt_recorded[path] = selected
     notes = {**({"previous recorded notes": previous} if previous else {}),
