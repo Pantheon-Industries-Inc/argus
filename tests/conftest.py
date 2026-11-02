@@ -29,6 +29,13 @@ def resends_used_up(monkeypatch):
     monkeypatch.setattr(harness, 'AUTO_RESENDS', 0)
 
 
+
+@pytest.fixture
+def routing_on(monkeypatch):
+    """Resolution routing turned on (label/route.py enabled), for the tests of routing itself: it is off by default."""
+    monkeypatch.setenv('ARGUS_RESOLUTION_ROUTE', 'on')
+
+
 _SHARD = {}
 
 

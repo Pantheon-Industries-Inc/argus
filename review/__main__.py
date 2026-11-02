@@ -339,6 +339,9 @@ def main() -> int:
     ap.add_argument("--grouping", type=json.loads, default={},
                     help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
     policy.add_arguments(ap)
+    ap.add_argument("--resolution-route", choices=("on", "off"), default=None,
+                    help="route each teleop episode's cell width by its task text with a small model call (on), or send "
+                         "every teleop episode at the narrow cells with no call (default off)")
     ap.add_argument("--field-dictionary", choices=("on", "off"), default=None,
                     help="ask a model what uncertain recorded fields mean, once per upload (default off: fields are "
                          "labelled as recorded and no dictionary call is made)")
@@ -456,7 +459,8 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     if a.max_tokens is not None:
         timeout_args += ['--max-tokens', str(a.max_tokens)]
     retry_args = (['--force'] if a.force else []) + [value for name in a.retry_received for value in ('--retry-received', name)]
-    env = repo_env(**lease_env, RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))
+    env = repo_env(**lease_env, RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)),
+                   **({"ARGUS_RESOLUTION_ROUTE": a.resolution_route} if a.resolution_route else {}))
     run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                               str(job / "dry"), "--concurrency", jobs, "--dry-run", "--force", *timeout_args], env)
     unknown = set(a.retry_received) - {p.name for p in (job / 'units').glob('episode_*')}

@@ -12,6 +12,10 @@ from label.dictionary_stage import label_spend, label_spend_complete
 import complete_reply
 
 
+# every test here is about routing, which is off by default (label/route.py enabled)
+pytestmark = pytest.mark.usefixtures('routing_on')
+
+
 def episode(root, name='episode_a', instruction='Place the cup.'):
     ep = root / name
     ep.mkdir()

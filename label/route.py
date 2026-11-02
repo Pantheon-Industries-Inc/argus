@@ -1,5 +1,10 @@
 """Resolution routing: which cell width a teleop episode is sent at, chosen from its task text alone.
 
+Routing is off by default (ARGUS_RESOLUTION_ROUTE, set by --resolution-route on python -m review and python -m
+label.harness): a teleop episode is then sent at the narrow cells with contact detail views and no routing call, which
+is what routing chose for the tasks it has seen, since almost every task is judged from whole objects. With routing
+on, the rest of this note applies.
+
 Most tasks read well at low resolution (whole objects, where they are, whether they moved); some can only be
 judged with fine detail. Before an episode of a routed rig (label/episode.py ROUTE_WIDTHS) is labelled, a small
 model reads the episode's own task text, never its frames, and says which. A task that needs fine detail gets the
@@ -19,6 +24,7 @@ import json
 import copy
 import fcntl
 import hashlib
+import os
 import threading
 from contextlib import nullcontext
 from pathlib import Path
@@ -181,6 +187,12 @@ def _paid_route(ep, api_key, call_model, timeout, out_path, identity, reserve_di
     return hit
 
 
+def enabled() -> bool:
+    """Whether teleop episodes are routed: ARGUS_RESOLUTION_ROUTE=on. Read at each call, so the harness process a
+    review starts follows the flag it was given."""
+    return os.environ.get("ARGUS_RESOLUTION_ROUTE", "off").strip().lower() == "on"
+
+
 def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 120, *,
                 out_path=None, input_identity=None, reserve_dispatch=None,
                 settle_dispatch=None, billing_fields=None, force_refresh=False) -> tuple[int | None, dict]:
@@ -191,6 +203,8 @@ def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 12
     if r not in me.ROUTE_WIDTHS:
         return None, {"routed": False}
     low, high = me.ROUTE_WIDTHS[r]
+    if not enabled():
+        return low, {"routed": False, "why": "resolution routing off", "cell_w": low}
     ctx = ep["context"]
     # a plain video's task label is only its file name, which says nothing about the task
     real = any(value.strip() if isinstance(value, str) else value

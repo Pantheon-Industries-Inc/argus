@@ -342,6 +342,7 @@ def _route_call(answers):
     return call, calls
 
 
+@pytest.mark.usefixtures('routing_on')
 def test_routing_uses_task_detail_and_defaults_missing_text_to_narrow_cells(tmp_path, monkeypatch):
     from label import route
     monkeypatch.setattr(route, "_CACHE", {})
@@ -1038,6 +1039,7 @@ def test_single_episode_cli_refuses_unreadable_no_reply_claim(tmp_path, monkeypa
 SERVED = {"provider": "SomeHost", "id": "gen-123", "model": "openai/gpt-6-astra-20260901", "system_fingerprint": "fp_1"}
 
 
+@pytest.mark.usefixtures('routing_on')
 def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     """A synthetic packed episode through label_episode (model call mocked) and into a board file."""
     ep, T = _packed_episode(tmp_path)
@@ -1497,6 +1499,7 @@ def test_reparse_rereads_only_unparsed_replies(tmp_path, monkeypatch, capsys):
     assert [x["episode"] for x in log["still_unparsed"]] == ["episode_b"]
 
 
+@pytest.mark.usefixtures('routing_on')
 def test_seeded_routing_answers_are_used_with_no_call(tmp_path, monkeypatch):
     """A comparison run seeded with the reference run's answers sends each task text at the width the reference
     did, with no routing call and nothing billed; an answer that is not true or false is refused."""
