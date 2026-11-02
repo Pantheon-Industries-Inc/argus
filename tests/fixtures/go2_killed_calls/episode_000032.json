@@ -1,0 +1,67 @@
+{
+ "model": "openai/gpt-6.1-sol",
+ "reasoning_effort": "high",
+ "parse_ok": true,
+ "final_attempt_index": 1,
+ "finish_reason": "stop",
+ "generation_id": "gen-1793584391-sEeYGt8ZWy7cBAbL9k0V",
+ "episode_dir": "/tmp/episodes/go2/episode_000032",
+ "usage": {
+  "prompt_tokens": 27511,
+  "completion_tokens": 7396,
+  "est_cost_usd": 0.1210472,
+  "cost_source": "billed"
+ },
+ "config": {
+  "resolution_route": {
+   "routed": true,
+   "model": "openai/gpt-6-sol",
+   "cost_usd": 0.001836,
+   "reserved_usd": 0.050856,
+   "dispatch_outcome": "received",
+   "cost_is_conservative_estimate": false,
+   "usage": {
+    "prompt_tokens": 663,
+    "completion_tokens": 51,
+    "cost": 0.001836
+   },
+   "cost_source": "billed",
+   "generation_id": "gen-1793584354-3a1MmeRP8mElNcd1I11e"
+  }
+ },
+ "evidence_inspection": {
+  "version": 1,
+  "digest": "6257225c6ad10778d14df7e77e66c61296a6bb5484532d81157440062a3ebcf9",
+  "status": "complete",
+  "cost_usd": 0.08536550000000001,
+  "previously_billed_usd": 0,
+  "rounds": [
+   {
+    "state": "received",
+    "reserved_cost_usd": 0.156983,
+    "response": {
+     "id": "gen-1793584357-gIhzEBZapz8ug3qhbODX",
+     "usage": {
+      "prompt_tokens": 6249,
+      "completion_tokens": 669,
+      "cost": 0.022311
+     }
+    }
+   },
+   {
+    "state": "received",
+    "reserved_cost_usd": 0.184335,
+    "response": {
+     "id": "gen-1793584371-DQ3fSTCfNfRYgnehPskM",
+     "usage": {
+      "prompt_tokens": 11827,
+      "completion_tokens": 810,
+      "cost": 0.037666
+     }
+    }
+   }
+  ]
+ },
+ "final_cost_history": [],
+ "auxiliary_cost_history": []
+}
