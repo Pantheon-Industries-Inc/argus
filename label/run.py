@@ -15,6 +15,12 @@
   and what is left of its cap; episodes already labelled are skipped, the log is appended to, and run.json
   records each resume and why. --dataset, --episodes and --kind must be given again and match run.json.
 - Keys come from OPENROUTER_API_KEYS, or when it holds none from OPENAI_API_KEY (label.harness.get_keys).
+- A recording longer than one request allows (label/pieces.py piece_max: 450s at a rig's default sampling) is cut
+  into parts at still moments, the parts are labelled with the other episodes, and their labels are stitched back
+  onto the recording's timeline, as python -m review does. The run's policy (the harness's --model, --sample-fps and
+  the rest) is written into the slice's sidecars first (label/policy.py persist), so the parts are cut to the limit
+  of the model that labels them. Replies go to run/parts and run/out holds one result per recording; run.json's
+  "pieces" names each cut recording's parts. A slice with no long recording runs as before, into run/out.
 
 Anything after -- goes to the harness (label/harness.py), e.g. -- --model anthropic/claude-opus-5.5.
 """
@@ -25,17 +31,15 @@ import datetime as dt
 import json
 import math
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import (annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key,
-                           resolve_unanswered_charges)
-from label.dictionary_stage import output_spend, output_spend_complete
+from label.harness import execution_lock, get_keys, is_openrouter_key, resolve_unanswered_charges
 from label.atomic import write_atomic
 from label import inflight
-from prepare.frame_rate import episode_seconds
+from label.checkout import commit
+from label.finalize import billed_cost, finalize, finalize_worker, footage_hours, harness_out, parsed
 
 REPO = Path(__file__).resolve().parent.parent
 PY = Path(sys.executable)
@@ -48,50 +52,58 @@ def _keys() -> str:
     return ",".join(keys)
 
 
-def commit() -> tuple[str, bool]:
-    """The checkout's commit (7 characters) and whether any tracked file differs from it (True when git fails)."""
-    try:
-        sha = subprocess.run(["git", "rev-parse", "--short=7", "HEAD"], cwd=REPO, capture_output=True, text=True,
-                             check=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO,
-                                    capture_output=True, text=True, check=True).stdout.strip())
-        return sha, dirty
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown", True
+def run_policy(extra: list[str]) -> dict:
+    """The policy settings the harness is given after -- (--model, --reasoning, --sample-fps, --dataset-note,
+    --inspection), as label/policy.py resolve takes them."""
+    from label import policy
+    ap = argparse.ArgumentParser(add_help=False)
+    policy.add_arguments(ap)
+    known, _ = ap.parse_known_args([x for x in extra if x != "--"])
+    return {k: getattr(known, k) for k in ("model", "reasoning", "sample_fps", "dataset_note", "inspection")}
 
 
-def parsed(run: Path, eps: list[str]) -> int:
-    """How many of the episodes with an output have a finished annotation, a reply that parsed and holds the work its
-    request asked for (label/harness.py annotation_complete; episodes_done counts every output)."""
-    n = 0
-    for e in eps:
+def plan_pieces(run: Path, slice_dir: Path, extra: list[str]) -> dict:
+    """Cut every recording of the slice that one request cannot hold into parts, as python -m review does
+    (label/pieces.py write_units): {recording: [its parts]}. The run's policy is written into the slice's sidecars
+    first, so the parts are cut to the limit of the model that labels them; a slice with no long recording is left as
+    it is and gets {}."""
+    from label import pieces, policy
+    overrides = run_policy(extra)
+    longer = False
+    for d in sorted(slice_dir.glob("episode_*")):
         try:
-            selected = annotation_record(run / 'out', f'{e}.json')
-            record = selected[1] if selected else {}
-            n += isinstance(record, dict) and annotation_complete(record)
+            ctx = json.loads((d / "context.json").read_text())
         except (OSError, ValueError):
-            pass
-    return n
+            continue
+        if pieces.duration(ctx, d) > policy.resolve(ctx, **overrides)["part_max_s"]:
+            longer = True
+            break
+    if not longer:
+        return {}
+    policy.persist(slice_dir, **overrides)
+    return pieces.write_units(run, slice_dir)
 
 
-def billed_cost(run: Path) -> float:
-    """Cumulative episode charges and outstanding reservations, counted once."""
-    return output_spend(run / 'out')
+def stitch(run: Path, info: dict, slice_dir: Path) -> None:
+    """One result per recording in run/out: the short episodes' replies as they came and each cut recording stitched
+    from its parts (label/pieces.py stitch_run). A stitch that fails is recorded, never hidden."""
+    if not info.get("pieces"):
+        return
+    from label import pieces
+    try:
+        info["stitched"] = pieces.stitch_run(run, slice_dir, info["pieces"], run / "out", src=run / "parts")
+        info.pop("stitch_error", None)
+    except Exception as error:  # noqa: BLE001 - recorded in run.json, and a resume stitches again
+        info["stitch_error"] = repr(error)[:500]
 
 
-def footage_hours(slice_dir: Path, names: list[str]) -> float:
-    """Hours of recording, each episode's length from prepare/frame_rate.py episode_seconds (its duration_s, else the
-    span of its capture times, else its frame count at its frame rate)."""
-    s = 0.0
-    for n in names:
-        c = json.loads((slice_dir / n / "context.json").read_text())
-        s += episode_seconds(c, ep_dir=slice_dir / n)
-    return s / 3600
-
-
-def harness_cmd(slice_dir: Path, run: Path, kind: str, cap: float, concurrency: int, extra: list[str]) -> list[str]:
-    cmd = [str(PY), "-m", "label.harness", "--episodes-root", str(slice_dir.resolve()), "--out-dir",
-           str((run / "out").resolve()), "--concurrency", str(concurrency)]
+def harness_cmd(slice_dir: Path, run: Path, kind: str, cap: float, concurrency: int, extra: list[str],
+                split: bool = False) -> list[str]:
+    """The harness over the slice, or over run/units (each short episode and each part of a cut recording) into
+    run/parts when the run cut long recordings."""
+    root, out = (run / "units", run / "parts") if split else (slice_dir, run / "out")
+    cmd = [str(PY), "-m", "label.harness", "--episodes-root", str(root.resolve()), "--out-dir",
+           str(out.resolve()), "--concurrency", str(concurrency)]
     cmd += ["--dry-run"] if kind == "dry" else ["--max-spend", repr(cap)]
     return cmd + [x for x in extra if x != "--"]
 
@@ -110,59 +122,13 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> int:
     if rc != 0:
         # An orphan may own the output lock after this wrapper's child refused it.
         # Do not replace its running metadata with the refused child's exit status.
-        with execution_lock(run / 'out'):
+        with execution_lock(harness_out(run, info)):
             pass
+    stitch(run, info, slice_dir)
     finalize(run, info, slice_dir, rc)
     print(json.dumps({k: info[k] for k in ("run_id", "status", "cost_usd", "episodes_done", "episodes_failed",
                                            "footage_hours", "usd_per_hour")} | {"run": str(run)}))
     return rc
-
-
-
-def finalize(run: Path, info: dict, slice_dir: Path, rc: int) -> None:
-    """Publish settled worker results even if the wrapper was killed."""
-    tail = (run / "log.txt").read_text().strip().splitlines()
-    last = next((l for l in reversed(tail) if l.startswith("done=")), "")
-    m = dict(re.findall(r"(\w+)=\$?([\d.]+)", last))
-    done_eps = sorted(p.stem for p in (run / "out").glob("episode_*.json")) if (run / "out").exists() else []
-    hours = footage_hours(slice_dir, done_eps) if done_eps else 0.0
-    reserved = billed_cost(run)
-    complete = output_spend_complete(run / "out")
-    cost = reserved if complete else None
-    info.update({"status": "done" if rc == 0 else f"exit {rc}",
-                 "finished_at": dt.datetime.now().isoformat(timespec="seconds"),
-                 "cost_usd": cost, "reserved_cost_usd": reserved, "cost_complete": complete, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
-                 "episodes_failed": int(m.get("failed", 0)),
-                 "footage_hours": round(hours, 3), "usd_per_hour": round(cost / hours, 2) if hours and cost else None})
-    if info.get("kind") == "dry" and (run / "out").exists():
-        from label.evidence_access import inspection_plan
-        info["inspection"] = inspection_plan(run / "out")
-    write_atomic(run / "run.json", info, indent=1)
-
-
-
-def finalize_worker(out_dir: Path, rc: int) -> None:
-    metadata = os.environ.get('ARGUS_STAGED_RUN_METADATA')
-    if not metadata:
-        return
-    path = Path(metadata)
-    if path.name != 'run.json' or path.parent.resolve() != Path(out_dir).resolve().parent:
-        return
-    info = json.loads(path.read_text())
-    if info.get('kind') in ('dry', 'smoke', 'full') and info.get('status') == 'running':
-        finalize(path.parent, info, Path(info['slice']), rc)
-    elif info.get('kind') == 'review' and info.get('status') == 'running':
-        # A review whose wrapper was killed still has its labels settled here; the wrapper, if alive, writes its own
-        # final status after this, and a rerun of review builds the board.
-        from label.dictionary_stage import dictionary_spend, label_spend, label_spend_complete
-        job = path.parent.parent
-        spend = dictionary_spend(job)
-        complete = spend['complete'] and label_spend_complete(job)
-        total = label_spend(job) + (spend['cost_usd'] or 0.0)
-        info.update(status='labelled; board not built (rerun review to build it)' if rc == 0 else f'labelling exit {rc}',
-                    cost_usd=total if complete else None, reserved_cost_usd=label_spend(job) + spend['reserved_usd'],
-                    cost_complete=complete, labels_finished_at=dt.datetime.now().isoformat(timespec='seconds'))
-        write_atomic(path, info, indent=1)
 
 
 def resume(a, slice_dir: Path) -> None:
@@ -171,7 +137,7 @@ def resume(a, slice_dir: Path) -> None:
         raise SystemExit(f'--resume: no run.json in {folder}')
     with execution_lock(folder):
         # A killed wrapper can leave its harness alive and spending.
-        with execution_lock(folder / 'out'):
+        with execution_lock(harness_out(folder, json.loads((folder / 'run.json').read_text()))):
             pass
         return _resume(a, slice_dir)
 
@@ -189,13 +155,18 @@ def _resume(a, slice_dir: Path) -> None:
         raise SystemExit(f"--resume: the run's slice is {info['slice']}, not {slice_dir}")
     if not a.why:
         raise SystemExit("--resume needs --why")
-    if info["kind"] != "dry" and (run / "out").exists():
-        # calls killed with the last run hold their full bound until OpenRouter says what it billed for them
-        settled = resolve_unanswered_charges(run / "out", get_keys())
+    if info.get("pieces"):
+        # the same cuts again (label/pieces.py reuses parts whose source is unchanged)
+        info["pieces"] = plan_pieces(run, slice_dir, a.harness_args)
+    replies = harness_out(run, info)
+    if info["kind"] != "dry" and replies.exists():
+        # calls killed with the last run hold their full bound until OpenRouter says what it billed for them; a run
+        # that cut long recordings keeps its harness replies, and so its holds, in run/parts
+        settled = resolve_unanswered_charges(replies, get_keys())
         if settled["resolved"]:
             print(f"resume: {settled['resolved']} unanswered calls settled at OpenRouter's billed cost, "
                   f"${settled['released_usd']:.2f} of holds released", flush=True)
-    spent = billed_cost(run)
+    spent = billed_cost(run, info)
     if info["kind"] != "dry" and getattr(a, "cap", 0):
         # a new --cap on a resume replaces the run's cap, so a run the cap stopped can be finished
         if not math.isfinite(a.cap) or a.cap <= 0:
@@ -206,9 +177,10 @@ def _resume(a, slice_dir: Path) -> None:
     left = float(info["cap_usd"]) - spent
     if info["kind"] != "dry" and left <= 0:
         raise SystemExit(f"--resume: the run's cap ${info['cap_usd']} is already spent (${spent:.2f})")
-    if not any((run / 'out').glob('*episode_*.json')) and not any((run / 'out' / '.evidence').glob('*.inspection.json')):
-        raise SystemExit(f"--resume: no outputs in {run / 'out'}; refusing (wrong folder?)")
-    cmd = harness_cmd(slice_dir, run, info["kind"], left, a.concurrency, a.harness_args)
+    replies = harness_out(run, info)
+    if not any(replies.glob('*episode_*.json')) and not any((replies / '.evidence').glob('*.inspection.json')):
+        raise SystemExit(f"--resume: no outputs in {replies}; refusing (wrong folder?)")
+    cmd = harness_cmd(slice_dir, run, info["kind"], left, a.concurrency, a.harness_args, split=bool(info.get("pieces")))
     info.setdefault("resumes", []).append({"at": dt.datetime.now().isoformat(timespec="seconds"), "why": a.why,
                                            "spent_before": spent, "command": cmd})
     info["status"] = "running"
@@ -253,10 +225,11 @@ def main() -> int:
         except FileExistsError:
             run_id = f"{base_id}-{n}"          # two runs started in the same minute get their own folders
     run = a.runs / a.dataset / run_id
-    cmd = harness_cmd(a.episodes, run, a.kind, a.cap, a.concurrency, a.harness_args)
+    long_eps = plan_pieces(run, a.episodes, a.harness_args)
+    cmd = harness_cmd(a.episodes, run, a.kind, a.cap, a.concurrency, a.harness_args, split=bool(long_eps))
     info = {"run_id": run_id, "kind": a.kind, "dataset": a.dataset, "slice": str(a.episodes.resolve()),
             "code": sha, "code_dirty": dirty, "started_at": now.isoformat(timespec="seconds"), "cap_usd": a.cap,
-            "status": "running", "command": cmd, "note": a.note}
+            "status": "running", "command": cmd, "note": a.note, **({"pieces": long_eps} if long_eps else {})}
     with execution_lock(run):
         write_atomic(run / "run.json", info, indent=1)
         return finish(run, info, cmd, a.episodes, "w")

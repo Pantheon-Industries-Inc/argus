@@ -240,7 +240,7 @@ def test_completeness_is_decided_in_one_place():
     """Every site that calls a unit done reads annotation_problems, never parse_ok alone."""
     from label import completeness
     root = Path(__file__).resolve().parents[1]
-    for path in ('label/run.py', 'review/__main__.py'):
+    for path in ('label/finalize.py', 'review/__main__.py'):
         assert 'annotation_complete' in (root / path).read_text()
     for path in ('label/pieces.py', 'board/to_board.py', 'compare/metrics.py'):
         assert 'annotation_problems' in (root / path).read_text()

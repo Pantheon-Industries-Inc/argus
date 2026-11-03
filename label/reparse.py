@@ -20,7 +20,7 @@ from pathlib import Path
 
 from label import harness
 from label.atomic import write_atomic
-from label.run import commit
+from label.checkout import commit
 
 
 def rebind(record: dict) -> None:
