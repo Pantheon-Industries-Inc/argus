@@ -17,10 +17,11 @@ TASK_MODES = ('episode', 'session')
 # evidence selection used at most 239), and each effort step doubles it.
 REASONING_TOKENS = {'none': 0, 'minimal': 1000, 'low': 2000, 'medium': 4000, 'high': 8000, 'xhigh': 16000}
 # The paid calls beside the annotation. Evidence inspection asks the model, before it annotates, which recorded fields
-# to read at full rate (label/evidence_access.py discover); it was built for depth and touch sensing, so by default
-# (auto) only a recording with depth or a touch sensor (tactile, pressure, contact; a wrist force/torque sensor alone
-# does not count) is inspected, all inspects any recording with recorded fields beyond its cameras, and off buys no
-# selection. The field dictionary asks once per upload what uncertain fields mean
+# to read at full rate (label/evidence_access.py discover, inspection_reason). By default (auto) only a recording with
+# a touch sensor (tactile, pressure, contact; a wrist force/torque sensor alone does not count), whose contact the frames
+# cannot show, or with recorded fields the prompt does not carry is inspected; depth, whose pictures already ride in the
+# request, is inspected only with all, which inspects any recording with recorded fields beyond its cameras, and off
+# buys no selection. The field dictionary asks once per upload what uncertain fields mean
 # (label/dictionary_stage.py), on by default, and is written into the policy only when off.
 # A policy saved before inspection could be set inspected every recording with recorded fields, so a saved policy
 # without the setting keeps that (LEGACY_INSPECTION, never written) and a job labelled then resumes as it was paid

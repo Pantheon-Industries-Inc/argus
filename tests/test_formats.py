@@ -4893,8 +4893,12 @@ def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
                 assert len(ctx['recorded_metadata'][str(path)]) == 1
                 info_path = root / 'meta/info.json'
                 assert ctx['recorded_metadata'][str(info_path)] == json.loads(info_path.read_text())
-                own = {k: v for k, v in expected.items() if not f.LEROBOT_DERIVED_FIELD.fullmatch(k)}
-                assert ctx['uploader_notes']['recorded episode metadata'][str(path)][0]['fields'] == own
+                # the row's own LeRobot columns reach the prompt as the instruction and length, never again as notes,
+                # and LeRobot's derived fields (stats, spans) never reach the notes at all
+                noted = ((ctx.get('uploader_notes') or {}).get('recorded episode metadata') or {}).get(str(path))
+                fields = set(noted[0].get('fields') or {}) if noted else set()
+                assert not {'tasks', 'length', 'episode_index'} & fields
+                assert not any(f.LEROBOT_DERIVED_FIELD.fullmatch(k) for k in fields)
                 assert not any(i['kind'] == 'metadata_unreadable' for i in ctx.get('reader_issues', []))
 
 
@@ -4923,7 +4927,9 @@ def test_lerobot_derived_episode_fields_stay_recorded_but_leave_the_prompt_notes
                         'dataset_from_index', 'dataset_to_index'):
             assert derived not in notes, derived
         assert '"success": true' in notes and 'night shift' in notes and 'gripper sticks near the bin' in notes
-        assert '"tasks": ["second recorded task"]' in notes and '"length": 10' in notes
+        # the row's task text and length reach the prompt as its instruction and length, never again as notes
+        assert '"tasks"' not in notes and '"length"' not in notes
+        assert 'second recorded task' in prompt
         recorded = ctx['recorded_metadata'][str(path)][0]['fields']
         assert {k: recorded[k] for k in stats} == stats and recorded['dataset_from_index'] == 10
         assert not any(i['kind'] == 'metadata_limit' for i in ctx.get('reader_issues', []))
@@ -4946,9 +4952,11 @@ def test_lerobot_v21_episode_stats_rows_stay_recorded_but_leave_the_prompt_notes
         path.write_text(''.join(json.dumps({'episode_index': i, 'stats': nested}) + '\n' for i in (0, 1)))
         rep, episodes = _converted_notes(root, root.parent / 'out')
         ctx, prompt = episodes[1]
-        notes = prompt[prompt.index("THE UPLOADER'S OWN NOTES"):]
+        # nothing the uploader wrote is left in these rows (the task text is the instruction), so no notes may
+        # carry them
+        notes = prompt[prompt.index("THE UPLOADER'S OWN NOTES"):] if "THE UPLOADER'S OWN NOTES" in prompt else ''
         assert 'episodes_stats.jsonl' not in notes and '"stats"' not in notes and '"q99"' not in notes
-        assert '"tasks": ["second recorded task"]' in notes
+        assert '"tasks"' not in notes and 'second recorded task' in prompt
         assert ctx['recorded_metadata'][str(path)][0]['fields'] == {'episode_index': 1, 'stats': nested}
 
 
