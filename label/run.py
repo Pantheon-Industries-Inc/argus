@@ -35,7 +35,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import execution_lock, get_keys, is_openrouter_key
+from label.harness import execution_lock, get_keys, is_openrouter_key, resolve_unanswered_charges
 from label.atomic import write_atomic
 from label.checkout import commit
 from label.finalize import billed_cost, finalize, finalize_worker, footage_hours, harness_out, parsed
@@ -157,6 +157,14 @@ def _resume(a, slice_dir: Path) -> None:
     if info.get("pieces"):
         # the same cuts again (label/pieces.py reuses parts whose source is unchanged)
         info["pieces"] = plan_pieces(run, slice_dir, a.harness_args)
+    replies = harness_out(run, info)
+    if info["kind"] != "dry" and replies.exists():
+        # calls killed with the last run hold their full bound until OpenRouter says what it billed for them; a run
+        # that cut long recordings keeps its harness replies, and so its holds, in run/parts
+        settled = resolve_unanswered_charges(replies, get_keys())
+        if settled["resolved"]:
+            print(f"resume: {settled['resolved']} unanswered calls settled at OpenRouter's billed cost, "
+                  f"${settled['released_usd']:.2f} of holds released", flush=True)
     spent = billed_cost(run, info)
     if info["kind"] != "dry" and getattr(a, "cap", 0):
         # a new --cap on a resume replaces the run's cap, so a run the cap stopped can be finished
