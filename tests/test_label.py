@@ -1114,6 +1114,9 @@ def test_request_body_is_what_the_harness_docstring_says(monkeypatch):
     assert sent[0]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in sent[1]
     assert "cache_control" not in content[0]                                 # the caller's parts are not changed
     assert seen["headers"]["Authorization"] == "Bearer sk-or-x"
+    # urllib stores header names capitalized; these credit the usage to Argus in OpenRouter's app rankings
+    assert seen["headers"]["Http-referer"] == "https://pantheon.inc/research/argus"
+    assert seen["headers"]["X-openrouter-title"] == "Argus"
 
 
 def test_an_openai_key_sends_the_request_straight_to_openai(monkeypatch):
@@ -1139,6 +1142,7 @@ def test_an_openai_key_sends_the_request_straight_to_openai(monkeypatch):
     resp = harness.call_model(content, "openai/gpt-6-astra", "medium", "sk-proj-x", 64000, 60)
     b = seen["body"]
     assert seen["url"] == harness.OPENAI_URL and seen["headers"]["Authorization"] == "Bearer sk-proj-x"
+    assert "Http-referer" not in seen["headers"]                         # attribution goes to OpenRouter only
     assert set(b) == {"model", "messages", "max_completion_tokens", "reasoning_effort", "response_format"}
     assert (b["model"], b["reasoning_effort"], b["max_completion_tokens"]) == ("gpt-6-astra", "medium", 64000)
     assert all("cache_control" not in c for c in b["messages"][0]["content"])

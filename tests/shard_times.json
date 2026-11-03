@@ -1,5 +1,6 @@
 {
  "tests/test_abc_generic.py": 2.0,
+ "tests/test_ros2_db3.py": 1.3,
  "tests/test_actor_disagreements.py": 2.0,
  "tests/test_actor_group_identity.py": 2.5,
  "tests/test_adapter_output_identity.py": 0.6,
@@ -208,5 +209,6 @@
  "tests/test_task_claims.py": 4.0,
  "tests/test_wording.py": 0.5,
  "tests/test_catalog.py": 2.0,
- "tests/test_cache_warmup.py": 2.0
+ "tests/test_cache_warmup.py": 2.0,
+ "tests/test_killed_call_holds.py": 2.0
 }
