@@ -136,6 +136,7 @@ def test_reparse_recovers_received_reply_without_releasing_unknown_charge(tmp_pa
     assert not dictionary_stage.output_spend_complete(tmp_path / 'out')
 
 
+@pytest.mark.usefixtures('routing_on')
 @pytest.mark.parametrize('finish,text', [('length', '{"fine_detail":false}'), ('stop', 'not json')])
 def test_routing_keeps_unusable_paid_reply_and_uses_wide_cells(tmp_path, monkeypatch, finish, text):
     from test_route_accounting import observed_packed_episode
