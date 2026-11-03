@@ -288,7 +288,7 @@ def layout_check(browser: str, base: str, page: str, width: int, height: int = H
         # arrived by then, and the same commit passed on one run and failed on the next (issue 189: a 390px cell
         # 4.6px too narrow on some runs). A reader whose font host is slow or blocked sees the fallback too.
         send, close = _devtools(browser, ["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
-                                          "--host-resolver-rules=MAP * ~NOTFOUND",
+                                          "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
                                           "--hide-scrollbars", "--disable-extensions", f"--user-data-dir={profile}",
                                           f"--window-size={max(width, 500) + 40},{height + 200}", "about:blank"])
         try:
