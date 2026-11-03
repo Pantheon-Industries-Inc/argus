@@ -3066,10 +3066,12 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                                                 f"{c['start_s']:.2f}-{c['end_s']:.2f}s ==="})
         content.append({"type": "image_url", "image_url": {
             "url": "data:image/jpeg;base64," + base64.b64encode(cjpg).decode("ascii"), "detail": detail}})
-    from label.evidence_access import Access, needs_inspection
+    from label.evidence_access import Access, inspection_reason
     mode = policy.inspection_mode(policy.effective(ep['context']))
-    access = Access(ep, pl['sensor_evidence'], plan=pl, copy_contract_version=sensor_copy.VERSION) if inspect_evidence and needs_inspection(ep, pl['sensor_evidence'], mode) else None
-    return {**({"evidence_access": access} if inspect_evidence else {}), "sensor_evidence": pl["sensor_evidence"],
+    reason = inspection_reason(ep, pl['sensor_evidence'], mode) if inspect_evidence else None
+    access = Access(ep, pl['sensor_evidence'], plan=pl, copy_contract_version=sensor_copy.VERSION) if reason else None
+    return {**({"evidence_access": access, "inspection_reason": reason} if inspect_evidence else {}),
+            "sensor_evidence": pl["sensor_evidence"],
             "content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids + len(native_parts) // 2,
             'native_tactile_frames': sum(len(frames) for frames in native_images.values()),
             'sensor_scene_pairing': scene_pairing,

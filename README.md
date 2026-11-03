@@ -36,7 +36,7 @@ Recently, [Midcentury AI](https://www.midcentury.xyz/blog/optimizing-argus) push
 
 <details><summary><b>Argus now labels depth, tactile and other modalities and grades how well each episode was executed</b> (October 2026)</summary>
 
-Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. By default the model inspects any recording with depth or a touch sensor and can read any of its fields at full rate. It also inspects any recording with fields the prompt does not carry, such as EgoDex hand poses. A recording with only arm signals and a wrist force/torque sensor is inspected only with [`--inspection all`](#settings), and otherwise its fields reach the model as sampled readings. Inspection reads numeric fields by exact source rows, and by time only when a field's clock is aligned with the video. The response byte budget sets how many components one inspection request returns.
+Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. Before it labels a recording, the model can make an inspection call that picks recorded fields to read at full rate, and by default it makes that call only when the frames and the prompt's readings cannot carry what matters. A touch sensor qualifies, since contact, slip and pressure never show in RGB. So does a recorded field the prompt does not carry, such as EgoDex hand poses. A LeRobot dataset's own metadata does not count, because its task text, row and video spans, per-episode statistics and video encoder settings all describe columns the prompt already reads. Depth is not inspected by default either. Its pictures already go into the request beside the colour frames, and on the Unitree Go2 datasets inspecting it cost about $0.11 an episode on top of a $0.15 label. Force/torque and other numeric channels reach the prompt as sampled readings and the times of their extremes. Choose [`--inspection all`](#settings) when a finding depends on exact depth, force or joint values, such as a distance to an object or a peak force. Before it spends, review prints how many episodes will be inspected and why, and run.json keeps the same counts. Inspection reads numeric fields by exact source rows, and by time only when a field's clock is aligned with the video. The response byte budget sets how many components one inspection request returns.
 
 Argus also scores each episode out of 10 for execution and outcome, and each subgoal for execution, deterministically from the annotations. Outcome measures whether the goal was reached and how far progress got, and execution weights cleanliness 75%, steadiness 15% and speed 10% ([`board/scores.py`](board/scores.py) calls them cleanliness, fluency and efficiency). A subgoal is a lasting state change the goal depends on, such as a block placed in the row, never a pick or a grasp.
 
@@ -46,18 +46,18 @@ Argus also scores each episode out of 10 for execution and outcome, and each sub
 
 To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).
 
-It is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For depth and tactile data the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
+It is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For tactile data, and for depth with `--inspection all`, the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Pantheon-Industries-Inc/argus/refs/heads/main/media/architecture.svg?v=a088e8f800e6">
-    <img src="media/architecture.svg?v=a088e8f800e6" width="1900" alt="Annotation pipeline: format ingestion, field interpretation (off by default), visual, state and sensor evidence, evidence inspection (automatic for depth and touch recordings, and for fields the prompt does not carry), VLM annotation of behavior, state changes and sensor findings with a separate regional pass for tactile arrays, issue detection, temporal stitching of request parts and of the tasks that continue across them, and a viewer with chosen sensor cards, quality scores and JSON exports.">
+    <img src="media/architecture.svg?v=a088e8f800e6" width="1900" alt="Annotation pipeline: format ingestion, field interpretation (off by default), visual, state and sensor evidence, evidence inspection (automatic for touch recordings and for fields the prompt does not carry), VLM annotation of behavior, state changes and sensor findings with a separate regional pass for tactile arrays, issue detection, temporal stitching of request parts and of the tasks that continue across them, and a viewer with chosen sensor cards, quality scores and JSON exports.">
   </a>
 </p>
 
 | Input support | Details |
 |---|---|
 | Recording types | Teleop, UMI and human ego |
-| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, HDF5, video files and folders |
+| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, ROS 2 bags stored as SQLite (.db3, read by the MCAP reader), HDF5, video files and folders |
 | Archives | ZIP and TAR, plain or compressed with gzip, bzip2 or xz |
 | Sidecar metadata | JSON, JSON Lines, CSV, TSV, text and Markdown notes, and LeRobot's Parquet and JSON Lines annotation tables |
 | Public dataset adapters | Nine, each downloading and preparing a public dataset |
@@ -66,10 +66,10 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 |---|---|
 | RGB | Timestamped multi-view frames provide visual context for task execution, object interactions, progress, failures and recoveries. |
 | Tactile, inspected by default | Pressure, normal/shear force, contact arrays and optical tactile images support analysis of grip, contact distribution and surface motion. The model compares whole arrays, single cells and regions with video and gripper state, and reads optical tactile images at the moments they change most. Argus classes a camera as an optical tactile sensor from its dictionary role, recorded metadata or a fixed-view touch device, never from a brand name, and such a camera never takes a scene or gripper slot. A touch signal produces contacts only if it sits on a hand or a gripper, and its body part comes from the recording's description, then its name, then the field dictionary. Array shape alone does not establish anatomy or force, and response changes alone do not establish slip. |
-| Depth, inspected by default | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
+| Depth, inspected with `--inspection all` | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
 | Proprioception and actions | Joint states, end-effector poses, gripper states and action trajectories provide motion context. Training targets keep their declared semantics and are not assumed to be executed commands. |
 | Other episode fields | Force/torque, numeric channels, event flags, waveform packets and structured metadata reach the prompt as their range over the recording. A channel the sampling rate resolves also gets a reading at each sampled instant, and a channel that tracks another is given only where it departs from it. A channel the sampling rate does not resolve gets its mean over each sampling window within a small share of the request, and otherwise the times of its largest and smallest readings. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
-| Task context | Instructions, annotations and calibration metadata provide context. The VLM checks publisher claims against the recording rather than assuming their correctness. |
+| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording rather than assuming it is correct. The per-episode statistics, storage offsets and dataset totals that LeRobot writes into its metadata are kept in the episode's context.json and left out of the prompt. |
 
 ## Install and review
 
@@ -81,7 +81,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. OpenRouter requests carry an app attribution header ([`OPENROUTER_APP_HEADERS`](label/harness.py)), so their usage counts toward Argus in OpenRouter's app rankings. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
 
 Annotate a dataset under a spending cap, then open its board. Add [`--free`](review/__main__.py) to build the same requests without model calls.
 
@@ -101,7 +101,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--model`](label/policy.py) | `openai/gpt-6-astra` | `openai/gpt-6.1-sol` (Sol 6.1), or `google/gemini-4-argon` (Gemini 4 Argon) with an OpenRouter key, priced from OpenRouter's published rates ([`label/pricing.py`](label/pricing.py)) |
 | [`--reasoning`](label/policy.py) | Medium for Astra, high for every other model | `none`, `minimal`, `low`, `medium`, `high` or `xhigh` |
 | [`--sample-fps`](label/policy.py) | A frame every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus the edges of still spans and the first and last frames; Sol samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
-| [`--inspection`](label/policy.py) | `auto`, for recordings with depth or a touch sensor, or with fields the prompt does not carry | `all` also inspects recordings with no depth or touch sensor, such as one with only force/torque, arm signals, actions or source metadata; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
+| [`--inspection`](label/policy.py) | `auto`, for recordings with a touch sensor or with fields the prompt does not carry | `all` also inspects depth, force/torque, arm signals, actions and source metadata, for runs whose findings need exact values; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
 | [`--resolution-route`](label/harness.py) | `off`, every teleop episode at the narrow cells (224 px) with contact detail views and no routing call | `on` asks a small model, from the episode's task text alone, whether judging it needs fine detail such as lettering or which side of an object is up, and sends those episodes at 448 px |
 | [`--cap`](review/__main__.py) | $20 | The most the job may spend, counting every call and outstanding reservation |
 | [`--max-minutes`](review/__main__.py) | All footage | Reads at most this many minutes of footage |
@@ -122,7 +122,7 @@ A teleop or UMI recording with an instruction is judged as a whole against it, a
 
 A human ego clip of one task takes that task's outcome unless the dataset provides timed subtasks, and a clip of several tasks gets no overall verdict. When the annotation gives a goal, the verdict is whether the clip fully reached it. Without a goal, a task cut off by the end of the clip is named after the work the clip shows.
 
-Argus cuts a recording that is too long for one request (450s at default sampling) at still moments, labels each part separately and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s around each cut, so a task that runs across a cut is joined into one, and labels made without that overlap are joined by a small seam check ([`python -m review seam`](label/seam.py)). A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. Data issues that several parts report, such as swapped wrist cameras, are merged into one issue by a small text-only request ([`label/issue_groups.py`](label/issue_groups.py)), which `ARGUS_ISSUE_GROUPS=0` turns off.
+Argus cuts a recording that is too long for one request (450s at default sampling) at still moments, labels each part separately and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s around each cut, and both parts label whatever is under way there. When a task or a timeline step from one side of the cut shares at least half of its seconds in the overlap with one from the other side, the stitch joins the two into one, however differently the two requests worded them. A step stays split at the cut only where one part saw the action change there, or where the two parts gave it to different arms. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)). A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. Data issues that several parts report, such as swapped wrist cameras, are merged into one issue by a small text-only request ([`label/issue_groups.py`](label/issue_groups.py)), which `ARGUS_ISSUE_GROUPS=0` turns off.
 
 > [!NOTE]
 > `python -m review` does all post-processing itself once the labelling requests return. It stitches a long recording's parts onto one timeline, merges data issues that several parts reported, and builds the review board. Before a result is published, it also removes the phrases the model writes about the labelling itself, such as "in this supplied window" ([`label/wording.py`](label/wording.py)), and it drops a sentence only when every word in it is about the labelling. Nothing else needs to be run.
@@ -253,7 +253,9 @@ A request refused with a transient error status (408, 409, 425, 429, 500, 502, 5
 
 When the provider fails a request that may have been billed, because the reply carries its error or never arrives in full, Argus keeps that attempt, counts its possible charge against the cap, and resends the request automatically at most twice, after 30s and 120s. A plain resume does the same for a unit sent fewer than three times. Past that, only `--retry-received` for that episode or `--force` sends it again. [`--force`](label/harness.py), also available in `review`, relabels every selected episode, including completed ones. A cap refusal returns a nonzero exit status and keeps each unfinished unit for resume.
 
-A capped run uses verified model rates or a saved OpenRouter pricing quote and refuses unknown prices. Until its bill arrives, each request reserves an upper bound computed from its text and images plus its full output limit. With the default 64,000-token output limit, the default model reserves at least $3.20 per request for the output alone and about $3.70 for a short teleop episode. A smaller [`--max-tokens`](review/__main__.py) reserves less. Receipts keep earlier responses, charges and outstanding reservations across failures. [`board grids`](board/grids.py) reconstructs base request grids only when it can verify the original input hashes, and counts detail and sensor images without reconstructing them.
+A capped run uses verified model rates or a saved OpenRouter pricing quote and refuses unknown prices. Until a request's bill arrives, Argus reserves against the cap an upper bound computed from the request's text and images plus its full output limit. With the default 64,000-token output limit, the default model reserves at least $3.20 per request for the output alone and about $3.70 for a short teleop episode, and a smaller [`--max-tokens`](review/__main__.py) reserves less. Receipts keep earlier responses, charges and outstanding reservations across failures. [`board grids`](board/grids.py) reconstructs base request grids only when it can verify the original input hashes, and counts detail and sensor images without reconstructing them.
+
+A labelling request killed before its reply arrives keeps its reservation, because OpenRouter may still bill it. OpenRouter names the generation in the response headers within about a second, long before the reply, and Argus saves that id in the request's receipt. The next run or [`--resume`](label/run.py) asks OpenRouter what it billed for that generation and replaces the reservation with the billed amount. OpenRouter stops a request whose connection closes and bills only the tokens written so far, which for a Sol request cut off after 8s came to $0.013. A request with no saved id, and one OpenRouter has no record of yet, keeps its full reservation.
 
 Field interpretation and teleop image routing always use `openai/gpt-6-sol`, whatever `--model` says, and count against the cap. Field interpretation can spend up to $3. When the cap cannot cover a single labelling request, `review` stops before that request and says so, though field interpretation may already have run. Argus refuses a quoted model whose price list includes web search unless it is a Claude or Gemini model, because those search only when asked and Argus requests never ask. A price for an input no request carries, such as audio, does not block a quote.
 
@@ -336,6 +338,21 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`gate score`](gate/score.py) | `--json` |
 
 </details>
+
+## Citation
+
+If you use Argus or the labels it produces, please cite the [blog post](https://pantheon.inc/research/argus). GitHub's "Cite this repository" button reads the same entry from [`CITATION.cff`](CITATION.cff).
+
+```bibtex
+@article{li2026data2,
+  author = {Eric Li},
+  title = {Argus: A Dense Annotator for Robotics Data},
+  journal = {Pantheon Research},
+  year = {2026},
+  month = {October},
+  day = {1}
+}
+```
 
 ## Credits
 

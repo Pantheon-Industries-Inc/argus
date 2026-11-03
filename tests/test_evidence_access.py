@@ -1153,7 +1153,7 @@ def test_resolved_annotation_policy_does_not_opt_rgb_into_inspection(tmp_path):
     assert {'annotation_policy', 'task_mode', 'check_versions'} <= ea.PREPARED_CONTEXT
 
 
-def test_by_default_only_depth_and_touch_sensors_are_inspected_and_all_restores_every_recorded_field(tmp_path):
+def test_by_default_only_touch_sensors_are_inspected_and_all_restores_every_recorded_field(tmp_path):
     arm = access(tmp_path).ep
     arm['signals'] = {'joint_vel': np.zeros((4, 6))}                     # arm signals alone, as YAM teleop records
     arm['action'] = np.ones((4, 7))
@@ -1168,9 +1168,12 @@ def test_by_default_only_depth_and_touch_sensors_are_inspected_and_all_restores_
     assert not ea.needs_inspection(arm, wrench) and ea.needs_inspection(arm, wrench, 'all')
     touch = {'sensors': [{'id': 'signal:pressure', 'kind': 'numeric', 'quantity': 'pressure_response'}]}
     for mode in ('auto', 'all', 'off'):
-        assert ea.needs_inspection(arm, touch, mode)
-        assert ea.needs_inspection({**arm, 'depth': {'exo': {}}}, {}, mode)
+        assert ea.inspection_reason(arm, touch, mode) == 'touch'
         assert not ea.needs_inspection(access(tmp_path).ep, {}, mode)    # cameras alone are never inspected
+    # depth alone rides in the request as pictures beside the frames, and is inspected only with all
+    depth = {**access(tmp_path).ep, 'depth': {'exo': {}}}
+    assert ea.inspection_reason(depth, {}, 'auto') is None and ea.inspection_reason(depth, {}, 'off') is None
+    assert ea.inspection_reason(depth, {}, 'all') == 'all'
 
 
 def test_inspection_turned_off_makes_no_selection_and_its_coverage_says_so(tmp_path):
