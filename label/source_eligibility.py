@@ -41,17 +41,28 @@ def unrepresented_json(value, paths, pointer=''):
     return value
 
 
-def archive_has_unrepresented(archive, coverage):
-    """Unknown members remain eligible; coverage is exact source path and member identity."""
+def _describes(field, streams):
+    """An HDF5 member that is one of these streams, or an attribute of it."""
+    obj = str(field.get('object') or '')
+    return any(obj == name or obj.endswith('/' + name) for name in streams)
+
+
+def archive_has_unrepresented(archive, coverage, set_aside=()):
+    """Unknown members remain eligible; coverage is exact source path and member identity. set_aside names streams
+    (a depth video's source key) whose own description is not counted: a LeRobot features entry of that name, or an
+    HDF5 dataset of that name and its attributes."""
     covered_json = coverage.get('json', {})
+    aside = ['/features/' + str(name).replace('~', '~0').replace('/', '~1') for name in set_aside]
     for source, value in (archive.get('recorded_metadata') or {}).items():
-        paths = covered_json.get(str(source), [])
+        paths = covered_json.get(str(source), []) + aside
         if any(not _covered(pointer, paths) for pointer in _leaves(value)):
             return True
     source = archive.get('recorded_hdf5_metadata') or {}
     # A member in another HDF5 file never represents this file's same-named member.
     members = coverage.get('hdf5', {}).get(source.get('source_path'), {})
     for field in source.get('fields') or []:
+        if _describes(field, set_aside):
+            continue
         obj = field.get('object')
         attribute = field.get('attribute')
         key = json.dumps([obj, attribute], separators=(',', ':'))
@@ -75,9 +86,9 @@ def archive_has_unrepresented(archive, coverage):
     return False
 
 
-def needs_extra_evidence(ctx):
+def needs_extra_evidence(ctx, set_aside=()):
     coverage = ctx.get('represented_source_members') or {}
-    return any(archive_has_unrepresented(archive, coverage)
+    return any(archive_has_unrepresented(archive, coverage, set_aside)
                for archive in [ctx, *(ctx.get('recorded_sensor_fields') or [])])
 
 

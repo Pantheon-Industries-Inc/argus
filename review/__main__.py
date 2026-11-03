@@ -463,6 +463,9 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     if unknown:
         raise SystemExit('--retry-received names unknown units: ' + ', '.join(sorted(unknown)) +
                          '; available units: ' + ', '.join(p.name for p in sorted((job / 'units').glob('episode_*'))))
+    from label.evidence_access import inspection_plan, inspection_plan_lines
+    inspection = inspection_plan(job / 'dry')
+    print('\n'.join(inspection_plan_lines(inspection)), flush=True)
     if a.free:
         print(f"free run: requests built in {job / 'dry'}, model not called", flush=True)
         return 0
@@ -475,7 +478,7 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     prior_run = json.loads((run_dir / 'run.json').read_text()) if (run_dir / 'run.json').exists() else {}
     info = {**prior_run, "run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
             "code": f"argus@{commit()}", "started_at": prior_run.get('started_at') or now(), "cap_usd": a.cap, "status": "running",
-            "annotation_policy": selected}
+            "annotation_policy": selected, "inspection": inspection}
     info.pop('error', None)
     info.pop('finished_at', None)
     if a.retry_received:

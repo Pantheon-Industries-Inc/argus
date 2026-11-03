@@ -6186,6 +6186,35 @@ def constant_index_task(values, labels) -> list[str]:
     return []
 
 
+# info.json members that describe the dataset's files rather than any episode, and each video feature's encoder
+# settings. A depth video's calibration (depth_unit, video.depth_min, video.depth_max, video.shift, video.use_log) is
+# not encoding: it says how stored values map to distance, so it stays evidence the prompt does not carry.
+LEROBOT_INFO_BOOKKEEPING = ('total_episodes', 'total_frames', 'total_tasks', 'total_chunks', 'total_videos',
+                            'data_files_size_in_mb', 'video_files_size_in_mb', 'splits')
+LEROBOT_VIDEO_ENCODING = ('video.codec', 'video.is_depth_map', 'is_depth_map', 'has_audio', 'video.height',
+                          'video.width', 'video.pix_fmt', 'video.fps', 'video.channels', 'video.g', 'video.crf',
+                          'video.preset', 'video.fast_decode', 'video.video_backend', 'video.extra_options')
+LEROBOT_EPISODE_KEYS = ('episode_index', 'tasks', 'length', 'dataset_from_index', 'dataset_to_index')
+LEROBOT_VIDEO_SPAN = ('chunk_index', 'file_index', 'from_timestamp', 'to_timestamp')
+
+
+def json_token(key) -> str:
+    return str(key).replace('~', '~0').replace('/', '~1')
+
+
+def lerobot_episode_bookkeeping(key, features) -> bool:
+    """A LeRobot per-episode metadata column the prepared episode already holds: its index, task text and length, the
+    data and video spans it was cut by, or a summary statistic of a declared feature (stats/<feature>/<statistic>)."""
+    key = str(key)
+    if key in LEROBOT_EPISODE_KEYS or key.startswith(('data/', 'meta/episodes/')):
+        return True
+    if key.startswith('videos/'):
+        return key.rsplit('/', 1)[-1] in LEROBOT_VIDEO_SPAN
+    if key.startswith('stats/') and key.count('/') >= 2:
+        return key[len('stats/'):].rsplit('/', 1)[0] in features
+    return False
+
+
 # LeRobot itself writes these fields into an episode's metadata row; the uploader never chose them. stats are the
 # per-episode statistics of every recorded column (stats/<column>/min, max, mean, std, count, q01 to q99 in a v3
 # meta/episodes row, one nested stats object in a v2.1 episodes_stats.jsonl row), and the recorded signals section
@@ -6238,18 +6267,40 @@ def lerobot_metadata(ctx, root):
     for key in ('codebase_version', FPS_KEY, 'robot_type', 'data_path', 'video_path', 'chunks_size'):
         if key in info:
             mark_json(represented, info_path, '/' + key)
-    for feature, descriptor in (info.get('features') or {}).items():
+    for key in LEROBOT_INFO_BOOKKEEPING:
+        if key in info:
+            mark_json(represented, info_path, '/' + key)
+    features = info.get('features') or {}
+    for feature, descriptor in features.items():
         if not isinstance(descriptor, dict):
             continue
-        token = str(feature).replace('~', '~0').replace('/', '~1')
-        for key in ('dtype', 'shape', 'names'):
+        token = json_token(feature)
+        for key in ('dtype', 'shape', 'names', FPS_KEY):
             if key in descriptor:
                 mark_json(represented, info_path, '/features/' + token + '/' + key)
         details = descriptor.get('info') or {}
-        for key in ('video.is_depth_map', 'video.codec'):
+        for key in LEROBOT_VIDEO_ENCODING:
             if key in details:
-                escaped = key.replace('~', '~0').replace('/', '~1')
-                mark_json(represented, info_path, '/features/' + token + '/info/' + escaped)
+                mark_json(represented, info_path, '/features/' + token + '/info/' + json_token(key))
+    # LeRobot's own per-episode rows (meta/episodes.jsonl, episodes_stats.jsonl, v3's meta/episodes parquet) hold the
+    # task text the instruction is read from, the row and video spans the reader cuts the episode by, and summary
+    # statistics of declared columns that reach the prompt as rows; none of it is evidence beyond the prepared episode.
+    for path, claims in recorded.items():
+        if path == info_path or not isinstance(claims, list):
+            continue
+        for number, claim in enumerate(claims):
+            if not isinstance(claim, dict) or not isinstance(claim.get('fields'), dict):
+                continue
+            for key in ('source', 'row'):
+                mark_json(represented, path, f'/{number}/{key}')
+            for key, value in claim['fields'].items():
+                pointer = f'/{number}/fields/{json_token(key)}'
+                if lerobot_episode_bookkeeping(key, features):
+                    mark_json(represented, path, pointer)
+                elif key == 'stats' and isinstance(value, dict):
+                    for feature in value:
+                        if feature in features:
+                            mark_json(represented, path, pointer + '/' + json_token(feature))
     if unassigned:
         ctx["unassigned_metadata"] = unassigned
         for claim in unassigned:
