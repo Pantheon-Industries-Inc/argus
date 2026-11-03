@@ -83,7 +83,7 @@ def fixture_tree(root):
             for path in root.rglob('*')}
 
 
-@pytest.mark.parametrize('module', ['label/harness.py', 'label/run.py', 'label/evidence_access.py'])
+@pytest.mark.parametrize('module', ['label/harness.py', 'label/reparse.py', 'label/evidence_access.py'])
 def test_bookkeeping_source_edit_resumes_actual_paid_request_without_payment(tmp_path, monkeypatch, module):
     ep, out, calls = paid_episode(tmp_path, monkeypatch)
     path = out / (ep.name + '.json'); before = path.read_bytes()
@@ -145,7 +145,7 @@ def test_incomplete_or_changed_saved_request_proof_fails_closed(tmp_path, monkey
             answer['requests'].reverse()
             choice['message']['content'] = json.dumps(answer)
     path.write_text(json.dumps(saved)); before = path.read_bytes()
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     assert harness.run_batch([ep], out, **options()) == 1
     assert path.read_bytes() == before
     assert calls == ['selection', 'selection', 'final', 'cards']
@@ -160,7 +160,7 @@ def test_compatible_raw_reply_repairs_binding_and_retains_human_rejection_offlin
     path.write_text(json.dumps(saved))
     paid = output_spend(out)
     raw, proof = saved['response_text'], saved['config']['request_images']
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     assert harness.run_batch([ep], out, **options()) == 0
     refreshed = json.loads(path.read_text())
     finding = refreshed['sensor_evidence']['findings'][0]
@@ -179,7 +179,7 @@ def test_rgb_only_paid_request_uses_actual_attestation_after_bookkeeping_edit(tm
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 0
     assert 'evidence_inspection' not in json.loads((out / (ep.name + '.json')).read_text())
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     assert harness.run_batch([ep], out, **options()) == 0
     assert calls == ['final']
 
@@ -191,6 +191,6 @@ def test_history_only_paid_attestation_reuses_reply_without_changing_ledger(tmp_
     assert harness.run_batch([ep], out, **refused) == 1
     (out / (ep.name + '.json')).unlink()
     assert harness.annotation_record(out, ep.name + '.json')[1]['_authority_history_index'] == 0
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     assert harness.run_batch([ep], out, **options()) == 0
     assert output_spend(out) == paid and calls == ['selection', 'selection', 'final', 'cards']

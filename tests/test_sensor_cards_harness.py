@@ -63,7 +63,7 @@ def test_a_failed_card_call_leaves_the_paid_annotation_current_after_a_code_chan
     assert saved['evidence_inspection']['limitations'] == []
     paid, before = output_spend(out), list(calls)
     monkeypatch.setattr(sensor_cards, 'ANSWER_TOKENS', 16000)
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     assert harness.run_batch([ep], out, **options()) == 0
     assert not (out / ('stale_' + ep.name + '.json')).exists()
     assert calls == before and output_spend(out) == paid

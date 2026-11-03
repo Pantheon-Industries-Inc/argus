@@ -282,7 +282,7 @@ def test_completed_staged_request_reuses_only_when_both_actual_requests_match(tm
     assert harness.run_batch([ep], out, **options()) == 0
     path = out / (ep.name + '.json')
     saved = json.loads(path.read_text())
-    source_edit(monkeypatch, 'label/run.py')
+    source_edit(monkeypatch, 'label/reparse.py')
     if stage_changed:
         monkeypatch.setattr(sa, 'HEADER', sa.HEADER + 'A changed analysis requirement.\n')
     assert harness.run_batch([ep], out, **options()) == (1 if stage_changed else 0)
