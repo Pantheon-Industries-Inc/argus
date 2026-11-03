@@ -44,6 +44,8 @@ def _episodes(tmp_path, n):
 
 
 def _harness_main(tmp_path, monkeypatch, expect, *flags):
+    # the fixture episodes share one prompt variant; this measures the pool, not the cache warm-up (#169)
+    monkeypatch.setenv('ARGUS_CACHE_WARMUP', '0')
     eps = _episodes(tmp_path, N)
     peak = Peak(expect)
 
