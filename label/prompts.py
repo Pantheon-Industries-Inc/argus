@@ -919,7 +919,8 @@ _DATA_CONTRACT_BASE = """- WHY YOU ARE LABELLING THIS. These labels decide what 
   between what is seen, what is recorded and what is asked is high even when it is subtle to spot, because
   every frame inherits it. medium: a bounded part of the episode is wrong or wasted, and the rest is good
   once that part is trimmed, masked or corrected. low: worth knowing, but a model trained on the episode as
-  it is would barely be affected. For operator mistakes the scale grades the incident by what to do with its stretch: low is a
+  it is would barely be affected. An idle stretch is always a low data issue, since trimming it is all it needs; a
+  frozen or black camera is a recording fault, not idleness. For operator mistakes the scale grades the incident by what to do with its stretch: low is a
   brief incident over within about two seconds that leaves the scene as it was (a grasp that misses and the
   next one holds); medium is an incident that changes the scene (a drop, a knock, a spill) or lasts longer
   than about three seconds, so its stretch should be trimmed or masked; high is an incident that dominates

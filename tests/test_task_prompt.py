@@ -32,6 +32,8 @@ def main(rig, recorded=True):
     assert text.count(REPETITION) == 1
     actor = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}[rig]
     text = text.replace(REPETITION, MISSED_GRASPS.format(actor=actor))
+    assert text.count(IDLE_LOW[0]) == 1
+    text = text.replace(*IDLE_LOW)
     if rig != 'ego_head':
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
@@ -53,6 +55,14 @@ MISSED_GRASPS = '''  Repeated failed attempts at the same aim are wasteful, but 
   frames never show the object held, each try aimed at holding it failed. Those words fit whenever the object does
   end up where it was evidently meant to be.
 '''
+
+
+# An approved edit to the shared severity scale (2026-11-03): idle stretches were filed as medium and high data issues,
+# though idleness is trimmed and is never more than low (label/harness.py idle_issues_low holds the same rule). The
+# test holds its own copy, as for the edits below.
+IDLE_LOW = ('  it is would barely be affected. For operator mistakes',
+            '  it is would barely be affected. An idle stretch is always a low data issue, since trimming it is all it'
+            ' needs; a\n  frozen or black camera is a recording fault, not idleness. For operator mistakes')
 
 
 # An edit to the robot rigs' prompts (2026-10-24): every example action was a grasp-based phase, and the handheld
