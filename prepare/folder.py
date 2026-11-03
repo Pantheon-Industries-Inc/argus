@@ -3,11 +3,14 @@
     python -m prepare folder prepare --root FOLDER --rig RIG --out EPISODES [--dataset NAME] [--max-minutes M]
 
 FOLDER holds one of: a LeRobot dataset (v2.0, v2.1 or v3.0, or a collection of them, one per folder), MCAP files
-(one per episode), or video files (one per episode, or one folder per episode with a scene camera and a left and a
-right mounted camera). Archives (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) are read as the folders they hold. Every
-upload goes through the generic reader, including copies of the published datasets (HABIT, Galaxea, ABC-130k,
-RealOmin, Gen-HumanEgo): an MCAP is read for its cameras, its arm joint channels and its text channels (the task, and
-on a head camera its timed steps). MCAP files with no camera beside an episode's videos are its recorded arm state.
+(one per episode), ROS 2 bags stored as SQLite (one per episode), or video files (one per episode, or one folder per
+episode with a scene camera and a left and a right mounted camera). Archives (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz)
+are read as the folders they hold. Every upload goes through the generic reader, including copies of the published
+datasets (HABIT, Galaxea, ABC-130k, RealOmin, Gen-HumanEgo): an MCAP is read for its cameras, its arm joint channels
+and its text channels (the task, and on a head camera its timed steps). A SQLite bag holds the same messages as an
+MCAP one in another container, so its .db3 files (every split file of one bag, with or without its metadata.yaml) are
+copied message for message into one MCAP and read the same way. MCAP files with no camera beside an episode's videos
+are its recorded arm state.
 
 --rig says what recorded it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by a
 person) or ego_head (a camera worn on a person's head). Your notes reach the model as claims to check against the

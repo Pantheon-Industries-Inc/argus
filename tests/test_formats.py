@@ -4893,10 +4893,83 @@ def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
                 assert len(ctx['recorded_metadata'][str(path)]) == 1
                 info_path = root / 'meta/info.json'
                 assert ctx['recorded_metadata'][str(info_path)] == json.loads(info_path.read_text())
-                # the row's own LeRobot columns reach the prompt as the instruction and length, never again as notes
+                # the row's own LeRobot columns reach the prompt as the instruction and length, never again as notes,
+                # and LeRobot's derived fields (stats, spans) never reach the notes at all
                 noted = ((ctx.get('uploader_notes') or {}).get('recorded episode metadata') or {}).get(str(path))
-                assert not noted or not {'tasks', 'length', 'episode_index'} & set(noted[0].get('fields') or {})
+                fields = set(noted[0].get('fields') or {}) if noted else set()
+                assert not {'tasks', 'length', 'episode_index'} & fields
+                assert not any(f.LEROBOT_DERIVED_FIELD.fullmatch(k) for k in fields)
                 assert not any(i['kind'] == 'metadata_unreadable' for i in ctx.get('reader_issues', []))
+
+
+def _real_episode_row():
+    import json
+    return json.loads((Path(__file__).parent / 'fixtures' / 'lerobot_v3_episode_row.json').read_text())
+
+
+def test_lerobot_derived_episode_fields_stay_recorded_but_leave_the_prompt_notes():
+    # A real v3 meta/episodes row carries LeRobot's per-column statistics and storage offsets, which ran past the
+    # note limit and cut off the uploader's own fields. The uploader's tasks and custom fields reach the prompt; the
+    # derived fields stay whole in recorded_metadata.
+    real = _real_episode_row()['episode_row']
+    stats = {k: v for k, v in real.items() if k.startswith('stats/')}
+    assert len(stats) == 80
+    own = {'success': True, 'tags': ['night shift'], 'operator_note': 'gripper sticks near the bin'}
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        path = _episode_row_upload(root, 'v3', {**stats, 'dataset_from_index': 10, 'dataset_to_index': 20,
+                                                'meta/episodes/chunk_index': 0, 'meta/episodes/file_index': 1,
+                                                **own})
+        rep, episodes = _converted_notes(root, root.parent / 'out')
+        ctx, prompt = episodes[1]
+        notes = prompt[prompt.index("THE UPLOADER'S OWN NOTES"):]
+        for derived in ('stats/', 'chunk_index', 'file_index', 'from_timestamp', 'to_timestamp',
+                        'dataset_from_index', 'dataset_to_index'):
+            assert derived not in notes, derived
+        assert '"success": true' in notes and 'night shift' in notes and 'gripper sticks near the bin' in notes
+        # the row's task text and length reach the prompt as its instruction and length, never again as notes
+        assert '"tasks"' not in notes and '"length"' not in notes
+        assert 'second recorded task' in prompt
+        recorded = ctx['recorded_metadata'][str(path)][0]['fields']
+        assert {k: recorded[k] for k in stats} == stats and recorded['dataset_from_index'] == 10
+        assert not any(i['kind'] == 'metadata_limit' for i in ctx.get('reader_issues', []))
+
+
+def test_lerobot_v21_episode_stats_rows_stay_recorded_but_leave_the_prompt_notes():
+    # v2.1 keeps the same statistics as one nested object per row in meta/episodes_stats.jsonl; a row holding only
+    # its episode_index and stats says nothing the uploader wrote.
+    import json
+    real = _real_episode_row()['episode_row']
+    nested = {}
+    for key, value in real.items():
+        if key.startswith('stats/'):
+            _, column, stat = key.split('/')
+            nested.setdefault(column, {})[stat] = value
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        _episode_row_upload(root, 'v2', {})
+        path = root / 'meta/episodes_stats.jsonl'
+        path.write_text(''.join(json.dumps({'episode_index': i, 'stats': nested}) + '\n' for i in (0, 1)))
+        rep, episodes = _converted_notes(root, root.parent / 'out')
+        ctx, prompt = episodes[1]
+        # nothing the uploader wrote is left in these rows (the task text is the instruction), so no notes may
+        # carry them
+        notes = prompt[prompt.index("THE UPLOADER'S OWN NOTES"):] if "THE UPLOADER'S OWN NOTES" in prompt else ''
+        assert 'episodes_stats.jsonl' not in notes and '"stats"' not in notes and '"q99"' not in notes
+        assert '"tasks"' not in notes and 'second recorded task' in prompt
+        assert ctx['recorded_metadata'][str(path)][0]['fields'] == {'episode_index': 1, 'stats': nested}
+
+
+def test_lerobot_dataset_totals_stay_recorded_but_leave_the_prompt_notes(tmp_path):
+    # meta/info.json totals (episodes, frames, file sizes, splits) are the same in every episode's request.
+    info = {**_real_episode_row()['info'], 'license': 'cc-by-4.0'}
+    ctx = {'episode_index': 0}
+    f.lerobot_metadata(ctx, {'dir': str(tmp_path), 'info': info})
+    info_path = str(tmp_path / 'meta' / 'info.json')
+    assert ctx['recorded_metadata'][info_path] == info
+    shown = ctx['uploader_notes']['recorded episode metadata'][info_path]
+    assert shown == {'license': 'cc-by-4.0'}
+    assert 'total_frames' not in ctx['uploader_annotation'] and 'splits' not in ctx['uploader_annotation']
 
 
 def test_trimmed_lerobot_producers_bound_signal_summaries_to_the_camera_window():

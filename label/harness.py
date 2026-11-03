@@ -66,6 +66,9 @@ from label.route import route_width
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+# OpenRouter credits usage to an app, in its rankings and on each model's Apps tab, only when requests send HTTP-Referer
+# https://openrouter.ai/docs/app-attribution
+OPENROUTER_APP_HEADERS = {"HTTP-Referer": "https://pantheon.inc/research/argus", "X-OpenRouter-Title": "Argus"}
 DEFAULT_MODEL = "openai/gpt-6-astra"
 DETAIL = "high"
 GRID_COLS = 4
@@ -339,7 +342,8 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
     if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
         raise ValueError("HTTP attempts must be a positive integer")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                                          **(OPENROUTER_APP_HEADERS if url == OPENROUTER_URL else {})})
     unknown_left, unpaid_left = attempts, max(attempts, UNPAID_ATTEMPTS)
     silence = silent_connection_limit(timeout)
     clean = True          # no earlier attempt of this call may have been billed

@@ -18,8 +18,9 @@ Accepted uploads, in the order they are recognised:
    Cameras stored as images inside the parquet are written to H.264 at their frame times.
    LeRobot episodes use the generic reader with recorded task tables and publisher claims kept under their sources.
    Complete named arm and scalar gripper columns are joined structurally by the generic reader.
-2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), read
-   by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
+2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), and
+   a ROS 2 bag stored as SQLite (.db3), which holds the same messages in another container and is copied into one
+   MCAP per bag before planning (prepare/ros2_bag.py). Either is read by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
    whose topic it shares), its arm joints on a teleoperated rig (joint_state: any channel whose messages carry a joint
    vector and a gripper reading, its side from the topic, a leader or command channel as the action), every other
    number it records as a signal (mcap_signals), and its text channels (the task topic, and on a head camera a step
@@ -6214,6 +6215,40 @@ def lerobot_episode_bookkeeping(key, features) -> bool:
     return False
 
 
+# LeRobot itself writes these fields into an episode's metadata row; the uploader never chose them. stats are the
+# per-episode statistics of every recorded column (stats/<column>/min, max, mean, std, count, q01 to q99 in a v3
+# meta/episodes row, one nested stats object in a v2.1 episodes_stats.jsonl row), and the recorded signals section
+# already gives each column's range and values. The rest say where the episode's rows and frames sit in the storage
+# files. Dropping them from the prompt notes keeps a long row from pushing the uploader's own fields (tasks, tags,
+# success flags, custom columns) past ANNOTATION_MAX_CHARS. context.json keeps every row whole in recorded_metadata.
+LEROBOT_DERIVED_FIELD = re.compile(r"stats(/.*)?|dataset_(from|to)_index|(data|meta/episodes)/(chunk|file)_index"
+                                   r"|videos/.+/((chunk|file)_index|(from|to)_timestamp)")
+# Dataset totals in meta/info.json are the same in every episode's request and describe none of them.
+LEROBOT_DATASET_TOTALS = frozenset({"total_episodes", "total_frames", "total_tasks", "total_chunks", "total_videos",
+                                    "data_files_size_in_mb", "video_files_size_in_mb", "splits"})
+
+
+def lerobot_note_claims(value, info: bool):
+    """One recorded metadata source as the prompt notes show it: without LeRobot's own derived fields, and without a
+    row left holding nothing but its episode_index."""
+    if info:
+        if not isinstance(value, dict):
+            return value
+        return {k: v for k, v in value.items() if k not in LEROBOT_DATASET_TOTALS} or None
+    if not isinstance(value, list):
+        return value
+    kept = []
+    for claim in value:
+        fields = claim.get("fields") if isinstance(claim, dict) else None
+        if not isinstance(fields, dict):
+            kept.append(claim)
+            continue
+        own = {k: v for k, v in fields.items() if not LEROBOT_DERIVED_FIELD.fullmatch(str(k))}
+        if set(own) - {"episode_index"}:
+            kept.append({**claim, "fields": own})
+    return kept or None
+
+
 def lerobot_metadata(ctx, root):
     """Keep only matching owned rows, plus explicitly unassigned source claims and dataset calibration."""
     from prepare.annotations import original
@@ -6275,6 +6310,8 @@ def lerobot_metadata(ctx, root):
     prompt_recorded = {}
     for path, value in recorded.items():
         selected = unrepresented_json(value, represented.get('json', {}).get(path, []))
+        if selected is not None:
+            selected = lerobot_note_claims(selected, info=path == info_path)
         if selected is not None:
             prompt_recorded[path] = selected
     notes = {**({"previous recorded notes": previous} if previous else {}),
@@ -10486,8 +10523,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
             for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
                 if ch.id not in decs:
                     decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                if decs[ch.id] is None:
+                    # a channel no installed decoder reads (no schema, or an encoding none knows) is named, never
+                    # dropped without a word
+                    schema_errors[(Path(p), ch.topic)] = (f"no decoder reads {ch.message_encoding or 'its'} messages "
+                                                          f"with {f'the schema {schema.name}' if schema else 'no schema'}")
+                    continue
                 try:
-                    decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                    decoded = decs[ch.id](msg.data)
                 except McapSchemaError as error:
                     schema_errors[(Path(p), ch.topic)] = str(error)
                     continue
@@ -13893,6 +13936,11 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     selected_file = root if root.is_file() and not ARCHIVE_RE.search(root.name) else None
     root = archive_read_root(root, out)
     root, opened, apart = open_archives(root, out.parent / "upload_unpacked")
+    # a ROS 2 bag stored as SQLite (.db3) is the same messages as an MCAP one in another container, so it is copied
+    # into an MCAP and read by the MCAP reader (prepare/ros2_bag.py)
+    from prepare import ros2_bag
+    root, bag_notes = ros2_bag.stage(root, out.parent / "upload_unpacked")
+    opened = opened + bag_notes
     from prepare.hdf_metadata import authorized_sources
     with authorized_sources([*files_under(root), *(p for folder in apart for p in files_under(folder))]):
         return _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_context,
