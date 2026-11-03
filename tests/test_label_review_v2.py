@@ -20,6 +20,20 @@ def reject(request, status, body):
                                  io.BytesIO(json.dumps(body).encode()))
 
 
+@pytest.fixture(params=[0, 20_000], ids=['prompt as is', 'prompt 20KB longer'])
+def prompt_growth(request, monkeypatch):
+    """The instructions as they are, and 20KB longer (a few more rules). A request reserves about $1 per 100KB of
+    prompt before it is sent, and a test whose subject is not the spend cap must give the same result at either
+    length. Fixed caps of $1 and $2 a few KB above the reservation made such tests fail whenever a rule was added
+    (issue 189: the handheld face rule of #184 and the two-sides rule of #187 each pushed one over)."""
+    if request.param:
+        from label import prompts
+        real = prompts.fixed_instructions_for_rig
+        monkeypatch.setattr(prompts, 'fixed_instructions_for_rig',
+                            lambda *a, **k: real(*a, **k) + '\n- ' + 'x' * request.param + '\n')
+    return request.param
+
+
 def test_dictionary_quota_failover_uses_transport_unpaid_proof(tmp_path, monkeypatch):
     from test_dictionary import episode
     ep = episode(tmp_path, 'one', [('pad', np.ones((2, 1)), {})])
@@ -94,7 +108,7 @@ def test_completion_case_variation_preserves_the_result_without_a_false_violatio
     ('handheld_gripper', 'object', ['cup']), ('ego_head', 'hands_visible', 'true'),
     ('ego_head', 'hands_wearing', False), ('ego_head', 'progress', 'late'),
 ])
-def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypatch, profile, bad_field, bad_value):
+def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypatch, prompt_growth, profile, bad_field, bad_value):
     from test_camera_timing import recording
     columns = (harness.TIMELINE_COLUMNS[:-1] + ['hands_visible', 'hands_wearing', 'notes']
                if profile == 'ego_head' else harness.TIMELINE_COLUMNS)
@@ -143,7 +157,7 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}, 'success'),
     ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': .5}, 'Success'),
 ])
-def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, row, outcome):
+def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, prompt_growth, row, outcome):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
@@ -176,7 +190,7 @@ def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize('rejected_stage', ['selection', 'final'])
 @pytest.mark.parametrize('error_length', [20, 1000])
-def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, rejected_stage, error_length):
+def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, prompt_growth, rejected_stage, error_length):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
@@ -211,7 +225,7 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
     {'timeline': [{'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}]},
     {'completion': {'task_completed': 'Success'}},
 ])
-def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has_identity, labels):
+def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, prompt_growth, has_identity, labels):
     """A saved paid reply that lacks a timeline or an outcome is not a finished annotation (label/completeness.py),
     and it is never sent again on its own: the run fails and names how to resend it."""
     from test_camera_timing import recording
@@ -233,7 +247,7 @@ def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has
 
 
 @pytest.mark.parametrize('status', [429, 503])
-def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, status):
+def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, prompt_growth, status):
     # The provider answered with an error instead of a completion, so nothing was billed: the reservation is released
     # and a plain resume sends the final request again, with no --force.
     from test_camera_timing import recording
@@ -261,7 +275,7 @@ def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, st
 
 
 @pytest.mark.parametrize('outcome', ['timeout', 504])
-def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_path, monkeypatch, outcome):
+def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_path, monkeypatch, prompt_growth, outcome):
     # Sent, then no answer (a read timeout, a gateway timeout): the request may have been billed, so its reservation
     # stays. Argus sends it again automatically, at most twice (AUTO_RESENDS), each attempt keeping its reservation,
     # and a plain resume past that bound never sends it again.
@@ -493,7 +507,7 @@ def test_non_openai_provider_quote_still_obeys_dispatch_cap(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('contribution', [None, 'Advancing'])
-def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path, monkeypatch, contribution):
+def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path, monkeypatch, prompt_growth, contribution):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     row = [0, .3, 'left', 'reach', 'cup', None, None, contribution, .2]
@@ -641,7 +655,7 @@ def test_native_search_fee_without_enforceable_ceiling_refuses_paid_dispatch(tmp
     'Inspection selection exceeds the remaining batch spend cap.',
     'Inspection selection stopped at the cost or dispatch boundary.',
 ])
-def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path, monkeypatch, capsys, limitation):
+def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path, monkeypatch, prompt_growth, capsys, limitation):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     out = tmp_path / 'out'
