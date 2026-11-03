@@ -1093,20 +1093,23 @@ UNHELD_CONTACT_NOTE = (" A contact that moves an object without holding it is\n"
                        "  not meant to be is an error, however brief.")
 
 
-# The two-handed rigs (two handheld grippers, a person's two hands): over 1,043 real steps of 12 UMI windows only 9
-# left and right steps overlapped in time, so when the two did different things at once (the left grasps one object
-# while the right grasps another) usually only one of them was written. Each side gets its own step only then; a side
-# at rest or holding still gets none and shared work on one object stays "both", so the timeline grows only where the
-# two really act apart. It goes before the note's last two points.
+# Two arms, grippers or hands acting apart: over 1,043 real steps of 12 UMI windows only 9 left and right steps
+# overlapped in time, so when the two did different things at once (the left grasps one object while the right grasps
+# another) usually only one of them was written. Each then gets its own step; one at rest or holding still while the
+# other works gets none, an idle moment of both is written as before, and shared work on one object stays "both", so
+# the timeline grows only where the two really act apart. Worded conditionally, since a one-armed rig gets the same
+# text (no field gives the number of arms). It goes before the note's last two points, on every rig but a robot with
+# no arms (fixed_instructions takes it out).
 TWO_ACTORS_BEFORE = "- Keep values terse: short action/object strings"
 
 
 def two_actors_note(actor: str) -> str:
-    return f"""- The two {actor}s get separate steps only when they do DIFFERENT task-relevant actions at the same
-  moment, for example the left {actor} grasps one object while the right {actor} places another: then write one
-  step for each {actor}, with overlapping times. A {actor} at rest, parked or merely holding still gets no step of
-  its own, and work by both {actor}s on one object stays one "both" step. This adds no other steps: the
-  granularity above is unchanged.
+    return f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions, for example the left
+  {actor} grasps one object while the right {actor} places another, write one step for each {actor}, with
+  overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no step of its
+  own; when none works, the idle step is written as before. Two {actor}s working on one object stay one "both"
+  step, for example the left {actor} holds a jar while the right {actor} unscrews its lid. This adds no other
+  steps: the granularity above is unchanged.
 """
 
 
@@ -1126,7 +1129,7 @@ def lean(r: str, has_instruction: bool = True) -> str:
                              "(tasks, goal_alignment, key_events, data_issues, operator_mistakes,\n  recovery, "
                              "state_changes, scene)")
     else:
-        s = robot
+        s = _replace_once(robot, TWO_ACTORS_BEFORE, two_actors_note("arm") + TWO_ACTORS_BEFORE)
     return _replace_once(s, "(completion, goal_alignment,", "(completion, tasks, goal_alignment," if has_instruction
                          else "(tasks, goal_alignment,")
 
@@ -1234,6 +1237,8 @@ def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool =
         if whole_body == "legged_no_arms":
             for old, new in NO_ARMS_WORDING:
                 s = _replace_once(s, old, new)
+            # its only steps are the body's, so the rule for two arms acting apart is taken out
+            s = _replace_once(s, two_actors_note("arm"), "")
     return s
 
 
