@@ -214,7 +214,9 @@ def main() -> int:
     p.add_argument("--kind", default="full", choices=["dry", "smoke", "full"], help="as for python -m label")
     p.add_argument("--cap", type=float, default=0.0, help="spend cap per model run, USD (required unless dry)")
     p.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
-    inflight.add_argument(p, "episodes per model")
+    # 8, not all at once: the published comparison runs were made with --concurrency 8, and each model's command
+    # must stay the one its results came from (tests/test_compare.py PUBLISHED)
+    inflight.add_argument(p, "episodes per model", default=8)
     p.add_argument("--routes", type=Path, default=None,
                    help="configs/compare/routes_<selection>.json: the reference run's routing answer for each task "
                         "text, so every model is sent the frames the reference was (label/route.py)")

@@ -59,7 +59,8 @@ def in_flight(requested: int | None, items: int) -> int:
     return want
 
 
-def add_argument(ap, what: str = 'requests') -> None:
-    """--concurrency for an entry point: off by default, so every request goes out at once."""
-    ap.add_argument('--concurrency', type=int, default=0, metavar='N',
-                    help=f'most {what} in flight at once (default 0: all of them)')
+def add_argument(ap, what: str = 'requests', default: int = 0) -> None:
+    """--concurrency for an entry point: off by default, so every request goes out at once. An entry point whose
+    published commands recorded a number passes it as default, so those commands stay what they were."""
+    ap.add_argument('--concurrency', type=int, default=default, metavar='N',
+                    help=f'most {what} in flight at once (default {default}' + (': all of them)' if not default else ')'))
