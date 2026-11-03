@@ -683,6 +683,9 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
 }
 .video-overlay .vo-arm.left  { color: #9cc2ff; }
 .video-overlay .vo-arm.right { color: #c9a3d6; }
+/* two sides acting at once: one line per side, left above right */
+.video-overlay .vo-row { display: block; }
+.video-overlay .vo-row + .vo-row { margin-top: 4px; }
 .video-overlay .vo-phrase { color: #fff; font-weight: 500; }
 .video-overlay .vo-phrase .dest-chip {
   display: inline-block; margin-left: 2px;
@@ -4226,6 +4229,38 @@ function buildPhrase(e) {
     }
   }
   return `<span class="verb">${esc(v)}</span>${chipHtml ? ' ' + chipHtml : ''}`;
+}
+
+// The steps the caption over the video shows at time t, from windows {t0, t1, ev} in order of start: the step that
+// started last among those still running (the one that started last when none runs), and while a left and a right
+// step both run, the two sides doing different things at once, one row for each side, left first. A step of both
+// sides running at t is shown alone.
+function captionSteps(windows, t) {
+  let last = null, running = null;
+  const side = {};
+  for (const s of windows) {
+    if (s.t0 > t + 0.05) break;
+    last = s;
+    if (s.t1 > t) {
+      running = s;
+      if (s.ev.arm === 'left' || s.ev.arm === 'right') side[s.ev.arm] = s;
+    }
+  }
+  const cur = running || last;
+  if (!cur) return [];
+  if (side.left && side.right && (cur === side.left || cur === side.right)) return [side.left, side.right];
+  return [cur];
+}
+function captionRowHtml(ev) {
+  return `<span class="vo-time">${fmtT(ev.t_s)}</span>
+      <span class="vo-arm ${esc(ev.arm || '')}">${esc(armLabel(ev.arm))}</span>
+      <span class="vo-phrase">${buildPhrase(ev)}</span>
+      <span class="vo-contrib ${contribClass(ev.contribution)}">${esc(contribText(ev.contribution) || '-')}</span>`;
+}
+// one step reads as one line, as it always has; two sides at once read as one line each
+function captionHtml(rows) {
+  if (rows.length === 1) return captionRowHtml(rows[0].ev);
+  return rows.map(s => `<div class="vo-row">${captionRowHtml(s.ev)}</div>`).join('');
 }
 
 // ================= hand pose over head-camera footage (board/hands.py) =================
@@ -7811,19 +7846,19 @@ function renderEp(d, opts) {
   let _ovSig = null;
   function renderOverlay(t) {
     if (!overlay) return;
-    let w = null;
-    for (const s of segWindows) { if (s.t0 <= t + 0.05) w = s; else break; }
-    if (!w) { if (_ovSig !== '') { _ovSig = ''; overlay.classList.remove('active', 'adv', 'waste', 'idle', 'none');
+    // one row, or one per side while a left and a right step both run (captionSteps)
+    const rows = captionSteps(segWindows, t);
+    if (!rows.length) { if (_ovSig !== '') { _ovSig = ''; overlay.classList.remove('active', 'adv', 'waste', 'idle', 'none');
       } return; }
-    const ev = w.ev;
+    // the box's edge takes the contribution of the step that started last
+    const ev = rows.reduce((a, s) => (s.t0 >= a.t0 ? s : a)).ev;
     const cc = contribClass(ev.contribution);
-    const cl = contribText(ev.contribution) || '-';
     const atGoal = activeGoal(t);
     const atEpisodeGoal = atGoal === 'episode', atTaskGoal = atGoal === 'task';
     const k = activeKey(t);
     const kOc = k ? (k.outcome || '').toLowerCase() : '';
-    const sig = [ev.event_idx != null ? ev.event_idx : ev.t_s, cc, atEpisodeGoal, atTaskGoal, k ? k.label : '',
-      kOc].join('|');
+    const sig = [rows.map(s => (s.ev.event_idx != null ? s.ev.event_idx : s.ev.t_s)).join(','), cc, atEpisodeGoal,
+      atTaskGoal, k ? k.label : '', kOc].join('|');
     if (sig === _ovSig) return;
     _ovSig = sig;
     const goalHtml = (atEpisodeGoal || atTaskGoal)
@@ -7835,10 +7870,7 @@ function renderEp(d, opts) {
     overlay.innerHTML = `
       ${goalHtml}
       ${keyHtml}
-      <span class="vo-time">${fmtT(ev.t_s)}</span>
-      <span class="vo-arm ${esc(ev.arm || '')}">${esc(armLabel(ev.arm))}</span>
-      <span class="vo-phrase">${buildPhrase(ev)}</span>
-      <span class="vo-contrib ${cc}">${esc(cl)}</span>`;
+      ${captionHtml(rows)}`;
     overlay.classList.remove('adv', 'waste', 'idle', 'none');
     overlay.classList.add('active', cc);
   }

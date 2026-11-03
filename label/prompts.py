@@ -1093,6 +1093,23 @@ UNHELD_CONTACT_NOTE = (" A contact that moves an object without holding it is\n"
                        "  not meant to be is an error, however brief.")
 
 
+# The two-handed rigs (two handheld grippers, a person's two hands): over 1,043 real steps of 12 UMI windows only 9
+# left and right steps overlapped in time, so when the two did different things at once (the left grasps one object
+# while the right grasps another) usually only one of them was written. Each side gets its own step only then; a side
+# at rest or holding still gets none and shared work on one object stays "both", so the timeline grows only where the
+# two really act apart. It goes before the note's last two points.
+TWO_ACTORS_BEFORE = "- Keep values terse: short action/object strings"
+
+
+def two_actors_note(actor: str) -> str:
+    return f"""- The two {actor}s get separate steps only when they do DIFFERENT task-relevant actions at the same
+  moment, for example the left {actor} grasps one object while the right {actor} places another: then write one
+  step for each {actor}, with overlapping times. A {actor} at rest, parked or merely holding still gets no step of
+  its own, and work by both {actor}s on one object stays one "both" step. This adds no other steps: the
+  granularity above is unchanged.
+"""
+
+
 def lean(r: str, has_instruction: bool = True) -> str:
     """The note that keeps the timeline at the level of action phases, with the acting part named as the rig
     names it, and the sections it leaves unchanged named as the request asks for them."""
@@ -1100,8 +1117,10 @@ def lean(r: str, has_instruction: bool = True) -> str:
                           "frames that are the same ongoing action." + UNHELD_CONTACT_NOTE)
     if r == "handheld_gripper":
         s = _replace_once(robot, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
+        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("gripper") + TWO_ACTORS_BEFORE)
     elif r == "ego_head":
         s = _replace_once(LEAN_NOTE, "by ONE arm", "by ONE hand").replace("acting arm", "acting hand")
+        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("hand") + TWO_ACTORS_BEFORE)
         return _replace_once(s, "(completion, goal_alignment, key_events, data_issues, recovery,\n  state_changes, "
                                 "scene)",
                              "(tasks, goal_alignment, key_events, data_issues, operator_mistakes,\n  recovery, "
