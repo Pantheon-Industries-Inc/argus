@@ -68,6 +68,12 @@ NEGATION = re.compile(r"\b(?:not|no|without|never|nor)\b|n't\b", re.I)
 # a denial whose object is the operator is about the operator, not the other person ("without the operator noticing",
 # "someone else, not the operator, handles the towel")
 ABOUT_OPERATOR = re.compile(r"\s+(?:the\s+|a\s+|an\s+)?(?:operator|wearer|demonstrator|camera\s+wearer)s?\b", re.I)
+# after the person's verb, a denial is of the person's action only when an action or contact follows it ("without
+# visibly touching", "does not touch", "no contact"), never "without the operator noticing" or "no task progress"
+DENIED_ACT = re.compile(r"\s*(?:\w+ly\s+|ever\s+|even\s+)?(?:" + _PERSON_ACTS[2:] + r"|contact\w*|interact\w*)", re.I)
+# a denial whose subject is the operator ("the operator does not move", "the operator doesn't react")
+OPERATOR_SUBJECT = re.compile(r"\b(?:operator|wearer|demonstrator)s?\s+(?:does|did|do|is|was|are|were|has|have|had|"
+                              r"can|could|will|would|remains|stays)\s*$", re.I)
 # clauses end at a sentence stop or semicolon followed by a space, never at a decimal point ("335.33 s")
 CLAUSE = re.compile(r'[.;!?](?=\s|$)')
 
@@ -76,16 +82,29 @@ def _counts(kind: str, clause: str, m: re.Match) -> bool:
     """Whether one match of a kind counts. A phone or a gripper set down in the same comma-separated part as the
     recording's fob is the fob being pressed; another person counts unless their part, from the person on, denies
     what they do ("the other person moves beside the workspace without touching", not "the grippers do not move
-    while another person adjusts the bowl"). A denial of the operator (ABOUT_OPERATOR) is not a denial of the
-    person's action."""
+    while another person adjusts the bowl"). Only a denial of the person's action counts (_denies_person)."""
     start = clause.rfind(',', 0, m.start()) + 1
     end = clause.find(',', m.end())
     end = len(clause) if end < 0 else end
     if kind in ('phone', 'parked_gripper'):
         return not FOB.search(clause[start:end])
     if kind == 'other_person':
-        return all(ABOUT_OPERATOR.match(clause, n.end()) for n in NEGATION.finditer(clause, m.start(), end))
+        return not any(_denies_person(clause, m, n) for n in NEGATION.finditer(clause, m.start(), end))
     return True
+
+
+def _denies_person(clause: str, m: re.Match, n: re.Match) -> bool:
+    """Whether a negation n in another person's part denies what that person does (issue 185). Between the person and
+    the verb the match found, it does, unless it is an aside naming the operator ("someone else, not the operator,
+    handles the towel"): there the verb may be the operator's ("a bystander watches without the operator moving the
+    cup"). After that verb it does only when an action or contact follows it (DENIED_ACT) and the operator is not its
+    subject (OPERATOR_SUBJECT), so "without the operator noticing", "no task progress" and "the operator does not
+    move" leave the person's action standing."""
+    if n.start() < m.end():
+        op = ABOUT_OPERATOR.match(clause, n.end())
+        aside = op and re.search(r',\s*$', clause[:n.start()]) and re.match(r'\s*,', clause[op.end():])
+        return not aside
+    return bool(DENIED_ACT.match(clause, n.end())) and not OPERATOR_SUBJECT.search(clause[:n.start()])
 
 
 def other_activity(row: dict) -> list[str]:
