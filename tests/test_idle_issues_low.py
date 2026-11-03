@@ -201,6 +201,11 @@ def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_categ
     ("A pause in the cup work.", "Someone else watches while the operator is not moving the cup."),
     # the person still the subject of a denial after a conjunction
     ("A pause in the cup work.", "Another person moves beside the table but never touches the cup."),
+    # a conjunction with no new subject after it, and a "without" phrase, stay the person's
+    ("A pause in the cup work.", "Another person moves near the cup while not touching it."),
+    ("A pause in the cup work.", "Another person moves around the workspace while never touching the objects."),
+    ("A pause in the cup work.", "Another person moves as close as the table edge without touching the cup."),
+    ("A pause in the cup work.", "Another person moves around the table and the shelf without touching anything."),
 ])
 def test_a_plain_idle_item_is_still_low(issue, evidence):
     (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
