@@ -57,7 +57,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Input support | Details |
 |---|---|
 | Recording types | Teleop, UMI and human ego |
-| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, HDF5, video files and folders |
+| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, ROS 2 bags stored as SQLite (.db3, read by the MCAP reader), HDF5, video files and folders |
 | Archives | ZIP and TAR, plain or compressed with gzip, bzip2 or xz |
 | Sidecar metadata | JSON, JSON Lines, CSV, TSV, text and Markdown notes, and LeRobot's Parquet and JSON Lines annotation tables |
 | Public dataset adapters | Nine, each downloading and preparing a public dataset |
