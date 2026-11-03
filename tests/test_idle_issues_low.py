@@ -153,6 +153,10 @@ OTHER_ACTIVITY += [
     ("idle_stretch", "Someone else takes the cup and the operator doesn't react.", "exo 50-60 s"),
     ("pause", "Someone else hands the cup to the operator with no gripper motion.", "top camera 10-18s"),
     ("idle_stretch", "Another person moves the bowl while no task progress is made.", "exo 70-80 s"),
+    ("idle_stretch", "Another person moves the bowl while the grippers do not move.", "exo 70-80 s"),
+    ("idle_stretch", "Another person picks up the towel while the operator's hands do not move.", "exo 70-80 s"),
+    ("idle_stretch", "Someone else adjusts the cup while the operator stands still and does not move.", "exo 70-80 s"),
+    ("pause", "Another person hands the operator the cup with no arm movement from the operator.", "exo 70-80 s"),
     ("idle_stretch", "The operator presses the fob, then looks at the phone.", "exo 90-99 s"),
 ]
 
@@ -195,6 +199,8 @@ def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_categ
     ("A pause in the cup work.", "Another person stands in the background with no operator movement."),
     ("A pause in the cup work.", "A bystander watches without the operator moving the cup."),
     ("A pause in the cup work.", "Someone else watches while the operator is not moving the cup."),
+    # the person still the subject of a denial after a conjunction
+    ("A pause in the cup work.", "Another person moves beside the table but never touches the cup."),
 ])
 def test_a_plain_idle_item_is_still_low(issue, evidence):
     (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
