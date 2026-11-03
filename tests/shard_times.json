@@ -212,6 +212,7 @@
  "tests/test_killed_call_holds.py": 2.0,
  "tests/test_lerobot_describe.py": 2.0,
  "tests/test_whole_body_prompt.py": 2.0,
+ "tests/test_resolution_route_toggle.py": 2.0,
  "tests/test_inflight.py": 2.0,
  "tests/test_cache_warmup.py": 2.0,
  "tests/test_depth_inspection_scope.py": 2.0,
