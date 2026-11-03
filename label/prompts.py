@@ -1104,12 +1104,13 @@ TWO_ACTORS_BEFORE = "- Keep values terse: short action/object strings"
 
 
 def two_actors_note(actor: str) -> str:
-    return f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions, for example the left
-  {actor} grasps one object while the right {actor} places another, write one step for each {actor}, with
-  overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no step of its
-  own; when none works, the idle step is written as before. Two {actor}s working on one object stay one "both"
-  step, for example the left {actor} holds a jar while the right {actor} unscrews its lid. This adds no other
-  steps: the granularity above is unchanged.
+    return f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions on DIFFERENT objects,
+  for example the left {actor} grasps one object while the right {actor} places another, write one step for each
+  {actor}, with overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no
+  step of its own; when none works, the idle step is written as before. Two {actor}s working on one object stay
+  one "both" step, even when each does something different to it: one holds, steadies or braces it while the other
+  works it, or one hands it to the other. For example the left {actor} holds a jar while the right {actor} unscrews
+  its lid. This adds no other steps: the granularity above is unchanged.
 """
 
 
