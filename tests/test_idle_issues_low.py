@@ -145,6 +145,18 @@ OTHER_ACTIVITY += [
     ("idle_stretch", "The grippers do not move while another person adjusts the bowl.", "exo 30-40 s"),
     ("inactivity", "No gripper motion while someone else handles the towel.", "exo view 5-11s"),
     ("pause", "Another person reaches in and moves the cup, which the operator did not expect.", "top camera 30-36s"),
+    # a denial about the operator is not a denial of what the other person did (issue 185)
+    ("pause", "Another person reaches in and moves the cup without the operator noticing.", "top camera 30-36s"),
+    ("idle_stretch", "Someone else, not the operator, handles the towel.", "exo 12-20 s"),
+    # a denial after the person's action that is about the operator or about something else leaves the action standing
+    ("idle_stretch", "Another person adjusts the bowl while the operator does not move.", "exo 50-60 s"),
+    ("idle_stretch", "Someone else takes the cup and the operator doesn't react.", "exo 50-60 s"),
+    ("pause", "Someone else hands the cup to the operator with no gripper motion.", "top camera 10-18s"),
+    ("idle_stretch", "Another person moves the bowl while no task progress is made.", "exo 70-80 s"),
+    ("idle_stretch", "Another person moves the bowl while the grippers do not move.", "exo 70-80 s"),
+    ("idle_stretch", "Another person picks up the towel while the operator's hands do not move.", "exo 70-80 s"),
+    ("idle_stretch", "Someone else adjusts the cup while the operator stands still and does not move.", "exo 70-80 s"),
+    ("pause", "Another person hands the operator the cup with no arm movement from the operator.", "exo 70-80 s"),
     ("idle_stretch", "The operator presses the fob, then looks at the phone.", "exo 90-99 s"),
 ]
 
@@ -181,6 +193,19 @@ def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_categ
      "finger movements."),
     ("Both grippers wait above the work.", "exo shows both grippers parked above the table at 98.10-108.11 s."),
     ("A pause before the cup is lifted.", "right shows the operator places the gripper jaw around the cup and waits."),
+    # the other person's own action denied, with the operator named in the same part, is still plain idle (issue 185)
+    ("A pause in the cup work.", "exo 40-48 s: another person beside the operator does not touch the cup."),
+    # a verb that is the operator's, denied, is no action of the other person's
+    ("A pause in the cup work.", "Another person stands in the background with no operator movement."),
+    ("A pause in the cup work.", "A bystander watches without the operator moving the cup."),
+    ("A pause in the cup work.", "Someone else watches while the operator is not moving the cup."),
+    # the person still the subject of a denial after a conjunction
+    ("A pause in the cup work.", "Another person moves beside the table but never touches the cup."),
+    # a conjunction with no new subject after it, and a "without" phrase, stay the person's
+    ("A pause in the cup work.", "Another person moves near the cup while not touching it."),
+    ("A pause in the cup work.", "Another person moves around the workspace while never touching the objects."),
+    ("A pause in the cup work.", "Another person moves as close as the table edge without touching the cup."),
+    ("A pause in the cup work.", "Another person moves around the table and the shelf without touching anything."),
 ])
 def test_a_plain_idle_item_is_still_low(issue, evidence):
     (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
