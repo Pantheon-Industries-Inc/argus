@@ -65,6 +65,9 @@ OTHER_ACTIVITY = {
 FOB = re.compile(r'\bfob\b', re.I)
 # a clause that says the other person does not act ("without visibly touching", "does not move") names no other activity
 NEGATION = re.compile(r"\b(?:not|no|without|never|nor)\b|n't\b", re.I)
+# a denial whose object is the operator is about the operator, not the other person ("without the operator noticing",
+# "someone else, not the operator, handles the towel")
+ABOUT_OPERATOR = re.compile(r"\s+(?:the\s+|a\s+|an\s+)?(?:operator|wearer|demonstrator|camera\s+wearer)s?\b", re.I)
 # clauses end at a sentence stop or semicolon followed by a space, never at a decimal point ("335.33 s")
 CLAUSE = re.compile(r'[.;!?](?=\s|$)')
 
@@ -73,14 +76,15 @@ def _counts(kind: str, clause: str, m: re.Match) -> bool:
     """Whether one match of a kind counts. A phone or a gripper set down in the same comma-separated part as the
     recording's fob is the fob being pressed; another person counts unless their part, from the person on, denies
     what they do ("the other person moves beside the workspace without touching", not "the grippers do not move
-    while another person adjusts the bowl")."""
+    while another person adjusts the bowl"). A denial of the operator (ABOUT_OPERATOR) is not a denial of the
+    person's action."""
     start = clause.rfind(',', 0, m.start()) + 1
     end = clause.find(',', m.end())
     end = len(clause) if end < 0 else end
     if kind in ('phone', 'parked_gripper'):
         return not FOB.search(clause[start:end])
     if kind == 'other_person':
-        return not NEGATION.search(clause[m.start():end])
+        return all(ABOUT_OPERATOR.match(clause, n.end()) for n in NEGATION.finditer(clause, m.start(), end))
     return True
 
 
