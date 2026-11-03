@@ -18,7 +18,8 @@
 # is not uploaded yet. Nothing is deleted, so rolling back is re-uploading an older build's index.public.html as
 # index.html (ROLLBACK=<build_id>).
 #
-# Optional: DRY_RUN=1 (rclone --dry-run), ALLOW_MISSING=1 (upload although some media files are not made yet),
+# Optional: DRY_RUN=1 (rclone --dry-run), ALLOW_MISSING=1 (upload although some media files are not made yet,
+# or have no source clip),
 # MEDIA_ONLY=1 (upload only media/, which can go up before the build that uses it), RCLONE (the rclone binary).
 set -euo pipefail
 OUT=${1:?usage: DEST=... PUBLIC_BASE=... bash board/publish.sh OUT [build_id]}
@@ -69,6 +70,10 @@ print(f"build {b['build_id']}: {b['episodes']} episodes, videos {m['videos_prese
       f"({m['videos_no_source']} have no source clip), frames {m['frames_present']}/{m['frames']}")
 if missing and sys.argv[3] != "1":
     sys.exit(f"{missing} media files are not made yet (run python -m board static media), or set ALLOW_MISSING=1")
+# a video with no source clip can never be made: its episode's id does not name a clip, and the page would play nothing
+if m["videos_no_source"] and sys.argv[3] != "1":
+    sys.exit(f"{m['videos_no_source']} videos the page requests have no source clip (an episode's _meta.episode_id "
+             f"must name its clips), or set ALLOW_MISSING=1")
 PY
 
 media
