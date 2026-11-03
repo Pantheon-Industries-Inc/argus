@@ -70,10 +70,13 @@ NEGATION = re.compile(r"\b(?:not|no|without|never|nor)\b|n't\b", re.I)
 ABOUT_OPERATOR = re.compile(r"\s+(?:the\s+|a\s+|an\s+)?(?:operator|wearer|demonstrator|camera\s+wearer)s?\b", re.I)
 # after the person's verb, a denial is of the person's action only when an action or contact follows it ("without
 # visibly touching", "does not touch", "no contact"), never "without the operator noticing" or "no task progress"
-DENIED_ACT = re.compile(r"\s*(?:\w+ly\s+|ever\s+|even\s+)?(?:" + _PERSON_ACTS[2:] + r"|contact\w*|interact\w*)", re.I)
-# a denial whose subject is the operator ("the operator does not move", "the operator doesn't react")
-OPERATOR_SUBJECT = re.compile(r"\b(?:operator|wearer|demonstrator)s?\s+(?:does|did|do|is|was|are|were|has|have|had|"
-                              r"can|could|will|would|remains|stays)\s*$", re.I)
+# (verbs only: "no arm movement" or "no hand motion" is a body part, not an act denied)
+DENIED_ACT = re.compile(r"\s*(?:\w+ly\s+|ever\s+|even\s+)?(?:reach|enter|step|touch|mov|pick|grab|plac|take|took|lift|"
+                        r"adjust|help|assist|interven|pass|giv|gave|hold|held|handl|carr|push|pull|remov|add|bring|"
+                        r"brought|insert|tak|contact|interact)\w*\b", re.I)
+# a word that starts a clause with a subject of its own ("while the grippers do not move", "and the operator doesn't
+# react"): a denial after it is that subject's, not the person's
+NEW_SUBJECT = re.compile(r"\b(?:while|whilst|as|when|whereas)\b|\b(?:and|but)\s+(?:the|his|her|their|its|a|an)\b", re.I)
 # clauses end at a sentence stop or semicolon followed by a space, never at a decimal point ("335.33 s")
 CLAUSE = re.compile(r'[.;!?](?=\s|$)')
 
@@ -97,14 +100,15 @@ def _denies_person(clause: str, m: re.Match, n: re.Match) -> bool:
     """Whether a negation n in another person's part denies what that person does (issue 185). Between the person and
     the verb the match found, it does, unless it is an aside naming the operator ("someone else, not the operator,
     handles the towel"): there the verb may be the operator's ("a bystander watches without the operator moving the
-    cup"). After that verb it does only when an action or contact follows it (DENIED_ACT) and the operator is not its
-    subject (OPERATOR_SUBJECT), so "without the operator noticing", "no task progress" and "the operator does not
-    move" leave the person's action standing."""
+    cup"). After that verb it does only when an action or contact follows it (DENIED_ACT) and no clause with a subject
+    of its own starts between (NEW_SUBJECT), so "without the operator noticing", "no task progress", "while the
+    grippers do not move" and "and the operator doesn't react" leave the person's action standing, while "moves beside
+    the table but never touches the cup" denies it."""
     if n.start() < m.end():
         op = ABOUT_OPERATOR.match(clause, n.end())
         aside = op and re.search(r',\s*$', clause[:n.start()]) and re.match(r'\s*,', clause[op.end():])
         return not aside
-    return bool(DENIED_ACT.match(clause, n.end())) and not OPERATOR_SUBJECT.search(clause[:n.start()])
+    return bool(DENIED_ACT.match(clause, n.end())) and not NEW_SUBJECT.search(clause, m.end(), n.start())
 
 
 def other_activity(row: dict) -> list[str]:
