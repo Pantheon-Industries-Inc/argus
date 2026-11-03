@@ -69,15 +69,17 @@ def test_a_side_change_without_overlap_keeps_one_caption_row():
     # A real UMI label (left lifts a valve until 13.01s, right approaches it from 13.01s) showed both rows at 13.0s,
     # a flash of two rows at every change of side, though the two steps never overlap.
     got = captions([step(12.5, 13.01, 'left', 'lift valve'), step(13.01, 14.01, 'right', 'approach held valve'),
-                    step(14.01, 15.0, 'left', 'turn valve')], [12.9, 12.97, 13.0, 13.96, 13.99, 14.5])
+                    step(14.01, 15.0, 'left', 'turn valve')], [12.9, 12.97, 13.0, 13.97, 13.99, 14.5])
     for t in (12.97, 13.0):
         assert got[t].count('vo-row') == 0 and 'approach held valve' in got[t] and 'lift valve' not in got[t], got[t]
-    for t in (13.96, 13.99):
+    for t in (13.97, 13.99):
         assert got[t].count('vo-row') == 0 and 'turn valve' in got[t] and 'approach held valve' not in got[t], got[t]
     assert 'lift valve' in got[12.9] and 'turn valve' in got[14.5]
     # a real overlap still gets its two rows up to the moment one side ends
-    got = captions([step(2.0, 6.0, 'left', 'grasp the red cup'), step(3.0, 5.0, 'right', 'place the lid')], [4.9])
+    got = captions([step(2.0, 6.0, 'left', 'grasp the red cup'), step(3.0, 5.0, 'right', 'place the lid')], [4.9, 4.97])
     assert got[4.9].count('class="vo-row"') == 2
+    # and from 0.05s before one side ends, the side still running alone
+    assert got[4.97].count('vo-row') == 0 and 'grasp the red cup' in got[4.97]
 
 
 def test_the_page_draws_the_caption_from_these_functions():
