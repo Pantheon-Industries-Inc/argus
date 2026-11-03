@@ -1,4 +1,4 @@
-"""Which recordings the default inspection reaches (label/evidence_access.py needs_inspection): depth and touch, never a
+"""Which recordings the default inspection reaches (label/evidence_access.py needs_inspection): touch, never a
 wrist force/torque sensor alone, whatever the field dictionary did; and an array's regional analysis always keeps the
 inspection record it is owned by."""
 import numpy as np
