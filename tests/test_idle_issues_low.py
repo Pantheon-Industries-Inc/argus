@@ -88,3 +88,42 @@ def test_a_stitch_of_parts_labelled_before_the_rule_files_their_idle_issues_low(
     assert sorted(row["severity_as_labelled"] for row in idle) == sorted(
         ["high"] + ["medium"] * (len(idle) - 1))
     assert all(row["severity"] == "high" and "severity_as_labelled" not in row for row in faults)
+
+
+# Idle that is really other activity keeps the model's severity and category: each of these is at least medium under
+# PHONES, BARE HANDS, PARKED GRIPPERS AND FACES (label/prompts.py), and a medium item inside a take drops it.
+OTHER_ACTIVITY = [
+    ("idle_stretch", "The operator stops working and looks at their phone for about 9s.",
+     "top camera 41-50s: lit phone screen in the operator's left hand"),
+    ("idle_stretch", "Work pauses while the operator holds a smartphone.", "left gripper camera 12-20s"),
+    ("pause", "Another person reaches in and moves the cup while the operator waits.",
+     "top camera 30-36s: a second person's arm enters from the right"),
+    ("inactivity", "No gripper motion; someone else handles the towel.", "exo view 5-11s"),
+    ("idle_stretch", "The grippers do nothing while the operator moves the block with a bare hand.",
+     "top camera 18-25s: bare hand slides the block"),
+    ("stall", "Little progress: the operator's fingers fiddle with the lid while the gripper is on.",
+     "right gripper camera 7-12s"),
+    ("idle_stretch", "The left gripper is set down on the table while the right gripper keeps working.",
+     "top camera 60-75s"),
+    ("idle_stretch", "Idle left wrist: the operator takes off the left gripper and keeps working with the right.",
+     "left gripper camera 80-95s shows the table, static"),
+    ("idle_period", "The right gripper is parked on the table for a while.", "top camera 100-112s"),
+]
+
+
+@pytest.mark.parametrize("category,issue,evidence", OTHER_ACTIVITY)
+def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_category(category, issue, evidence):
+    item = {**_issue(category, "medium"), "issue": issue, "evidence": evidence}
+    assert _parse(item)["data_issues"] == [item]
+    assert _parse({**item, "severity": "high"})["data_issues"] == [{**item, "severity": "high"}]
+
+
+@pytest.mark.parametrize("issue,evidence", [
+    ("The operator stands still with both grippers raised for 14s before the next grasp.", "top camera 20-34s"),
+    ("A long pause before the operator starts the task.", "all cameras 0-12s, the scene is static"),
+    ("The operator presses the phone-like fob on the table to stop the recording, then nothing happens.",
+     "top camera 88-96s, a gripper set down to press the fob"),
+])
+def test_a_plain_idle_item_is_still_low(issue, evidence):
+    (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
+    assert row["severity"] == "low" and row["severity_as_labelled"] == "medium"
