@@ -388,6 +388,35 @@ def test_publish_failure_never_promotes_root_page(tmp_path, failed_stage):
     assert '--checksum' in data_copy and '--ignore-existing' not in data_copy
 
 
+def test_publish_refuses_a_build_whose_page_requests_a_video_with_no_source_clip(tmp_path):
+    """Data repo issue 201: a board whose episode ids (_meta.episode_id) did not name their clips played no video and
+    showed no error. The static build counts each such video as videos_no_source, which missing_media does not list,
+    so publish.sh uploaded the page anyway. It refuses before uploading anything, as for unmade media."""
+    import subprocess
+    root = tmp_path / 'site'
+    build_dir = root / 'b1'
+    build_dir.mkdir(parents=True)
+    (root / 'LATEST').write_text('b1')
+    (root / 'media').mkdir()
+    (build_dir / 'index.html').write_text('relative page')
+    (build_dir / 'index.public.html').write_text('public page')
+    (build_dir / 'BUILD.json').write_text(json.dumps({
+        'build_id': 'b1', 'episodes': 2, 'public_base': 'https://example.com/', 'missing_media': [],
+        'media': {'videos_present': 1, 'videos': 2, 'videos_no_source': 1, 'frames_present': 0, 'frames': 0}}))
+    fake = tmp_path / 'rclone'
+    log = tmp_path / 'calls.jsonl'
+    fake.write_text('#!' + os.sys.executable + '\n' +
+        'import json, os, sys\n'
+        'with open(os.environ["CALL_LOG"], "a") as log: log.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+    fake.chmod(0o755)
+    script = Path(build.__file__).parent / 'publish.sh'
+    result = subprocess.run(['bash', str(script), str(root)], capture_output=True, text=True, timeout=10,
+                            env={**os.environ, 'DEST': str(tmp_path / 'remote'), 'RCLONE': str(fake),
+                                 'CALL_LOG': str(log)})
+    assert result.returncode != 0 and 'no source clip' in (result.stdout + result.stderr)
+    assert not log.exists() or not log.read_text().strip()
+
+
 def test_real_footage_encode_respects_budget_and_leaves_no_partial_files(tmp_path, monkeypatch):
     import av
     import subprocess
