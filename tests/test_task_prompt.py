@@ -38,7 +38,24 @@ def main(rig, recorded=True):
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
             text = text.replace(old, new)
+    if rig in TWO_ACTORS:
+        assert text.count(TWO_ACTORS_BEFORE) == 1
+        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + TWO_ACTORS_BEFORE)
     return text
+
+
+# An approved edit (Eric, 2026-11-03) to the timeline note of the two-handed rigs: over 1,043 real steps of 12 UMI
+# windows only 9 left and right steps overlapped in time, so when the two grippers did different things at once
+# (the left grasps one object while the right grasps another) usually only one of them was written. Each gripper (or
+# hand) now gets its own step only then; one at rest or holding still gets none, and work on one object stays "both",
+# so the timeline grows only where the two really act apart. The test holds its own copy, as for the edits below.
+TWO_ACTORS_BEFORE = '- Keep values terse: short action/object strings'
+TWO_ACTORS = {rig: f"""- The two {actor}s get separate steps only when they do DIFFERENT task-relevant actions at the same
+  moment, for example the left {actor} grasps one object while the right {actor} places another: then write one
+  step for each {actor}, with overlapping times. A {actor} at rest, parked or merely holding still gets no step of
+  its own, and work by both {actor}s on one object stays one "both" step. This adds no other steps: the
+  granularity above is unchanged.
+""" for rig, actor in (('handheld_gripper', 'gripper'), ('ego_head', 'hand'))}
 
 
 # An approved edit to the shared contribution rule (Eric, 2026-10-23): runs of missed grasps on a fine object were
@@ -389,3 +406,16 @@ def test_a_task_standing_in_for_the_instruction_is_also_judged_on_its_own_work(r
     bare = text(rig, False, recorded, steps)
     assert 'own_outcome' not in bare and 'own_success_predicate' not in bare
     assert 'own_outcome' not in text('ego_head', True, recorded, steps)
+
+
+@pytest.mark.parametrize('rig', ['handheld_gripper', 'ego_head'])
+@pytest.mark.parametrize('given', [True, False])
+def test_two_handed_rigs_write_a_step_per_side_only_when_the_sides_act_apart(rig, given):
+    """The timeline note of a two-handed rig says when each side gets its own overlapping step, and that a side at
+    rest or holding still gets none; teleop arms keep main's note."""
+    s = flat(text(rig, given))
+    actor = {'handheld_gripper': 'gripper', 'ego_head': 'hand'}[rig]
+    assert flat(TWO_ACTORS[rig]) in s
+    assert f'write one step for each {actor}, with overlapping times' in s
+    assert s.index('TIMELINE GRANULARITY') < s.index(f'The two {actor}s get separate steps')
+    assert 'get separate steps only when' not in flat(text('teleop_arms', given))
