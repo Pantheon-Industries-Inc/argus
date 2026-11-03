@@ -413,7 +413,7 @@ def test_publish_refuses_a_build_whose_page_requests_a_video_with_no_source_clip
     result = subprocess.run(['bash', str(script), str(root)], capture_output=True, text=True, timeout=10,
                             env={**os.environ, 'DEST': str(tmp_path / 'remote'), 'RCLONE': str(fake),
                                  'CALL_LOG': str(log)})
-    assert result.returncode != 0 and 'no source clip' in (result.stdout + result.stderr)
+    assert result.returncode != 0 and 'videos the page requests have no source clip' in (result.stdout + result.stderr)
     assert not log.exists() or not log.read_text().strip()
 
 
