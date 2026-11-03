@@ -2,6 +2,7 @@
 import json
 import multiprocessing
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -412,6 +413,8 @@ def test_route_claim_survives_process_exit_and_rejects_changed_input(tmp_path, m
 
 
 def test_distinct_routes_dispatch_concurrently_and_keep_build_failure_costs(tmp_path, monkeypatch):
+    # both fixture episodes share one prompt variant; this checks concurrent dispatch, not the cache warm-up
+    monkeypatch.setenv('ARGUS_CACHE_WARMUP', '0')
     eps = [episode(tmp_path, 'episode_a', 'Place the cup.'),
            episode(tmp_path, 'episode_b', 'Read the label.')]
     barrier = threading.Barrier(2)
@@ -429,6 +432,29 @@ def test_distinct_routes_dispatch_concurrently_and_keep_build_failure_costs(tmp_
     assert calls == [1, 1]
     assert label_spend(job) == pytest.approx(.008)
     assert label_spend_complete(job) is True
+
+
+def test_cache_warmup_answers_the_first_of_a_variant_before_sending_the_rest(tmp_path, monkeypatch):
+    # both episodes share one prompt variant, so the second may only go out once the first has its reply
+    # (label/harness.py cache_warmup); without the warm-up both would be in flight together
+    eps = [episode(tmp_path, 'episode_a', 'Place the cup.'),
+           episode(tmp_path, 'episode_b', 'Read the label.')]
+    events, lock = [], threading.Lock()
+    def provider(*a, **kw):
+        with lock:
+            events.append('start')
+        time.sleep(.2)
+        with lock:
+            events.append('end')
+        return {'usage': {'cost': .004}, 'choices': [{'message': {'content': '{}'}}]}
+    monkeypatch.delenv('ARGUS_CACHE_WARMUP', raising=False)
+    monkeypatch.setattr(route, '_CACHE', {})
+    monkeypatch.setattr(harness, 'call_model', provider)
+    monkeypatch.setattr(harness.me, 'build_request', build_failure)
+    job = tmp_path / 'job'
+    harness.run_batch(eps, job / 'run' / 'out', keys=['sk-or-fixture'], concurrency=2, force=False, max_spend=1,
+                      **args())
+    assert events == ['start', 'end', 'start', 'end']
 
 
 def test_concurrent_routes_cannot_dispatch_beyond_reserved_budget(tmp_path, monkeypatch):
@@ -470,6 +496,8 @@ def test_concurrent_routes_cannot_dispatch_beyond_reserved_budget(tmp_path, monk
 
 @pytest.mark.parametrize('first_reply', ['received', 'unknown', 'changed_input'])
 def test_parallel_final_waits_for_live_reservation_but_preserves_unknown_charge(tmp_path, monkeypatch, first_reply):
+    # both fixture episodes share one prompt variant; this checks concurrent dispatch, not the cache warm-up
+    monkeypatch.setenv('ARGUS_CACHE_WARMUP', '0')
     from types import SimpleNamespace
     entered, waiting, release = threading.Event(), threading.Event(), threading.Event()
     class ObservedCondition(threading.Condition):
