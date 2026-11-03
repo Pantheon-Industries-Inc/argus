@@ -141,6 +141,11 @@ OTHER_ACTIVITY += [
      "exo 10-20 s. The fob is pressed at 95 s."),
     ("idle_stretch", "Work stops while the operator checks an iPhone.", "exo 300-320 s"),
     ("idle_stretch", "Work stops while the operator answers a call.", "exo 300-320 s"),
+    # a denial of the grippers' motion, or one after what the person did, leaves the person's action standing
+    ("idle_stretch", "The grippers do not move while another person adjusts the bowl.", "exo 30-40 s"),
+    ("inactivity", "No gripper motion while someone else handles the towel.", "exo view 5-11s"),
+    ("pause", "Another person reaches in and moves the cup, which the operator did not expect.", "top camera 30-36s"),
+    ("idle_stretch", "The operator presses the fob, then looks at the phone.", "exo 90-99 s"),
 ]
 
 
