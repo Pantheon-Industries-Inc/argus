@@ -61,6 +61,8 @@ from pathlib import Path
 from board.label_projection import LABEL_SCHEMA, derive_completion
 from label import episode as me, policy
 from label.atomic import write_atomic
+# the idle rule (an idle stretch is a low data issue unless it is other activity), applied in parse_response
+from label.idle import idle_category, idle_issues_low, other_activity, OTHER_ACTIVITY  # noqa: F401
 from label.errors import DispatchError, KeyExhausted, SpendCap, Truncated
 from label.route import route_width
 from label import inflight
@@ -1148,75 +1150,6 @@ def derive_instruction_mismatch(labels: dict) -> None:
     labels['data_issues'] = list(issues or []) + [{
         'issue': what, 'category': 'instruction_mismatch', 'severity': 'high', 't_s': None, 'end_s': None,
         'evidence': 'goal_alignment of this reply', 'derived_from': 'goal_alignment'}]
-
-
-# An idle data issue is one whose category names the work pausing: idle, idling, pause, stall or inactivity in any
-# spelling ("idle_stretch", "operator_paused", "Stalled", "inactivity"), read word by word so "install" is not a stall.
-# A category that also names the camera or recording ("camera_stall", "video_paused", "frozen_frame") is a recording
-# fault, a frozen or black camera, and not idleness.
-IDLE_WORD = re.compile(r'^(?:idl|paus|stall|inactiv)')
-RECORDING_WORDS = frozenset({'recording', 'camera', 'cam', 'video', 'frame', 'frames', 'stream', 'feed', 'sensor',
-                             'frozen', 'freeze', 'black', 'dropout', 'fault'})
-
-
-def idle_category(category) -> bool:
-    """Whether a data issue's category names idleness (IDLE_WORD) and not a recording fault (RECORDING_WORDS)."""
-    if not isinstance(category, str):
-        return False
-    words = [w for w in re.split(r'[^a-z0-9]+', re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', category).lower()) if w]
-    return any(IDLE_WORD.match(w) for w in words) and not RECORDING_WORDS.intersection(words)
-
-
-# Idle that is really other activity, in the words of PHONES, BARE HANDS, PARKED GRIPPERS AND FACES (label/prompts.py):
-# the operator holding or using a phone, another person reaching in or handling the objects, bare-hand work, a
-# gripper set down, parked or taken off while the work goes on. Each is at least medium there, so an idle item whose
-# issue or evidence describes one keeps the model's severity. The fob that starts and stops a recording is never
-# phone use, even with a gripper set down to press it.
-_GRIPPER = r'(?:(?:left|right|other|one|a|the|both|his|her|their)\s+)*grippers?'
-OTHER_ACTIVITY = {
-    'phone': re.compile(r'\b(?:smart|cell\s?|mobile\s)?phones?\b(?!-like)', re.I),
-    'other_person': re.compile(r'\b(?:another|other|second|third|different)\s+(?:person|people|operator|individual|'
-                               r'human|worker)s?\b|\bsomeone\b|\banyone\s+else\b|\bbystanders?\b|\bhelpers?\b'
-                               r'|\bexternal(?:ly)?[- ]assist\w*', re.I),
-    'bare_hand': re.compile(r'\bbare[- ]?hand(?:s|ed)?\b|\b(?:fingers?|hands?)\s+(?:clearly\s+)?(?:fiddl|mov|push|'
-                            r'slid|pick|grab|reposition|adjust|handl|touch)\w*|\bby\s+hand\b', re.I),
-    'parked_gripper': re.compile(
-        r'\b(?:set|sets|setting|put|puts|putting|lay|lays|laid|laying|place|places|placed|placing|rest|rests|'
-        r'rested|resting|park|parks|parked|parking)[\s-]+(?:down\s+)?' + _GRIPPER + r'(?:\s+(?:down|aside))?\b'
-        r'|\b(?:take|takes|took|taken|taking|remove|removes|removed|removing)\s+(?:off\s+)?' + _GRIPPER +
-        r'|\bgrippers?\s+(?:is\s+|are\s+|was\s+|were\s+|being\s+|lies\s+|lying\s+|sits\s+|sitting\s+|left\s+)?'
-        r'(?:set\s+down|put\s+down|laid\s+down|parked|taken\s+off|removed|aside|down\s+on)\b'
-        # the same states through more linking verbs and an adverb ("remains parked", "has been set down", "is visibly
-        # parked"), and a gripper resting on a surface ("rests on the table", "remains on the table"); a gripper that
-        # remains aside, raised or near the table is held still, which is idle
-        r'|\bgrippers?\s+(?:(?:is|are|was|were|being|been|has|have|had|remains?|remained|remaining|stays?|stayed|'
-        r'staying)\s+)+(?:\w+ly\s+)?(?:set\s+down|put\s+down|laid\s+down|parked|taken\s+off|removed)\b'
-        r'|\bgrippers?\s+(?:(?:is|are|was|were|has|have|had|been|remains?|remained|remaining|stays?|stayed|staying)\s+)*'
-        r'(?:(?:rests?|rested|resting|lies|lying|sits|sitting)\s+on|(?:remains?|remained|stays?|stayed|left|lies|'
-        r'lying|sits|sitting)\s+on\s+the\s+(?:table|tabletop|surface|mat|floor|desk|bench))\b', re.I),
-}
-FOB = re.compile(r'\bfob\b', re.I)
-
-
-def other_activity(row: dict) -> list[str]:
-    """The kinds of other activity (OTHER_ACTIVITY) an issue's text and evidence describe; with the recording's fob
-    named, a phone or a gripper set down is the fob being pressed, not one of them."""
-    text = ' '.join(v for v in (row.get('issue'), row.get('evidence')) if isinstance(v, str))
-    kinds = [kind for kind, pattern in OTHER_ACTIVITY.items() if pattern.search(text)]
-    return [k for k in kinds if k not in ('phone', 'parked_gripper')] if FOB.search(text) else kinds
-
-
-def idle_issues_low(labels: dict) -> None:
-    """The rule that an idle stretch is never more than a low data issue (label/prompts.py data_contract), held in
-    code: idleness is trimmed from the dataset, it is not a defect of the footage. Every data issue with an idle
-    category (idle_category) gets severity low, and one the model rated otherwise keeps that rating in
-    severity_as_labelled, unless its text describes other activity (other_activity): then it keeps its severity and
-    its category. Operator mistakes are left as they are. Running this again on its output changes nothing."""
-    for row in labels.get('data_issues') or []:
-        if (isinstance(row, dict) and idle_category(row.get('category')) and row.get('severity') != 'low'
-                and not other_activity(row)):
-            row.setdefault('severity_as_labelled', row.get('severity'))
-            row['severity'] = 'low'
 
 
 def json_kind(x) -> str:

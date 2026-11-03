@@ -125,6 +125,7 @@ from board.to_board import (and_list, convert, dumps, field_words, label_failed,
 from checks import label_consistency
 from board import scores
 from label.atomic import write_atomic
+from label.idle import idle_category, other_activity
 from prepare.frame_rate import episode_fps, episode_seconds as frame_episode_seconds
 
 SEVERITIES = ["low", "medium", "high"]
@@ -197,7 +198,12 @@ def apply_rules(d: dict, ctx: dict, rules: list, ep_dir: Path | None = None) -> 
                 key = rule.get("list", "operator_mistakes")
                 d[key] = _cap(d.get(key), rule["tags"], rule["severity"], rule["reason"])
         elif kind == "severity_cap":
-            d["data_issues"] = _cap(d.get("data_issues"), rule["tags"], rule["severity"], rule["reason"])
+            # an idle item that is really other activity (label/idle.py other_activity) is never capped: the parser
+            # keeps its severity, and so does the board
+            d["data_issues"] = [
+                iss if isinstance(iss, dict) and idle_category(iss.get("category")) and other_activity(iss)
+                else _cap([iss], rule["tags"], rule["severity"], rule["reason"])[0]
+                for iss in d.get("data_issues") or []]
         elif kind == "fixed_window":
             secs = episode_seconds(ctx, ep_dir)
             if secs is None or abs(secs - rule["window_s"]) > rule.get("tolerance_s", 2.5):
