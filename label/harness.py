@@ -1926,7 +1926,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, execution_lease_fd=None, *
         result = _run_batch(episodes, out_dir, **kwargs)
         # The worker owns its receipts until metadata is settled. A killed wrapper
         # must not leave completed paid work permanently marked as running.
-        from label.run import finalize_worker
+        from label.finalize import finalize_worker
         finalize_worker(out_dir, result)
         return result
 

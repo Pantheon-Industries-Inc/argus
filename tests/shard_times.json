@@ -207,5 +207,6 @@
  "tests/test_instruction_structures.py": 4.0,
  "tests/test_task_claims.py": 4.0,
  "tests/test_wording.py": 0.5,
- "tests/test_catalog.py": 2.0
+ "tests/test_catalog.py": 2.0,
+ "tests/test_label_run_pieces.py": 2.0
 }

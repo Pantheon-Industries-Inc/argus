@@ -493,7 +493,7 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
                   f'reserve less.', flush=True)
             remaining = 0.0
         if remaining > 0:
-            # the harness settles run.json itself if this wrapper is killed while it runs (label.run.finalize_worker)
+            # the harness settles run.json itself if this wrapper is killed while it runs (label/finalize.py finalize_worker)
             label_env = {**env, 'ARGUS_STAGED_RUN_METADATA': str((run_dir / 'run.json').resolve())}
             label_rc = run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                                     str(run_dir / "out"), "--concurrency", str(a.concurrency),
