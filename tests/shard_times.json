@@ -210,6 +210,7 @@
  "tests/test_wording.py": 0.5,
  "tests/test_catalog.py": 2.0,
  "tests/test_label_run_pieces.py": 2.0,
+ "tests/test_inflight.py": 2.0,
  "tests/test_cache_warmup.py": 2.0,
  "tests/test_depth_inspection_scope.py": 2.0,
  "tests/test_lerobot_metadata_inspection.py": 2.0,

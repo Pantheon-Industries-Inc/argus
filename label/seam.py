@@ -33,6 +33,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from label import inflight
 from label.atomic import write_atomic
 
 WINDOW_S = 15.0         # seconds of footage shown on each side of the cut
@@ -415,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cap", type=float, default=5.0, help="most the checks may spend, in USD (default 5)")
     ap.add_argument("--model", default=None, help="default: the model the labels were made with")
     ap.add_argument("--reasoning", default=None, help="default: the reasoning effort the labels were made with")
-    ap.add_argument("--concurrency", type=int, default=8, help="requests in flight (default 8)")
+    inflight.add_argument(ap)
     ap.add_argument("--timeout", type=int, default=600, help="seconds a request's connection may carry no bytes")
     ap.add_argument("--apply", type=Path, default=None, metavar="DIR",
                     help="also write each recording of --label joined by the seams into DIR")
@@ -496,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             save()
         return True
 
-    with ThreadPoolExecutor(max(1, a.concurrency)) as pool:
+    with ThreadPoolExecutor(inflight.in_flight(a.concurrency, len(work))) as pool:
         asked = list(pool.map(one, work))
     if False in asked:
         print(f"stopped at the ${a.cap:g} cap: {asked.count(False)} checks not asked", flush=True)

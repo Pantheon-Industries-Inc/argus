@@ -37,6 +37,7 @@ from pathlib import Path
 
 from label.harness import execution_lock, get_keys, is_openrouter_key, resolve_unanswered_charges
 from label.atomic import write_atomic
+from label import inflight
 from label.checkout import commit
 from label.finalize import billed_cost, finalize, finalize_worker, footage_hours, harness_out, parsed
 
@@ -195,7 +196,7 @@ def main() -> int:
     ap.add_argument("--cap", type=float, default=0.0, help="most this run may spend in USD (required unless dry); "
                                                            "with --resume, a new cap for the run")
     ap.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
-    ap.add_argument("--concurrency", type=int, default=16, help="episodes in flight (default 16)")
+    inflight.add_argument(ap, "episodes")
     ap.add_argument("--note", default="", help="free text recorded in run.json")
     ap.add_argument("--label", default="", help="appended to the run id, e.g. the model of a comparison run")
     ap.add_argument("--resume", type=Path, default=None, help="finish this killed run")

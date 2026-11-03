@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from gate import score
+from label import inflight
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -92,7 +93,7 @@ def main() -> int:
     p.add_argument("--kind", default="full", choices=["dry", "smoke", "full"], help="as for python -m label")
     p.add_argument("--cap", type=float, default=0.0, help="spend cap per rig's run, USD (required unless dry)")
     p.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
-    p.add_argument("--concurrency", type=int, default=16, help="episodes in flight per rig")
+    inflight.add_argument(p, "episodes per rig")
     sub.add_parser("score", help="score gate runs (python -m gate score --help)")
     a = ap.parse_args()
     return {"prepare": cmd_prepare, "label": cmd_label}[a.cmd](a)

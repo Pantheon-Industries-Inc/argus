@@ -60,6 +60,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from label import inflight
+
 VERSION = 1
 PROMPT_VERSION = 1
 SEED = 20261031
@@ -452,13 +454,13 @@ class Asker:
         return rows or None
 
     def many(self, texts: list, answer_tokens: int, concurrency: int, model: str | None = None) -> list:
-        with ThreadPoolExecutor(max(1, concurrency)) as pool:
+        with ThreadPoolExecutor(inflight.in_flight(concurrency, len(texts))) as pool:
             return list(pool.map(lambda t: self(t, answer_tokens, model), texts))
 
 
 # ---------------------------------------------------------------- the run
 
-def build(recs: list, ask: Asker, *, base: dict | None = None, concurrency: int = 8, check: int = 0,
+def build(recs: list, ask: Asker, *, base: dict | None = None, concurrency: int = 0, check: int = 0,
           judge_model: str | None = None) -> dict:
     """The catalog of recs: {summary, levels, vocab, check}."""
     P = prompts(setup_of(recs))
@@ -647,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reasoning", default=REASONING, help=f"default: {REASONING}")
     ap.add_argument("--judge-model", default=None, help="the checks' model (default: --model)")
     ap.add_argument("--check", type=int, default=100, help="tasks and merges in each check sample (0: no checks)")
-    ap.add_argument("--concurrency", type=int, default=8)
+    inflight.add_argument(ap)
     ap.add_argument("--dry-run", action="store_true", help="read and count; ask nothing")
     a = ap.parse_args(argv)
     if a.base and a.base.resolve() == a.out.resolve(): raise SystemExit("--out must differ from --base")
