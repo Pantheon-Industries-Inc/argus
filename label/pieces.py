@@ -10,12 +10,15 @@ and only actual model-emitted activities become tasks on its one timeline. Reque
 goals, outcomes and progress remain attributed assessments, not recording-level judgments.
 
 Neighbouring parts share a few seconds around each cut (OVERLAP_S), so an activity under way at a cut is seen by
-both requests: the stitch joins the two parts' tasks there by the time they share, and keeps each step and key event
-of those seconds from one part only. A recording cut without them (labelled before they existed, or one whose cuts
+both requests. The stitch keeps each step and key event of those seconds from one part only, the left part's before
+the window's midpoint and the right part's from it, and then joins what both parts saw running across the cut by the
+time they share there: their two tasks into one task (join_across_cuts), and the two steps of one arm into one step
+(join_steps_across_cuts). A cut is then a step boundary only where a part saw the action change at it or the two parts
+gave the action to different arms. A recording cut without them (labelled before they existed, or one whose cuts
 leave no room for them, as its context's overlap_not_used says) has its tasks joined at a cut only on a seam check's
-verdict (label/seam.py). A task still under way at a cut that no join reaches is unclear, and its cut_continuation
-says which cut ended its part's view; what the stitch did at a cut is recorded in such fields (cut_joins,
-cut_continuation, the stitched record), never in the labels' text.
+verdict (label/seam.py), and its steps end at the cut as each part wrote them. A task still under way at a cut that
+no join reaches is unclear, and its cut_continuation says which cut ended its part's view; what the stitch did at a
+cut is recorded in such fields (cut_joins, cut_continuation, the stitched record), never in the labels' text.
 
 Each part is told it is one part of a continuous recording cut at a still moment, so activity carrying across
 a cut is expected; an issue a part reports about being cut off at one of our cuts (a truncated start or end)
@@ -64,9 +67,9 @@ CUT_TAGS = ("truncat", "incomplete", "cut_off", "starts_mid", "ends_mid", "mid_t
 OVERLAP_S = 15.0
 # The stitch's version, kept in every stitched record (stitched["version"]) so a reader can tell labels stitched with
 # text times on the recording's clock, no cut sentences in text, each step's progress kept, no continues_past_cut
-# outcome and every list in time order (2) from labels stitched before those rules (no version), and never repairs
-# a label twice.
-STITCH_VERSION = 2
+# outcome and every list in time order (2), and those whose steps our cuts split are joined again with their actions
+# in one case (3), from labels stitched before those rules (no version), and never repairs a label twice.
+STITCH_VERSION = 3
 OVERLAP_FIT = 4
 
 
@@ -1427,13 +1430,14 @@ def join_across_cuts(tasks: list, cuts_s: list[float], seams: dict | None = None
     return sorted(tasks, key=order)
 
 
-def window_copies(items: list, windows: list[dict], key: str) -> tuple[list, list]:
+def window_copies(items: list, windows: list[dict], key: str, origin: dict | None = None) -> tuple[list, list]:
     """(the items kept, the items left out) of one list, timeline steps by start_s to end_s or key events by t_s, where
     two parts both labelled a shared window: inside it the left part describes the moments before the window's
     midpoint and the right part those from the midpoint on, so each moment of the window is described once, never
     twice. An item wholly in the other part's half is left out; a step across the midpoint is clipped to its own
     part's half and kept, so what it describes past the window is never lost, and its part's own times are left out
-    beside it with clipped_to."""
+    beside it with clipped_to. origin, when given, gets {id(clipped item): the part's own item} for every item
+    clipped (join_steps_across_cuts reads what each part said of the whole window from it)."""
     from label.episode import number
     kept, dropped = [], []
     for item in items:
@@ -1467,8 +1471,119 @@ def window_copies(items: list, windows: list[dict], key: str) -> tuple[list, lis
             kept.append(item)
         else:
             kept.append({**item, key: round(a, 3), **({"end_s": round(b, 3)} if b is not None else {})})
+            if origin is not None:
+                origin[id(kept[-1])] = item
             dropped.append({**item, "clipped_to": [round(a, 3), round(b, 3) if b is not None else None]})
     return kept, dropped
+
+
+# the fields of a timeline step that say what was done: a step joined across a cut takes all of them from one half
+STEP_TEXT_FIELDS = ("action", "object", "destination", "spatial_relation", "contribution", "progress", "notes",
+                    "hands_visible", "hands_wearing", "confidence", "source_piece")
+
+
+def _step_match(left: dict, right: dict, window: dict) -> dict | None:
+    """How the left part's step and the right part's step across a window's midpoint were matched, or None when they
+    are not one action: as tasks are matched (_window_pairs), the time the two share inside the window must be at least
+    half of the shorter one's time inside it. Each part's step across the cut is the action that part saw at the cut,
+    so two that cover the same seconds are one action however differently each part worded it; two that share less
+    are the two sides of a change both parts saw near the cut (one part's step ends just after it, or the other's
+    starts just before it)."""
+    a, b = _in_window(left, window), _in_window(right, window)
+    if a is None or b is None:
+        return None
+    shared, shorter = min(a[1], b[1]) - max(a[0], b[0]), min(a[1] - a[0], b[1] - b[0])
+    if shared <= 1e-6 or shared < shorter / 2 - 1e-9:
+        return None
+    return {"by": "shared_window", "window_s": [float(window["t0_s"]), float(window["t1_s"])],
+            "shared_s": round(shared, 3), "shorter_s": round(shorter, 3)}
+
+
+def join_steps_across_cuts(steps: list, windows: dict, origin: dict | None = None) -> list:
+    """The timeline with each step our cut split in two joined back into one. At a cut whose window both parts
+    labelled, the stitch keeps the left part's steps up to the window's midpoint and the right part's from it
+    (window_copies), so every arm under way at the cut has a step ending there and one starting there, whether or not
+    the action changed. What each part wrote of the window decides (_step_match): the left part's own step of that arm
+    across the midpoint and the right part's are one action when they share at least half of the shorter one's time
+    inside the window. They then become one step from the left half's start to the right half's end. When a part put a
+    step boundary close to the cut, its step across the cut is the other side of that change and shares too little,
+    and the boundary stays. Steps of different arms never join, nor do steps whose arm is not given, nor two steps of
+    one arm when either part has two there.
+
+    The joined step says what was done in the words of the part whose own step covers more of it (STEP_TEXT_FIELDS,
+    the step's progress and source_piece included, so its progress stays its part's), the earlier one on a tie. Both
+    halves as the stitch clipped them are kept under joined_from and the join under cut_joins ({"cut_s", "by":
+    "shared_window", "window_s", "shared_s", "shorter_s", "text_from": "before" or "after"}); nothing is written into
+    the step's text. A cut without a window has no evidence of what either part saw past it, and its steps stay apart
+    (a seam verdict, label/seam.py, judges a task's end state, not whether one action carries on). origin is
+    {id(clipped step): the part's own step} (window_copies); a step not in it is the part's own."""
+    from label.episode import number
+    origin = origin or {}
+    whole = lambda step: origin.get(id(step), step)
+    steps = list(steps)
+    for cut, window in sorted((windows or {}).items(), key=lambda kv: float(kv[0])):
+        w0, w1 = float(window["t0_s"]), float(window["t1_s"])
+        mid = (w0 + w1) / 2
+        ends = [s for s in steps if number(s.get("end_s")) is not None and abs(number(s["end_s"]) - mid) <= .002
+                and number(s.get("start_s")) is not None and number(s["start_s"]) < mid - .002]
+        starts = [s for s in steps if number(s.get("start_s")) is not None and abs(number(s["start_s"]) - mid) <= .002
+                  and number(s.get("end_s")) is not None and number(s["end_s"]) > mid + .002]
+        for left in ends:
+            arm = left.get("arm")
+            right = [s for s in starts if s.get("arm") == arm]
+            if not isinstance(arm, str) or len(right) != 1 or sum(s.get("arm") == arm for s in ends) != 1:
+                continue
+            right = right[0]
+            how = _step_match(whole(left), whole(right), window)
+            if how is None:
+                continue
+            joined_span = (number(left["start_s"]), number(right["end_s"]))
+
+            def covers(step):
+                a, b = number(whole(step).get("start_s")), number(whole(step).get("end_s"))
+                return max(0.0, min(b, joined_span[1]) - max(a, joined_span[0])) if None not in (a, b) else 0.0
+            text_from = "after" if covers(right) > covers(left) + 1e-6 else "before"
+            words = right if text_from == "after" else left
+            joined = {**{k: v for k, v in left.items() if k not in STEP_TEXT_FIELDS},
+                      **{k: copy.deepcopy(words[k]) for k in STEP_TEXT_FIELDS if k in words},
+                      "start_s": left["start_s"], "end_s": right["end_s"],
+                      "joined_from": copy.deepcopy((left.get("joined_from") or [left])
+                                                   + (right.get("joined_from") or [right])),
+                      "cut_joins": [*copy.deepcopy(left.get("cut_joins") or []),
+                                    {"cut_s": float(cut), **how, "text_from": text_from},
+                                    *copy.deepcopy(right.get("cut_joins") or [])]}
+            steps = [joined if s is left else s for s in steps if s is not right]
+    return steps
+
+
+def one_case(steps: list) -> list:
+    """The steps with every action starting in the case most of them start in: each part's request writes its own
+    style ("pause looking at pillow" in one part, "Reposition to face the pillow" in the next), and a recording reads in
+    one. Only the first letter of an action changes, and only a capital that starts an ordinary word (one capital then
+    lower case: "Turn", never "UMI" or "X3"); a tie keeps lower case."""
+    first = lambda text: re.match(r"([A-Za-z])([a-z]*)\b", text) if isinstance(text, str) else None
+    upper = sum(1 for s in steps if (m := first(s.get("action"))) and m.group(1).isupper() and m.group(2))
+    lower = sum(1 for s in steps if (m := first(s.get("action"))) and m.group(1).islower())
+    out = []
+    for step in steps:
+        m = first(step.get("action"))
+        text = step.get("action")
+        if m and upper > lower and m.group(1).islower():
+            text = text[0].upper() + text[1:]
+        elif m and upper <= lower and m.group(1).isupper() and m.group(2):
+            text = text[0].lower() + text[1:]
+        out.append({**step, "action": text} if text != step.get("action") else step)
+    return out
+
+
+def stitch_steps(steps: list, windows: dict) -> tuple[list, list]:
+    """(the timeline kept, the steps left out) of a recording's parts' steps on its clock, each with its source_piece:
+    each moment of a window both parts labelled described by one part (window_copies), a step our cut split in two
+    that both parts saw running across it one step again (join_steps_across_cuts), and every action in one case
+    (one_case). windows is {cut: window} for the windows both of whose parts gave labels."""
+    origin = {}
+    kept, copies = window_copies(steps, list((windows or {}).values()), "start_s", origin)
+    return one_case(join_steps_across_cuts(kept, windows, origin)), copies
 
 
 OPEN_AT_CUT = ("still under way at a cut of the recording and not joined to a task of the next part, so no part saw "
@@ -1736,9 +1851,10 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     are set aside in _excluded. missing names
     the parts that gave no labels ({"part", "t0_s", "t1_s", "why"}, stitch_run): the recording is stitched from the
     rest, its cuts are still every cut, and the record keeps the gaps under stitched["missing"]. Where two labelled
-    parts share a window at their cut (write_pieces), their tasks are joined by time and each step and key event of
-    the window is kept from one part only; at a cut without one, seams ({cut: verdict}, label/seam.py) decide the
-    joins (join_across_cuts)."""
+    parts share a window at their cut (write_pieces), each step and key event of the window is kept from one part only
+    and the tasks, and the steps of one arm, that both parts saw running across the cut are joined by time
+    (stitch_steps); at a cut without one, seams ({cut: verdict}, label/seam.py) decide the task joins
+    (join_across_cuts)."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
@@ -1891,7 +2007,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         L["completion"] = {**empty, "task_completed": "unclear", "reason": parted + gaps, "basis": "parts"}
     # both parts of a shared window described it: each step and key event in it is kept from one of them
     for k, key in (("timeline", "start_s"), ("key_events", "t_s")):
-        L[k], copies = window_copies(L[k], list(windows.values()), key)
+        L[k], copies = (stitch_steps(L[k], windows) if k == "timeline"
+                        else window_copies(L[k], list(windows.values()), key))
         excluded += [{**item, "list": k, "excluded_by": "shared_window",
                       "reason": "both parts labelled these seconds around the cut; "
                                 + ("this step is kept only over its own part's half of the window"
