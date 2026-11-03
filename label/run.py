@@ -30,7 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key
+from label.harness import (annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key,
+                           resolve_unanswered_charges)
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.atomic import write_atomic
 from label import inflight
@@ -133,6 +134,9 @@ def finalize(run: Path, info: dict, slice_dir: Path, rc: int) -> None:
                  "cost_usd": cost, "reserved_cost_usd": reserved, "cost_complete": complete, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
                  "episodes_failed": int(m.get("failed", 0)),
                  "footage_hours": round(hours, 3), "usd_per_hour": round(cost / hours, 2) if hours and cost else None})
+    if info.get("kind") == "dry" and (run / "out").exists():
+        from label.evidence_access import inspection_plan
+        info["inspection"] = inspection_plan(run / "out")
     write_atomic(run / "run.json", info, indent=1)
 
 
@@ -185,6 +189,12 @@ def _resume(a, slice_dir: Path) -> None:
         raise SystemExit(f"--resume: the run's slice is {info['slice']}, not {slice_dir}")
     if not a.why:
         raise SystemExit("--resume needs --why")
+    if info["kind"] != "dry" and (run / "out").exists():
+        # calls killed with the last run hold their full bound until OpenRouter says what it billed for them
+        settled = resolve_unanswered_charges(run / "out", get_keys())
+        if settled["resolved"]:
+            print(f"resume: {settled['resolved']} unanswered calls settled at OpenRouter's billed cost, "
+                  f"${settled['released_usd']:.2f} of holds released", flush=True)
     spent = billed_cost(run)
     if info["kind"] != "dry" and getattr(a, "cap", 0):
         # a new --cap on a resume replaces the run's cap, so a run the cap stopped can be finished

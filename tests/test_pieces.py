@@ -272,7 +272,7 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
         assert [x["part"] for x in lab["data_issues"]] == [2]                  # the recording's own end stays
         assert [x["excluded_by"] for x in lab["_excluded"]] == ["piece_cut"]   # the cut after part 1 is ours
         assert out["stitched"]["parts"] == 2 and out["usage"]["est_cost_usd"] == 1.0
-        assert out["stitched"]["version"] == pieces.STITCH_VERSION == 2
+        assert out["stitched"]["version"] == pieces.STITCH_VERSION == 3
         # every part's routing call is billed, and every part was checked against the recording's instruction
         assert out["config"]["resolution_route"]["cost_usd"] == 0.03 and len(out["config"]["resolution_route"]["parts"]) == 2
         assert harness.episode_cost(out) == 1.03 and out["prompt_mode"] == "given"
@@ -2078,6 +2078,128 @@ def test_a_step_across_the_window_midpoint_is_clipped_to_its_half_never_dropped_
     copies = [x for x in labels['_excluded'] if x['excluded_by'] == 'shared_window']
     assert sorted((x['source_piece']['index'], x.get('clipped_to') is not None) for x in copies) == [
         (1, True), (2, False), (2, True)]
+
+
+def test_a_step_both_parts_saw_running_across_the_cut_is_one_step_and_a_change_at_the_cut_stays(tmp_path, monkeypatch):
+    """Every cut of the HIW-500 run of 2026-11-02 (61 cuts) had a step ending exactly at the cut and the next starting
+    there, because the stitch kept the left part's steps up to the window's midpoint and the right part's from it and
+    never joined steps. A step both parts wrote across the midpoint, sharing at least half of the shorter one's time in
+    the window, is one step again, in the words of the part whose own step covers more of it; a step of the other arm,
+    which each part saw change near the cut, keeps its boundary."""
+    src, parts, contexts = _windowed_parts(tmp_path, monkeypatch)
+    (window,) = contexts[0]['piece']['windows']
+    w0, w1 = window['t0_s'], window['t1_s']
+    mid = (w0 + w1) / 2
+    at = lambda share: round(w0 + share * (w1 - w0), 3)
+    origin = [ctx['piece']['t0_s'] for ctx in contexts]
+    end2 = contexts[1]['piece']['t1_s']
+    spans = [[('left', 'reach for the cup', 0.3, at(.1)), ('left', 'hold the cup', at(.1), w1),
+              ('right', 'wipe the table', 0.3, at(.55)), ('right', 'lift the sponge', at(.55), w1)],
+             [('left', 'grip the cup', w0, end2),
+              ('right', 'wipe the table', w0, at(.45)), ('right', 'lift the sponge', at(.45), end2)]]
+    records = []
+    for i, (p, ctx) in enumerate(zip(parts, contexts)):
+        record = _part_result(p, 'stack')
+        record['labels'].update(timeline=[{'start_s': round(a - origin[i], 3), 'end_s': round(b - origin[i], 3),
+                                           'arm': arm, 'action': action, 'contribution': 'advancing'}
+                                          for arm, action, a, b in spans[i]], key_events=[])
+        records.append(record)
+    out = pieces.stitch(src, list(zip(contexts, records)))
+    got = sorted(((s['arm'], s['action'], s['start_s'], s['end_s']) for s in out['labels']['timeline']))
+    near = lambda x: pytest.approx(x, abs=.002)
+    assert got == [('left', 'grip the cup', near(at(.1)), near(end2)),
+                   ('left', 'reach for the cup', near(0.3), near(at(.1))),
+                   ('right', 'lift the sponge', near(mid), near(end2)),
+                   ('right', 'wipe the table', near(0.3), near(mid))]
+    (joined,) = [s for s in out['labels']['timeline'] if s.get('cut_joins')]
+    # the right part's own step covers more of the joined step, so its words, progress and part are the step's
+    assert joined['source_piece']['index'] == 2 and joined['cut_joins'][0]['text_from'] == 'after'
+    assert joined['cut_joins'][0]['cut_s'] == window['cut_s'] and joined['cut_joins'][0]['by'] == 'shared_window'
+    assert [h['action'] for h in joined['joined_from']] == ['hold the cup', 'grip the cup']
+    assert out['stitched']['version'] == 3
+
+
+REAL_CUT_STEPS = Path(__file__).parent / 'fixtures' / 'hiw_steps_across_cuts.json'
+
+
+def _real_cut_steps(name: str) -> tuple[float, list, list, list]:
+    """(the cut, the steps on the recording's clock as the parts wrote them, the steps as the stitch kept them before
+    it joined steps, the steps as it keeps them now) of a real HIW-500 recording labelled in two parts
+    (REAL_CUT_STEPS: each part's piece and its timeline as its reply gave it, from the run of 2026-11-02). The arm
+    "body" those replies use is read as given: main's projection does not know it yet."""
+    parts = json.loads(REAL_CUT_STEPS.read_text())['episodes'][name]
+    layout = pieces.cut_layout([p['piece'] for p in parts])
+    windows = {c['cut_s']: c['window'] for c in layout if c['window']}
+    assert len(windows) == 1
+    steps = []
+    for p in parts:
+        t0, t1 = p['piece']['t0_s'], p['piece']['t1_s']
+        steps += [{**s, 'source_piece': {'index': p['piece']['index'], 't0_s': t0, 't1_s': t1}}
+                  for s in pieces._shift(p['timeline'], t0, t1 - t0)]
+    old = pieces.window_copies(steps, list(windows.values()), 'start_s')[0]
+    return layout[0]['cut_s'], steps, old, pieces.stitch_steps(steps, windows)[0]
+
+
+def _covered(steps: list, arm: str) -> list:
+    """The stretches of the recording one arm has a step for."""
+    out = []
+    for a, b in sorted((s['start_s'], s['end_s']) for s in steps if s.get('arm') == arm):
+        if out and a <= out[-1][1] + .002:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 2), round(b, 2)) for a, b in out]
+
+
+@pytest.mark.parametrize('name, arm, step, text_from', [
+    # both parts wrote the same words for the pause across the cut
+    ('episode_000114', 'body', (264.0, 274.6, 'pause facing the bed'), 'before'),
+    # each part worded the pause its own way; the right part's step covers 39s of it, the left part's 15s
+    ('episode_000722', 'body', (215.0, 254.233, 'pause beside the bed'), 'after'),
+    # the right part called the seconds the left part called a pause a repositioning, and both started the crouch
+    # after them, not at the cut
+    ('episode_000038', 'body', (300.0, 305.733, 'pause looking at pillow'), 'before'),
+])
+def test_real_steps_split_by_a_cut_are_one_step_again(name, arm, step, text_from):
+    cut, _, old, steps = _real_cut_steps(name)
+    (joined,) = [s for s in steps if s.get('cut_joins')]
+    assert (joined['start_s'], joined['end_s'], joined['action']) == (pytest.approx(step[0], abs=.002),
+                                                                       pytest.approx(step[1], abs=.002), step[2])
+    assert joined['arm'] == arm and joined['cut_joins'][0]['text_from'] == text_from
+    assert joined['cut_joins'][0]['cut_s'] == cut and len(joined['joined_from']) == 2
+    # no step of that arm meets another at the cut any more
+    assert not any(s.get('arm') == arm and (abs(s['start_s'] - cut) < .002 or abs(s['end_s'] - cut) < .002)
+                   for s in steps)
+    # the join removes one step and moves no boundary but the cut's: every arm has a step for the same seconds
+    assert len(steps) == len(old) - 1
+    assert all(_covered(steps, a) == _covered(old, a) for a in {s.get('arm') for s in old})
+
+
+def test_one_real_recording_reads_its_step_actions_in_one_case():
+    """Each part's request writes its own style: the part before the cut of episode_000038 starts its actions in lower
+    case, the one after it with a capital. The recording reads in the case most of its steps start in."""
+    _, said, _, steps = _real_cut_steps('episode_000038')
+    assert {s['action'][0].isupper() for s in said} == {True, False}
+    assert not any(s['action'][0].isupper() for s in steps)
+    assert 'crouch toward the mattress' in {s['action'] for s in steps}
+
+
+@pytest.mark.parametrize('name, kept', [
+    # the left part's reach ends 0.24s after the cut and the right part's grasp starts 0.5s before it: both saw the
+    # change from reaching to grasping at the cut, and the two steps share 0.74s of the shorter one's 2s
+    ('episode_023529', [(269.87, 272.633, 'left', 'reach for third loose leg'),
+                        (272.633, 274.133, 'left', 'grasp threaded end')]),
+    # the left part gave the step across the cut to the right arm, the right part to the left: never joined
+    ('episode_023383', [(309.0, 310.433, 'right', 'hold and reorient the leg horizontally'),
+                        (310.433, 311.933, 'left', 'release the leg and withdraw')]),
+])
+def test_real_steps_that_change_at_the_cut_keep_their_boundary(name, kept):
+    cut, _, old, steps = _real_cut_steps(name)
+    assert not any(s.get('cut_joins') for s in steps) and len(steps) == len(old)
+    at_cut = sorted((s['start_s'], s['end_s'], s['arm'], s['action']) for s in steps
+                    if abs(s['start_s'] - cut) < .002 or abs(s['end_s'] - cut) < .002)
+    assert at_cut == [(pytest.approx(a, abs=.002), pytest.approx(b, abs=.002), arm, action)
+                      for a, b, arm, action in kept]
 
 
 # ---- what the stitched label says, as a release reads it ----------------------------------------------------------

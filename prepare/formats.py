@@ -18,8 +18,9 @@ Accepted uploads, in the order they are recognised:
    Cameras stored as images inside the parquet are written to H.264 at their frame times.
    LeRobot episodes use the generic reader with recorded task tables and publisher claims kept under their sources.
    Complete named arm and scalar gripper columns are joined structurally by the generic reader.
-2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), read
-   by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
+2. MCAP, one file per episode, whatever its layout (RealOmin, Gen-HumanEgo and ABC-130k recordings included), and
+   a ROS 2 bag stored as SQLite (.db3), which holds the same messages in another container and is copied into one
+   MCAP per bag before planning (prepare/ros2_bag.py). Either is read by the generic reader for its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
    whose topic it shares), its arm joints on a teleoperated rig (joint_state: any channel whose messages carry a joint
    vector and a gripper reading, its side from the topic, a leader or command channel as the action), every other
    number it records as a signal (mcap_signals), and its text channels (the task topic, and on a head camera a step
@@ -6185,6 +6186,69 @@ def constant_index_task(values, labels) -> list[str]:
     return []
 
 
+# info.json members that describe the dataset's files rather than any episode, and each video feature's encoder
+# settings. A depth video's calibration (depth_unit, video.depth_min, video.depth_max, video.shift, video.use_log) is
+# not encoding: it says how stored values map to distance, so it stays evidence the prompt does not carry.
+LEROBOT_INFO_BOOKKEEPING = ('total_episodes', 'total_frames', 'total_tasks', 'total_chunks', 'total_videos',
+                            'data_files_size_in_mb', 'video_files_size_in_mb', 'splits')
+LEROBOT_VIDEO_ENCODING = ('video.codec', 'video.is_depth_map', 'is_depth_map', 'has_audio', 'video.height',
+                          'video.width', 'video.pix_fmt', 'video.fps', 'video.channels', 'video.g', 'video.crf',
+                          'video.preset', 'video.fast_decode', 'video.video_backend', 'video.extra_options')
+LEROBOT_EPISODE_KEYS = ('episode_index', 'tasks', 'length', 'dataset_from_index', 'dataset_to_index')
+LEROBOT_VIDEO_SPAN = ('chunk_index', 'file_index', 'from_timestamp', 'to_timestamp')
+
+
+def json_token(key) -> str:
+    return str(key).replace('~', '~0').replace('/', '~1')
+
+
+def lerobot_episode_bookkeeping(key, features) -> bool:
+    """A LeRobot per-episode metadata column the prepared episode already holds: its index, task text and length, the
+    data and video spans it was cut by, or a summary statistic of a declared feature (stats/<feature>/<statistic>)."""
+    key = str(key)
+    if key in LEROBOT_EPISODE_KEYS or key.startswith(('data/', 'meta/episodes/')):
+        return True
+    if key.startswith('videos/'):
+        return key.rsplit('/', 1)[-1] in LEROBOT_VIDEO_SPAN
+    if key.startswith('stats/') and key.count('/') >= 2:
+        return key[len('stats/'):].rsplit('/', 1)[0] in features
+    return False
+
+
+# LeRobot itself writes these fields into an episode's metadata row; the uploader never chose them. stats are the
+# per-episode statistics of every recorded column (stats/<column>/min, max, mean, std, count, q01 to q99 in a v3
+# meta/episodes row, one nested stats object in a v2.1 episodes_stats.jsonl row), and the recorded signals section
+# already gives each column's range and values. The rest say where the episode's rows and frames sit in the storage
+# files. Dropping them from the prompt notes keeps a long row from pushing the uploader's own fields (tasks, tags,
+# success flags, custom columns) past ANNOTATION_MAX_CHARS. context.json keeps every row whole in recorded_metadata.
+LEROBOT_DERIVED_FIELD = re.compile(r"stats(/.*)?|dataset_(from|to)_index|(data|meta/episodes)/(chunk|file)_index"
+                                   r"|videos/.+/((chunk|file)_index|(from|to)_timestamp)")
+# Dataset totals in meta/info.json are the same in every episode's request and describe none of them.
+LEROBOT_DATASET_TOTALS = frozenset({"total_episodes", "total_frames", "total_tasks", "total_chunks", "total_videos",
+                                    "data_files_size_in_mb", "video_files_size_in_mb", "splits"})
+
+
+def lerobot_note_claims(value, info: bool):
+    """One recorded metadata source as the prompt notes show it: without LeRobot's own derived fields, and without a
+    row left holding nothing but its episode_index."""
+    if info:
+        if not isinstance(value, dict):
+            return value
+        return {k: v for k, v in value.items() if k not in LEROBOT_DATASET_TOTALS} or None
+    if not isinstance(value, list):
+        return value
+    kept = []
+    for claim in value:
+        fields = claim.get("fields") if isinstance(claim, dict) else None
+        if not isinstance(fields, dict):
+            kept.append(claim)
+            continue
+        own = {k: v for k, v in fields.items() if not LEROBOT_DERIVED_FIELD.fullmatch(str(k))}
+        if set(own) - {"episode_index"}:
+            kept.append({**claim, "fields": own})
+    return kept or None
+
+
 def lerobot_metadata(ctx, root):
     """Keep only matching owned rows, plus explicitly unassigned source claims and dataset calibration."""
     from prepare.annotations import original
@@ -6203,18 +6267,40 @@ def lerobot_metadata(ctx, root):
     for key in ('codebase_version', FPS_KEY, 'robot_type', 'data_path', 'video_path', 'chunks_size'):
         if key in info:
             mark_json(represented, info_path, '/' + key)
-    for feature, descriptor in (info.get('features') or {}).items():
+    for key in LEROBOT_INFO_BOOKKEEPING:
+        if key in info:
+            mark_json(represented, info_path, '/' + key)
+    features = info.get('features') or {}
+    for feature, descriptor in features.items():
         if not isinstance(descriptor, dict):
             continue
-        token = str(feature).replace('~', '~0').replace('/', '~1')
-        for key in ('dtype', 'shape', 'names'):
+        token = json_token(feature)
+        for key in ('dtype', 'shape', 'names', FPS_KEY):
             if key in descriptor:
                 mark_json(represented, info_path, '/features/' + token + '/' + key)
         details = descriptor.get('info') or {}
-        for key in ('video.is_depth_map', 'video.codec'):
+        for key in LEROBOT_VIDEO_ENCODING:
             if key in details:
-                escaped = key.replace('~', '~0').replace('/', '~1')
-                mark_json(represented, info_path, '/features/' + token + '/info/' + escaped)
+                mark_json(represented, info_path, '/features/' + token + '/info/' + json_token(key))
+    # LeRobot's own per-episode rows (meta/episodes.jsonl, episodes_stats.jsonl, v3's meta/episodes parquet) hold the
+    # task text the instruction is read from, the row and video spans the reader cuts the episode by, and summary
+    # statistics of declared columns that reach the prompt as rows; none of it is evidence beyond the prepared episode.
+    for path, claims in recorded.items():
+        if path == info_path or not isinstance(claims, list):
+            continue
+        for number, claim in enumerate(claims):
+            if not isinstance(claim, dict) or not isinstance(claim.get('fields'), dict):
+                continue
+            for key in ('source', 'row'):
+                mark_json(represented, path, f'/{number}/{key}')
+            for key, value in claim['fields'].items():
+                pointer = f'/{number}/fields/{json_token(key)}'
+                if lerobot_episode_bookkeeping(key, features):
+                    mark_json(represented, path, pointer)
+                elif key == 'stats' and isinstance(value, dict):
+                    for feature in value:
+                        if feature in features:
+                            mark_json(represented, path, pointer + '/' + json_token(feature))
     if unassigned:
         ctx["unassigned_metadata"] = unassigned
         for claim in unassigned:
@@ -6224,6 +6310,8 @@ def lerobot_metadata(ctx, root):
     prompt_recorded = {}
     for path, value in recorded.items():
         selected = unrepresented_json(value, represented.get('json', {}).get(path, []))
+        if selected is not None:
+            selected = lerobot_note_claims(selected, info=path == info_path)
         if selected is not None:
             prompt_recorded[path] = selected
     notes = {**({"previous recorded notes": previous} if previous else {}),
@@ -10435,8 +10523,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
             for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
                 if ch.id not in decs:
                     decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                if decs[ch.id] is None:
+                    # a channel no installed decoder reads (no schema, or an encoding none knows) is named, never
+                    # dropped without a word
+                    schema_errors[(Path(p), ch.topic)] = (f"no decoder reads {ch.message_encoding or 'its'} messages "
+                                                          f"with {f'the schema {schema.name}' if schema else 'no schema'}")
+                    continue
                 try:
-                    decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                    decoded = decs[ch.id](msg.data)
                 except McapSchemaError as error:
                     schema_errors[(Path(p), ch.topic)] = str(error)
                     continue
@@ -13842,6 +13936,11 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     selected_file = root if root.is_file() and not ARCHIVE_RE.search(root.name) else None
     root = archive_read_root(root, out)
     root, opened, apart = open_archives(root, out.parent / "upload_unpacked")
+    # a ROS 2 bag stored as SQLite (.db3) is the same messages as an MCAP one in another container, so it is copied
+    # into an MCAP and read by the MCAP reader (prepare/ros2_bag.py)
+    from prepare import ros2_bag
+    root, bag_notes = ros2_bag.stage(root, out.parent / "upload_unpacked")
+    opened = opened + bag_notes
     from prepare.hdf_metadata import authorized_sources
     with authorized_sources([*files_under(root), *(p for folder in apart for p in files_under(folder))]):
         return _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_context,

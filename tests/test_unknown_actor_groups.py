@@ -206,7 +206,9 @@ def test_direct_state_writers_retain_native_identity_before_discarding_metadata(
         field = next(f for f in a.inventory() if f["name"] == "action")
         assert field["descriptor"]["recorded_role"] == "target"
         assert field["descriptor"]["action_semantics"] == semantics
-        assert evidence_access.needs_inspection(ep, {}, 'all')
+        # its episodes.jsonl row holds only LeRobot's own columns (index, length, task text), which the prompt
+        # already carries, so like the recording without it, only a changed target opts it in
+        assert not evidence_access.needs_inspection(ep, {}, 'all')
         assert ep['context']['recorded_metadata'][str(root / 'meta/episodes.jsonl')][0]['fields']['tasks'] == ['move']
         observed_only = {**ep, 'context': {k: v for k, v in ep['context'].items() if k != 'recorded_metadata'}}
         assert not evidence_access.needs_inspection(observed_only, {}, 'all')

@@ -83,19 +83,25 @@ def reader_projection_identity(ctx):
     return hashlib.sha256(packed(projected).encode()).hexdigest()
 
 
-def needs_inspection(ep, sensor_evidence, mode='auto'):
-    """Whether a request carries an inspection, by the annotation policy's mode (label/policy.py INSPECTION_MODES).
-    auto and off: a recording with depth or a touch sensor (sensor_evidence's sensors: tactile arrays and cameras,
-    pressure, contact, normal and shear force), which inspection was built for, or with recorded fields that only
-    inspection can reach (source fields no prompt row carries, such as an ego recording's hand poses, and original
-    metadata); a wrist force/torque sensor alone is not touch, and arm signals and actions are not inspection-only, as
-    they reach the prompt as rows; off keeps the record with no selection. all: any recorded field beyond the cameras.
-    Ordinary RGB stays on its path in every mode."""
+# Why a request carries an inspection (inspection_reason), as review's preview and run.json count them.
+INSPECTION_REASONS = {'touch': 'touch sensor', 'unrepresented': 'recorded fields the prompt does not carry',
+                      'all': '--inspection all'}
+
+
+def inspection_reason(ep, sensor_evidence, mode='auto'):
+    """Why a request carries an inspection under the annotation policy's mode (label/policy.py INSPECTION_MODES), a
+    key of INSPECTION_REASONS, or None when it carries none.
+    auto and off: a touch sensor (sensor_evidence's sensors: tactile arrays and cameras, pressure, contact, normal and
+    shear force), whose contact and slip the frames cannot show, or recorded fields that only inspection can reach
+    (source fields no prompt row carries, such as an ego recording's hand poses, and original metadata); off keeps the
+    record with no selection. Depth alone is not a reason, since its pictures already ride in the request beside the
+    frames; a wrist force/torque sensor, arm signals and actions reach the prompt as rows. all: any recorded field
+    beyond the cameras, depth included. Ordinary RGB stays on its path in every mode."""
     # an array is touch whatever its quantity: its regional analysis is owned by the inspection record
     touch = [s for s in sensor_evidence.get('sensors') or []
              if s.get('quantity') != 'force_torque' or s.get('array_evidence')]
-    if bool(ep.get('depth') or ep.get('additional_depth') or touch):
-        return True
+    if touch:
+        return 'touch'
     ctx = ep['context']
     archives = [ctx, *(ctx.get('recorded_sensor_fields') or [])]
     native = any(not detail.get('already_supplied') for archive in archives
@@ -104,16 +110,45 @@ def needs_inspection(ep, sensor_evidence, mode='auto'):
     native = native or any(not field.get('bookkeeping') for archive in archives
                            for field in archive.get('table_field_inventory') or [])
     from label.source_eligibility import needs_extra_evidence
-    metadata = needs_extra_evidence(ctx)
-    if native or metadata:
-        return True
+    # a depth stream's own description (its units, range or encoding) follows the depth, inspected only with all
+    depth_streams = {name for entry in (ctx.get('depth') or {}).values() if isinstance(entry, dict)
+                     for name in (entry.get('source_key'), entry.get('source')) if isinstance(name, str) and name}
+    if native or needs_extra_evidence(ctx, depth_streams):
+        return 'unrepresented'
     if mode != 'all':
-        return False
+        return None
     from prepare.state_contract import redundant_observation_target
     copied_state = redundant_observation_target(ep)
     actions = ep.get('action') is not None and ep['action'].size > 0 and not copied_state
-    return bool(ep.get('depth') or ep.get('additional_depth') or ep.get('signals') or sensor_evidence.get('sensors')
-                or actions or native or metadata or (ctx.get('state_unaligned') and ctx.get('signals')))
+    if (ep.get('depth') or ep.get('additional_depth') or ep.get('signals') or sensor_evidence.get('sensors')
+            or actions or (ctx.get('state_unaligned') and ctx.get('signals'))):
+        return 'all'
+    return None
+
+
+def inspection_plan(folder) -> dict:
+    """How many of a dry run's units (its episode_*.json records in folder) will pay for an evidence selection call,
+    by reason (INSPECTION_REASONS), and how many will not ('none'), so the call never first shows on the bill."""
+    counts = Counter()
+    for path in sorted(Path(folder).glob('episode_*.json')):
+        try:
+            reason = json.loads(path.read_text()).get('inspection')
+        except (OSError, ValueError, AttributeError):
+            reason = 'unknown'
+        counts[INSPECTION_REASONS.get(reason, 'unknown') if reason else 'none'] += 1
+    return dict(sorted(counts.items()))
+
+
+def inspection_plan_lines(plan: dict) -> list[str]:
+    """The plan as printed before a run spends: a total, then one line per reason with its count."""
+    total = sum(plan.values())
+    return ([f"evidence inspection (one extra selection call each): {total - plan.get('none', 0)} of {total} units"]
+            + [f"  {reason}: {n}" for reason, n in plan.items() if reason != 'none'])
+
+
+def needs_inspection(ep, sensor_evidence, mode='auto'):
+    """Whether a request carries an inspection (inspection_reason says why)."""
+    return inspection_reason(ep, sensor_evidence, mode) is not None
 
 
 def clean(value):
