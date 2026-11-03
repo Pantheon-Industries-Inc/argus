@@ -64,6 +64,22 @@ def test_one_side_at_a_time_and_both_steps_keep_one_caption():
     assert 'tilt the tray' in got[9.0] and 'carry the tray' not in got[9.0]
 
 
+def test_a_side_change_without_overlap_keeps_one_caption_row():
+    # the caption looks 0.05s ahead for the next step's start; the step ending there has ended by the same moment.
+    # A real UMI label (left lifts a valve until 13.01s, right approaches it from 13.01s) showed both rows at 13.0s,
+    # a flash of two rows at every change of side, though the two steps never overlap.
+    got = captions([step(12.5, 13.01, 'left', 'lift valve'), step(13.01, 14.01, 'right', 'approach held valve'),
+                    step(14.01, 15.0, 'left', 'turn valve')], [12.9, 12.97, 13.0, 13.96, 13.99, 14.5])
+    for t in (12.97, 13.0):
+        assert got[t].count('vo-row') == 0 and 'approach held valve' in got[t] and 'lift valve' not in got[t], got[t]
+    for t in (13.96, 13.99):
+        assert got[t].count('vo-row') == 0 and 'turn valve' in got[t] and 'approach held valve' not in got[t], got[t]
+    assert 'lift valve' in got[12.9] and 'turn valve' in got[14.5]
+    # a real overlap still gets its two rows up to the moment one side ends
+    got = captions([step(2.0, 6.0, 'left', 'grasp the red cup'), step(3.0, 5.0, 'right', 'place the lid')], [4.9])
+    assert got[4.9].count('class="vo-row"') == 2
+
+
 def test_the_page_draws_the_caption_from_these_functions():
     src = SOURCE.read_text()
     body = src[src.index('  function renderOverlay(t) {'):src.index('  // the score chip shows a subgoal')]
