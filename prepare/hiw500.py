@@ -43,6 +43,7 @@ from label.atomic import write_atomic
 from label.presented import presented_pts
 from prepare import cli
 from prepare import hub
+from prepare import tools
 from prepare.formats import scalar
 from prepare.molmo import _spread_permutation
 
@@ -145,7 +146,7 @@ def cut(pack: Path, base_s: float, n: int, out: Path, key: str, crop: str | None
     count. Each episode gets its own files, so the packs can be deleted once a batch is prepared."""
     import av
     tmp = out.with_suffix(".tmp.mp4")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{base_s:.6f}", "-i", str(pack), "-frames:v", str(n)]
+    subprocess.run([tools.ffmpeg(), "-v", "error", "-y", "-ss", f"{base_s:.6f}", "-i", str(pack), "-frames:v", str(n)]
                    + (["-vf", crop] if crop else []) +
                    ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", str(FPS),
                     "-pix_fmt", "yuv420p", "-an", str(tmp)], check=True)
