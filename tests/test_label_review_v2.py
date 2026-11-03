@@ -124,8 +124,10 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
         return answer({'requests': []} if selection else reply)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
+    # the cap only has to admit one episode's estimate (as the tests below set it); at $1 the handheld estimate sat at
+    # the edge, and a longer face rule (2026-11-03) pushed it over, deferring the episode
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model=harness.DEFAULT_MODEL,
-                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=1.)
+                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=2.)
     assert harness.run_batch([ep], out, **args) == 0
     target = out / (ep.name + '.json')
     result = json.loads(target.read_text())
