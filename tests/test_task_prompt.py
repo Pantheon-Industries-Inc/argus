@@ -213,7 +213,9 @@ HANDHELD_SIDES = """- WHICH HAND EACH GRIPPER CAMERA IS ON. Where the dataset na
 # data issues too, and the timeline describing an event does not replace one
 # (production labels wrote phone use and parked grippers into timeline text with no data issue). The test holds its own
 # copy, as for the edits above. Then (Eric, 2026-11-01): any face at all is medium, tagged face_visible, so the pipeline
-# blurs it rather than dropping the take.
+# blurs it rather than dropping the take. Then (2026-11-03): a detector pass on 15h of in-the-wild takes found 6.4% of the
+# frames with a face outside every face_visible span (bystanders, faces in a mirror, a close face seen briefly), so the
+# rule names those cases and asks for one occurrence per appearance.
 HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of the following is a data issue over its span
   and goes in data_issues even when the timeline already describes it. These severities are minimums set by what the
   dataset may ship, not by the training-impact scale below; apply them even when a model would learn little wrong
@@ -222,7 +224,10 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper taken off and the
   bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. Any
   face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
-  face_visible, over its span; report every one, and anything that may be a face.
+  face_visible, over its span; report every one, and anything that may be a face. That includes a person in the
+  background or passing by, a face seen in a mirror, window or screen, one cut off at a frame edge, one in view
+  for under a second, and the operator's own face when a wrist camera turns toward them. A face seen again after
+  a gap is another occurrence with its own time; a span never stands for faces seen outside it.
   Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or
   end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how
   the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task
