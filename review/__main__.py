@@ -1,7 +1,7 @@
 """Review your own robot data in one command: read it, check it, label it and build its board.
 
     python -m review --data PATH_OR_URL --rig teleop_arms|handheld_gripper|ego_head --out JOB \\
-        [--dataset NAME] [--free] [--cap 20] [--concurrency 8] [--max-minutes M] [--grouping JSON]
+        [--dataset NAME] [--free] [--cap 20] [--concurrency N] [--max-minutes M] [--grouping JSON]
         [--inspection auto|all|off] [--field-dictionary on|off]
 
 PATH_OR_URL is a folder, a file or an archive, or an http(s) URL of a file or an archive, which is downloaded into
@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from label import policy
+from label import inflight, policy
 from label.atomic import write_atomic
 
 REPO = Path(__file__).resolve().parent.parent
@@ -326,7 +326,7 @@ def main() -> int:
     ap.add_argument("--dataset", default=None, help="name shown on the board and told to the model")
     ap.add_argument("--free", action="store_true", help="stop after the dry run (no model calls)")
     ap.add_argument("--cap", type=float, default=20.0, help="most the labelling may spend, in USD (default 20)")
-    ap.add_argument("--concurrency", type=int, default=8, help="requests in flight (default 8)")
+    inflight.add_argument(ap, "labelling requests")
     ap.add_argument("--jobs", type=int, default=2, help="decode processes per step (default 2)")
     ap.add_argument("--timeout", type=int, default=None,
                     help="seconds a labelling request's connection may carry no bytes before it is closed as dead "

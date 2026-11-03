@@ -68,6 +68,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from label import inflight
+
 VERSION = 1
 PROMPT_VERSION = 3
 LISTS = ("data_issues", "operator_mistakes")
@@ -654,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cap", type=float, default=5.0, help="most the calls may spend, in USD (default 5)")
     ap.add_argument("--model", default=None, help="default: the recording's labelling model (Astra for --dump)")
     ap.add_argument("--reasoning", default=None, help=f"default: {REASONING}")
-    ap.add_argument("--concurrency", type=int, default=6)
+    inflight.add_argument(ap)
     ap.add_argument("--dry-run", action="store_true", help="count and price the candidates; ask nothing")
     a = ap.parse_args(argv)
     from label import harness
@@ -688,7 +690,7 @@ def main(argv: list[str] | None = None) -> int:
             rows[name] = row
         return row
 
-    with ThreadPoolExecutor(max(1, a.concurrency)) as pool:
+    with ThreadPoolExecutor(inflight.in_flight(a.concurrency, len(work))) as pool:
         list(pool.map(one, work))
     ordered = [rows[name] for name, _ in work]
     with open(a.out / "results.jsonl", "w") as stream:
