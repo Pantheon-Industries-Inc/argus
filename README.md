@@ -7,7 +7,7 @@
 
 <table align="center">
   <tr>
-    <td><strong><a href="https://pantheon.inc/research/argus">Blog</a> | <a href="https://pantheon.inc/data-board">Dashboard</a> | <a href="https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100">DiverseUMI-100</a></strong></td>
+    <td><strong><a href="https://pantheon.inc/research/argus">Blog</a> | <a href="https://pantheon.inc/data-board">Dashboard</a> | <a href="https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100">DiverseUMI-sample100</a></strong></td>
   </tr>
 </table>
 
@@ -16,9 +16,9 @@
 
 ## Updates
 
-<details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
+<details><summary><b>We release DiverseUMI-sample100, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
-We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
+We released [DiverseUMI-sample100](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
 
 </details>
 
@@ -362,7 +362,7 @@ The capture checks in [`checks/vendor/public_dataset_adapter_qc.py`](checks/vend
 
 ## Licenses
 
-The code is Apache-2.0 ([`LICENSE`](LICENSE)), and the few files that carry material under another license are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). Full datasets and optional components are downloaded at run time; the architecture chart includes attributed image excerpts. The labels Pantheon publishes on the data dashboard, in its downloads and in the release are licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Anyone may use them for any purpose with credit to Pantheon. DiverseUMI, labels included, is released under the Pantheon Commercial Use License, Version 1.0. The footage they describe keeps its dataset's license.
+The code is Apache-2.0 ([`LICENSE`](LICENSE)), and the few files that carry material under another license are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). Full datasets and optional components are downloaded at run time; the architecture chart includes attributed image excerpts. The labels Pantheon publishes on the data dashboard, in its downloads and in the release are licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Anyone may use them for any purpose with credit to Pantheon. DiverseUMI-sample100, labels included, is released under the Pantheon Commercial Use License, Version 1.0. The footage they describe keeps its dataset's license.
 
 <details>
 <summary>Dataset and optional component licenses</summary>
