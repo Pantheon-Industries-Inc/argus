@@ -105,6 +105,33 @@ def test_resume_gets_the_allowance_the_killed_calls_did_not_spend(tmp_path, monk
     assert float(cmd[cmd.index('--max-spend') + 1]) == pytest.approx(3.0 - spent)
 
 
+def test_resume_of_a_run_cut_into_parts_settles_the_holds_in_its_parts(tmp_path, monkeypatch):
+    # a run that cut long recordings keeps its harness replies, and so its killed calls, in run/parts
+    # (label/finalize.py harness_out); run/out holds only the stitched results
+    from tests.test_label import _argv, _fake_harness, _slice
+    sl = _slice(tmp_path)
+    for name in ('episode_000032', 'episode_000033', 'episode_000034'):
+        shutil.copytree(sl / 'episode_a', sl / name)
+    run = tmp_path / 'runs' / 'd' / '20261102-0142_full_abc1234'
+    _go2_out(run / 'parts')
+    pieces = {'episode_000033': ['episode_000033'], 'episode_000034': ['episode_000034']}
+    (run / 'run.json').write_text(json.dumps({'run_id': run.name, 'kind': 'full', 'dataset': 'd', 'slice': str(sl),
+                                              'code': 'abc1234', 'cap_usd': 3.0, 'status': 'running',
+                                              'pieces': pieces}))
+    (run / 'log.txt').write_text('before the kill\n')
+    lookup, asked = _openrouter({'gen-33-attempt1': FINISHED, 'gen-34-attempt1': CANCELLED})
+    monkeypatch.setattr(harness, 'openrouter_generation', lookup, raising=False)
+    monkeypatch.setattr(lrun, 'commit', lambda: ('abc1234', False))
+    monkeypatch.setattr(lrun, 'plan_pieces', lambda run, slice_dir, extra: pieces)
+    monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-a')
+    _fake_harness(monkeypatch, [], cost=0.0)
+    _argv(monkeypatch, '--dataset', 'd', '--episodes', sl, '--kind', 'full', '--resume', run, '--why', 'app stopped')
+    lrun.main()
+    assert {'gen-33-attempt1', 'gen-34-attempt1'} <= set(asked)
+    spent = json.loads((run / 'run.json').read_text())['resumes'][0]['spent_before']
+    assert spent == pytest.approx(3.1239959 - (0.865246 - 0.19) - (0.860681 - 0.013424), abs=1e-6)
+
+
 class _SlowProvider:
     """Answers the way OpenRouter does: headers with X-Generation-Id at once, then nothing until the model is done."""
 
