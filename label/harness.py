@@ -1176,15 +1176,24 @@ _GRIPPER = r'(?:(?:left|right|other|one|a|the|both|his|her|their)\s+)*grippers?'
 OTHER_ACTIVITY = {
     'phone': re.compile(r'\b(?:smart|cell\s?|mobile\s)?phones?\b(?!-like)', re.I),
     'other_person': re.compile(r'\b(?:another|other|second|third|different)\s+(?:person|people|operator|individual|'
-                               r'human|worker)s?\b|\bsomeone\b|\banyone\s+else\b|\bbystanders?\b|\bhelpers?\b', re.I),
+                               r'human|worker)s?\b|\bsomeone\b|\banyone\s+else\b|\bbystanders?\b|\bhelpers?\b'
+                               r'|\bexternal(?:ly)?[- ]assist\w*', re.I),
     'bare_hand': re.compile(r'\bbare[- ]?hand(?:s|ed)?\b|\b(?:fingers?|hands?)\s+(?:clearly\s+)?(?:fiddl|mov|push|'
                             r'slid|pick|grab|reposition|adjust|handl|touch)\w*|\bby\s+hand\b', re.I),
     'parked_gripper': re.compile(
         r'\b(?:set|sets|setting|put|puts|putting|lay|lays|laid|laying|place|places|placed|placing|rest|rests|'
-        r'rested|resting|park|parks|parked|parking)\s+(?:down\s+)?' + _GRIPPER + r'(?:\s+(?:down|aside))?\b'
+        r'rested|resting|park|parks|parked|parking)[\s-]+(?:down\s+)?' + _GRIPPER + r'(?:\s+(?:down|aside))?\b'
         r'|\b(?:take|takes|took|taken|taking|remove|removes|removed|removing)\s+(?:off\s+)?' + _GRIPPER +
         r'|\bgrippers?\s+(?:is\s+|are\s+|was\s+|were\s+|being\s+|lies\s+|lying\s+|sits\s+|sitting\s+|left\s+)?'
-        r'(?:set\s+down|put\s+down|laid\s+down|parked|taken\s+off|removed|aside|down\s+on)\b', re.I),
+        r'(?:set\s+down|put\s+down|laid\s+down|parked|taken\s+off|removed|aside|down\s+on)\b'
+        # the same states through more linking verbs and an adverb ("remains parked", "has been set down", "is visibly
+        # parked"), and a gripper resting on a surface ("rests on the table", "remains on the table"); a gripper that
+        # remains aside, raised or near the table is held still, which is idle
+        r'|\bgrippers?\s+(?:(?:is|are|was|were|being|been|has|have|had|remains?|remained|remaining|stays?|stayed|'
+        r'staying)\s+)+(?:\w+ly\s+)?(?:set\s+down|put\s+down|laid\s+down|parked|taken\s+off|removed)\b'
+        r'|\bgrippers?\s+(?:(?:is|are|was|were|has|have|had|been|remains?|remained|remaining|stays?|stayed|staying)\s+)*'
+        r'(?:(?:rests?|rested|resting|lies|lying|sits|sitting)\s+on|(?:remains?|remained|stays?|stayed|left|lies|'
+        r'lying|sits|sitting)\s+on\s+the\s+(?:table|tabletop|surface|mat|floor|desk|bench))\b', re.I),
 }
 FOB = re.compile(r'\bfob\b', re.I)
 
