@@ -225,7 +225,8 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. Any
   face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
   face_visible, over its span; report every one, and anything that may be a face: bystanders, faces in a mirror
-  or screen, at a frame edge or seen for under a second, and the operator's own; each reappearance is an occurrence.
+  or screen, at a frame edge or seen for under a second, and the operator's own; report each reappearance as
+  its own data issue.
   Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or
   end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how
   the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task
