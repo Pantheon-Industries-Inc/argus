@@ -81,7 +81,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. OpenRouter requests carry an app attribution header ([`OPENROUTER_APP_HEADERS`](label/harness.py)), so their usage counts toward Argus in OpenRouter's app rankings. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
 
 Annotate a dataset under a spending cap, then open its board. Add [`--free`](review/__main__.py) to build the same requests without model calls.
 
