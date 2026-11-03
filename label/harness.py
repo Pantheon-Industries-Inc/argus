@@ -168,7 +168,7 @@ def request_body_sha256() -> str:
 
 
 def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
-               *, attempts: int = 6, pricing_quote=None) -> dict:
+               *, attempts: int = 6, pricing_quote=None, on_generation_id=None) -> dict:
     if not is_openrouter_key(api_key):
         return _call_openai(content, model, reasoning, api_key, max_tokens, timeout, attempts=attempts)
     if content and content[0].get("type") == "text" and len(content[0].get("text", "")) > 4000:
@@ -187,14 +187,15 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         if pricing_quote.get('model') != model:
             raise ValueError('pricing quote does not match the requested model')
         body['provider'] = {'max_price': pricing_quote['provider_max_price']}
-    return _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts)
+    return _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
 
 
 def call_model_once(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
-                    *, pricing_quote=None) -> dict:
+                    *, pricing_quote=None, on_generation_id=None) -> dict:
     """One HTTP attempt for a paid call. A failed dispatch may already have been billed."""
     return call_model(content, model, reasoning, api_key, max_tokens, timeout, attempts=1,
-                      **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
+                      **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}),
+                      **({'on_generation_id': on_generation_id} if on_generation_id is not None else {}))
 
 
 def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
@@ -333,12 +334,17 @@ def silent_connection_limit(timeout) -> float:
     return max(float(timeout or 0), float(SILENT_CONNECTION_LIMIT_S))
 
 
-def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6) -> dict:
+def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6, on_generation_id=None) -> dict:
     """POST one request. attempts bounds retries of failures whose billing is unknown, so a paid call passes 1 and
     is never replayed after it may have been billed. A failure that provably cost nothing (the request never fully
     left the machine, or the provider answered with an error status) is retried up to UNPAID_ATTEMPTS times, and
     when it persists it raises DispatchError with verified_unpaid True, so its caller releases the reservation and a
-    plain resume tries the unit again."""
+    plain resume tries the unit again.
+
+    on_generation_id, when given, is called with OpenRouter's X-Generation-Id as soon as the response headers
+    arrive. OpenRouter sends the headers within about a second of the request and the body only when the model has
+    finished (measured 2026-11-02: 0.4s and 15s), so a caller can record which generation it is paying for even when
+    the process is killed before the reply comes (resolve_unanswered_charges)."""
     if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
         raise ValueError("HTTP attempts must be a positive integer")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
@@ -355,6 +361,12 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             # was sent (waiting for or reading the response) propagates as itself. The socket timeout bounds each
             # wait for bytes, never the whole reply, so a reply that keeps arriving is never cut off.
             with urllib.request.urlopen(req, timeout=silence) as r:
+                generation = (getattr(r, 'headers', None) or {}).get('X-Generation-Id')
+                if generation and on_generation_id is not None:
+                    try:
+                        on_generation_id(generation)
+                    except Exception as error:   # the id only narrows a hold later; never lose the reply over it
+                        print(f'WARN could not record generation {generation}: {error}', file=sys.stderr, flush=True)
                 resp = json.loads(r.read().decode())
             if not resp.get("choices"):
                 # HTTP 200 carrying an error body and no completion: fail loudly, never record an empty parse
@@ -879,6 +891,85 @@ def persist_final_claim(path: Path, claim: dict) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+OPENROUTER_GENERATION_URL = 'https://openrouter.ai/api/v1/generation'
+
+
+def openrouter_generation(generation_id: str, keys, timeout: int = 30) -> dict | None:
+    """OpenRouter's record of one finished generation, or None when no key's account has it (yet) or the lookup
+    failed. A request our client closed early is a finished generation too: OpenRouter stops the model, bills the
+    tokens it wrote and records cancelled true (measured 2026-11-02: cut after 8s, 1,339 tokens, $0.0134)."""
+    from urllib.parse import quote
+    for key in keys or []:
+        if not is_openrouter_key(key):
+            continue
+        req = urllib.request.Request(f'{OPENROUTER_GENERATION_URL}?id={quote(generation_id)}',
+                                     headers={'Authorization': f'Bearer {key}'})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode()).get('data')
+        except (OSError, ValueError, http.client.HTTPException, AttributeError):
+            continue
+        if isinstance(data, dict) and data.get('id') == generation_id:
+            return data
+    return None
+
+
+def _settled_generation_cost(data) -> float | None:
+    """What a finished generation was billed. A record that is neither finished nor cancelled settles nothing."""
+    if not isinstance(data, dict) or not (data.get('cancelled') is True or data.get('finish_reason') is not None):
+        return None
+    cost = data.get('total_cost')
+    return float(cost) if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None
+
+
+def resolve_unanswered_charges(out_dir: Path, keys, *, lookup=None) -> dict:
+    """Replace the hold of each final call that never got its reply with what OpenRouter billed for it.
+
+    A claimed or unverified final call holds final_cost_bound, the price of its whole prompt and its full output
+    limit, because the provider may still bill it. When the claim names its generation (final_generation_id, saved
+    from the response headers) and OpenRouter has that generation, the hold becomes its billed total_cost, in the
+    claim and in every later receipt's final_cost_history. A call with no saved id, or one OpenRouter has no record of,
+    keeps its full hold: a missing record may only be late."""
+    out_dir, lookup = Path(out_dir), lookup or openrouter_generation
+    found, resolved, released, unresolved = {}, 0, 0.0, 0
+    for path in sorted(out_dir.glob('*episode_*.json')):
+        if not path.name.removeprefix('failed_').removeprefix('noreply_').startswith('episode_'):
+            continue
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        history = record.get('final_cost_history')
+        changed = False
+        for invoice in [record] + (history if isinstance(history, list) else []):
+            if (not isinstance(invoice, dict) or invoice.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+                    or invoice.get('final_reserved_source') == 'generation lookup'):
+                continue
+            generation = invoice.get('final_generation_id')
+            if not isinstance(generation, str) or not generation:
+                unresolved += 1
+                continue
+            if generation not in found:
+                found[generation] = lookup(generation, keys)
+            cost = _settled_generation_cost(found[generation])
+            if cost is None:
+                unresolved += 1
+                continue
+            hold = invoice.get('final_reserved_usd')
+            released += (float(hold) if type(hold) in (int, float) else 0.0) - cost
+            data = found[generation]
+            invoice.update(final_reserved_usd=cost, final_reserved_source='generation lookup',
+                           final_generation_lookup={k: data.get(k) for k in (
+                               'total_cost', 'cancelled', 'finish_reason', 'tokens_completion')})
+            resolved += 1
+            changed = True
+        if changed:
+            write_atomic(path, record)
+    return {'resolved': resolved, 'released_usd': released, 'unresolved': unresolved}
 
 
 def has_dispatch_receipt(record: dict) -> bool:
@@ -1639,10 +1730,16 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             write_atomic(claim_path, {**claim, "no_reply": str(error),
                                       "final_dispatch_outcome": "not dispatched", "final_reserved_usd": 0.0})
             raise
+    def record_generation(generation_id):
+        # OpenRouter is processing the request: name its generation in the claim, so a run killed before the reply
+        # can later read what OpenRouter billed for it instead of holding the full bound forever
+        claim['final_generation_id'] = generation_id
+        persist_final_claim(claim_path, claim)
     t_start = time.time()
     try:
         resp = call_model_once(content, model, reasoning, api_key, max_tokens, timeout,
-            **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
+            **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}),
+            on_generation_id=record_generation)
     except DispatchError as error:
         if error.verified_unpaid:
             fields['config']['request_images']['dispatch_status'] = 'not_dispatched'
@@ -1949,6 +2046,9 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
     out_dir.mkdir(parents=True, exist_ok=True)
     pool = KeyPool(keys)
     dry = bool(label_kw.get("dry_run"))
+    if not dry:
+        # a unit sent again carries its killed attempt's charge, so settle those holds before reserving anything
+        resolve_unanswered_charges(out_dir, keys)
     retry_received = set(retry_received or [])
     if force and retry_received:
         raise ValueError('--force and --retry-received cannot be combined')
