@@ -4234,14 +4234,15 @@ function buildPhrase(e) {
 // The steps the caption over the video shows at time t, from windows {t0, t1, ev} in order of start: the step that
 // started last among those still running (the one that started last when none runs), and while a left and a right
 // step both run, the two sides doing different things at once, one row for each side, left first. A step of both
-// sides running at t is shown alone.
+// sides running at t is shown alone. Both a step's start and its end are judged at t + 0.05s, so a step that ends
+// exactly where the other side's next one starts never shows beside it.
 function captionSteps(windows, t) {
   let last = null, running = null;
-  const side = {};
+  const side = {}, at = t + 0.05;
   for (const s of windows) {
-    if (s.t0 > t + 0.05) break;
+    if (s.t0 > at) break;
     last = s;
-    if (s.t1 > t) {
+    if (s.t1 > at) {
       running = s;
       if (s.ev.arm === 'left' || s.ev.arm === 'right') side[s.ev.arm] = s;
     }
