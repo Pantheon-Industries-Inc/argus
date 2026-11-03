@@ -69,18 +69,29 @@ NEGATION = re.compile(r"\b(?:not|no|without|never|nor)\b|n't\b", re.I)
 CLAUSE = re.compile(r'[.;!?](?=\s|$)')
 
 
+def _counts(kind: str, clause: str, m: re.Match) -> bool:
+    """Whether one match of a kind counts. A phone or a gripper set down in the same comma-separated part as the
+    recording's fob is the fob being pressed; another person counts unless their part, from the person on, denies
+    what they do ("the other person moves beside the workspace without touching", not "the grippers do not move
+    while another person adjusts the bowl")."""
+    start = clause.rfind(',', 0, m.start()) + 1
+    end = clause.find(',', m.end())
+    end = len(clause) if end < 0 else end
+    if kind in ('phone', 'parked_gripper'):
+        return not FOB.search(clause[start:end])
+    if kind == 'other_person':
+        return not NEGATION.search(clause[m.start():end])
+    return True
+
+
 def other_activity(row: dict) -> list[str]:
-    """The kinds of other activity (OTHER_ACTIVITY) an issue's text and evidence describe, read clause by clause: in a
-    clause that names the recording's fob, a phone or a gripper set down is the fob being pressed, not one of them, and
-    another person counts only in a clause that does not deny what they do."""
+    """The kinds of other activity (OTHER_ACTIVITY) an issue's text and evidence describe, read clause by clause, each
+    match judged where it stands (_counts)."""
     text = ' '.join(v for v in (row.get('issue'), row.get('evidence')) if isinstance(v, str))
     found = set()
     for clause in CLAUSE.split(text):
-        fob, denied = bool(FOB.search(clause)), bool(NEGATION.search(clause))
         for kind, pattern in OTHER_ACTIVITY.items():
-            if kind in found or (fob and kind in ('phone', 'parked_gripper')) or (denied and kind == 'other_person'):
-                continue
-            if pattern.search(clause):
+            if kind not in found and any(_counts(kind, clause, m) for m in pattern.finditer(clause)):
                 found.add(kind)
     return [kind for kind in OTHER_ACTIVITY if kind in found]
 
