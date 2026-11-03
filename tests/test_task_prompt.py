@@ -44,7 +44,7 @@ def main(rig, recorded=True):
     return text
 
 
-# An approved edit (Eric, 2026-11-03) to every rig's timeline note: over 1,043 real steps of 12 UMI windows only 9
+# An approved edit (2026-11-03) to every rig's timeline note: over 1,043 real steps of 12 UMI windows only 9
 # left and right steps overlapped in time, so when the two grippers did different things at once (the left grasps one
 # object while the right grasps another) usually only one of them was written. Each then gets its own step; one at
 # rest while the other works gets none, an idle moment of both is written as before, and work on one object stays

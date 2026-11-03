@@ -8007,9 +8007,9 @@ function renderEp(d, opts) {
   let _handSig = null;
   function renderHands(t) {
     if (!isEgo || !exoCell) return;   // head cameras only: a wrist camera is bolted to its gripper
-    // active segment (same rule as the bottom overlay)
-    let ev = null;
-    for (const s of segWindows) { if (s.t0 <= t + 0.05) ev = s.ev; else break; }
+    // the step the bottom caption shows (captionSteps); with a row per side, the one that started last
+    const rows = captionSteps(segWindows, t);
+    const ev = rows.length ? rows.reduce((a, s) => (s.t0 >= a.t0 ? s : a)).ev : null;
     const hidden = ev ? ev.hands_visible === false : false;
     const gloves = (ev && ev.hands_visible !== false && !isBare(ev.hands_wearing)) ? ev.hands_wearing : '';
     const sig = hidden ? 'H' : (gloves ? 'G:' + gloves : '');
