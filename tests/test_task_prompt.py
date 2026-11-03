@@ -44,18 +44,21 @@ def main(rig, recorded=True):
     return text
 
 
-# An approved edit (Eric, 2026-11-03) to the timeline note of the two-handed rigs: over 1,043 real steps of 12 UMI
-# windows only 9 left and right steps overlapped in time, so when the two grippers did different things at once
-# (the left grasps one object while the right grasps another) usually only one of them was written. Each gripper (or
-# hand) now gets its own step only then; one at rest or holding still gets none, and work on one object stays "both",
-# so the timeline grows only where the two really act apart. The test holds its own copy, as for the edits below.
+# An approved edit (Eric, 2026-11-03) to every rig's timeline note: over 1,043 real steps of 12 UMI windows only 9
+# left and right steps overlapped in time, so when the two grippers did different things at once (the left grasps one
+# object while the right grasps another) usually only one of them was written. Each then gets its own step; one at
+# rest while the other works gets none, an idle moment of both is written as before, and work on one object stays
+# "both". It is worded conditionally, because a one-armed rig gets the same text. The test holds its own copy, as for
+# the edits below.
 TWO_ACTORS_BEFORE = '- Keep values terse: short action/object strings'
-TWO_ACTORS = {rig: f"""- The two {actor}s get separate steps only when they do DIFFERENT task-relevant actions at the same
-  moment, for example the left {actor} grasps one object while the right {actor} places another: then write one
-  step for each {actor}, with overlapping times. A {actor} at rest, parked or merely holding still gets no step of
-  its own, and work by both {actor}s on one object stays one "both" step. This adds no other steps: the
-  granularity above is unchanged.
-""" for rig, actor in (('handheld_gripper', 'gripper'), ('ego_head', 'hand'))}
+ACTOR = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}
+TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions, for example the left
+  {actor} grasps one object while the right {actor} places another, write one step for each {actor}, with
+  overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no step of its
+  own; when none works, the idle step is written as before. Two {actor}s working on one object stay one "both"
+  step, for example the left {actor} holds a jar while the right {actor} unscrews its lid. This adds no other
+  steps: the granularity above is unchanged.
+""" for rig, actor in ACTOR.items()}
 
 
 # An approved edit to the shared contribution rule (Eric, 2026-10-23): runs of missed grasps on a fine object were
@@ -408,14 +411,34 @@ def test_a_task_standing_in_for_the_instruction_is_also_judged_on_its_own_work(r
     assert 'own_outcome' not in text('ego_head', True, recorded, steps)
 
 
-@pytest.mark.parametrize('rig', ['handheld_gripper', 'ego_head'])
+@pytest.mark.parametrize('rig', RIGS)
 @pytest.mark.parametrize('given', [True, False])
-def test_two_handed_rigs_write_a_step_per_side_only_when_the_sides_act_apart(rig, given):
-    """The timeline note of a two-handed rig says when each side gets its own overlapping step, and that a side at
-    rest or holding still gets none; teleop arms keep main's note."""
+def test_each_side_gets_its_own_step_only_while_the_two_act_apart(rig, given):
+    """Every rig's timeline note says when each side gets its own overlapping step, that a side at rest while the other
+    works gets none, that an idle moment of both is still written, and that work on one object stays one "both"
+    step; it sits in the granularity note."""
     s = flat(text(rig, given))
-    actor = {'handheld_gripper': 'gripper', 'ego_head': 'hand'}[rig]
+    actor = ACTOR[rig]
     assert flat(TWO_ACTORS[rig]) in s
     assert f'write one step for each {actor}, with overlapping times' in s
-    assert s.index('TIMELINE GRANULARITY') < s.index(f'The two {actor}s get separate steps')
-    assert 'get separate steps only when' not in flat(text('teleop_arms', given))
+    assert 'when none works, the idle step is written as before' in s
+    assert f'holds a jar while the right {actor} unscrews its lid' in s
+    assert s.index('TIMELINE GRANULARITY') < s.index(f'When two {actor}s act at the same moment')
+
+
+@pytest.mark.parametrize('rig', RIGS)
+def test_a_one_armed_rig_is_never_told_it_has_two(rig):
+    """No field gives the number of arms (a single-arm FastUMI take is handheld_gripper, a one-arm teleop robot is
+    teleop_arms), so the rule is conditional and no sentence of the prompt presumes two."""
+    s = flat(text(rig, False))
+    actor = ACTOR[rig]
+    assert f'The two {actor}s' not in s and f'the two {actor}s' not in s
+    assert f'When two {actor}s act at the same moment' in s
+
+
+def test_a_robot_with_no_arms_has_no_such_rule_and_a_humanoid_keeps_it():
+    legged = flat(prompts.fixed_instructions('teleop_arms', has_instruction=False, whole_body='legged_no_arms'))
+    humanoid = flat(prompts.fixed_instructions('teleop_arms', has_instruction=False, whole_body='humanoid'))
+    assert 'When two arms act at the same moment' not in legged
+    assert 'Every timeline step has arm "body"' in legged
+    assert flat(TWO_ACTORS['teleop_arms']) in humanoid
