@@ -34,6 +34,7 @@ from label.harness import (annotation_complete, annotation_record, execution_loc
                            resolve_unanswered_charges)
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.atomic import write_atomic
+from label import inflight
 from prepare.frame_rate import episode_seconds
 
 REPO = Path(__file__).resolve().parent.parent
@@ -223,7 +224,7 @@ def main() -> int:
     ap.add_argument("--cap", type=float, default=0.0, help="most this run may spend in USD (required unless dry); "
                                                            "with --resume, a new cap for the run")
     ap.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
-    ap.add_argument("--concurrency", type=int, default=16, help="episodes in flight (default 16)")
+    inflight.add_argument(ap, "episodes")
     ap.add_argument("--note", default="", help="free text recorded in run.json")
     ap.add_argument("--label", default="", help="appended to the run id, e.g. the model of a comparison run")
     ap.add_argument("--resume", type=Path, default=None, help="finish this killed run")
