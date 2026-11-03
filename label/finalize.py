@@ -68,6 +68,9 @@ def finalize(run: Path, info: dict, slice_dir: Path, rc: int) -> None:
                  "cost_usd": cost, "reserved_cost_usd": reserved, "cost_complete": complete, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
                  "episodes_failed": int(m.get("failed", 0)),
                  "footage_hours": round(hours, 3), "usd_per_hour": round(cost / hours, 2) if hours and cost else None})
+    if info.get("kind") == "dry" and harness_out(run, info).exists():
+        from label.evidence_access import inspection_plan
+        info["inspection"] = inspection_plan(harness_out(run, info))
     write_atomic(run / "run.json", info, indent=1)
 
 
