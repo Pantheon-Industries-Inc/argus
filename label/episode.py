@@ -2671,6 +2671,12 @@ def _intro_head(ep: dict) -> str:
     robot = ctx.get("robot_type")
     what = f" ({robot})" if robot else ""
     who = n["who"]
+    if r == "teleop_arms" and ctx.get("whole_body") == "legged_no_arms":
+        who = ("the robot's whole body (walking, turning, stopping) is the acting part, since it has no arms; the "
+               "profile alone does not establish the control method")
+    elif r == "teleop_arms" and ctx.get("whole_body"):
+        who = ("the robot's arms and its whole body (walking, turning, crouching) are the acting parts; the profile "
+               "alone does not establish the control method")
     kind_of = ("one clip of human activity from the {d} dataset, collected to train robots and world "
                "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
     window = recording_window_note(ep)
@@ -2928,7 +2934,7 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     given = task_claims(ctx)["instruction"] or ""
     blocks = present_blocks(ep, pl) if blocks is None else blocks
     fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks),
-                                      has_steps=has_steps(ctx))
+                                      has_steps=has_steps(ctx), whole_body=ctx.get("whole_body") or False)
     fixed += prompts.example_block(r, example_dir)
     if any(block.name == 'sensor_evidence' for block in blocks):
         fixed = (prompts.EVIDENCE_CONTRACT + '\nVISUAL ANNOTATION CONTRACT\n' + fixed

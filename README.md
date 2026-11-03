@@ -60,7 +60,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, ROS 2 bags stored as SQLite (.db3, read by the MCAP reader), HDF5, video files and folders |
 | Archives | ZIP and TAR, plain or compressed with gzip, bzip2 or xz |
 | Sidecar metadata | JSON, JSON Lines, CSV, TSV, text and Markdown notes, and LeRobot's Parquet and JSON Lines annotation tables |
-| Public dataset adapters | Nine, each downloading and preparing a public dataset |
+| Public dataset adapters | Ten, each downloading and preparing a public dataset |
 
 | Available evidence | How it contributes |
 |---|---|
@@ -193,9 +193,9 @@ uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind d
 uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind full --cap 20
 ```
 
-The staged commands do not interpret fields. Like `review`, [`label`](label/run.py) cuts a recording longer than one request allows (about 450s at default sampling) into parts at still moments, labels the parts and stitches their labels back onto one timeline, so the run's output still holds one result per recording. `review` also limits a URL download to 20 GiB and 24 hours. Besides `prepare folder`, [`prepare lerobot`](prepare/__main__.py) and [`prepare videos`](prepare/__main__.py) read your own data. The staged commands list their own options with `--help`, and `label` passes the harness options after [`--`](label/run.py), such as [`--max-tokens`](label/harness.py), [`--timeout`](label/harness.py), [`--cell-w`](label/harness.py) for the grid cell width and [`--max-spend`](label/harness.py) for a remaining allowance.
+The staged commands do not interpret fields. Like `review`, [`label`](label/run.py) cuts a recording longer than one request allows (about 450s at default sampling) into parts at still moments, labels the parts and stitches their labels back onto one timeline, so the run's output still holds one result per recording. `review` also limits a URL download to 20 GiB and 24 hours. Besides `prepare folder`, [`prepare lerobot`](prepare/__main__.py) and [`prepare videos`](prepare/__main__.py) read your own data. A LeRobot dataset of a robot that moves its whole body is prepared with [`--whole-body`](prepare/lerobot.py): `humanoid` for a legged robot with arms, `legged_no_arms` for one with none, such as a quadruped. Its labels then give walks and turns to the robot's body and use the whole-body wording of [`label/prompts.py`](label/prompts.py), and [`--robot`](prepare/lerobot.py) replaces the robot description the dataset's metadata gives. The staged commands list their own options with `--help`, and `label` passes the harness options after [`--`](label/run.py), such as [`--max-tokens`](label/harness.py), [`--timeout`](label/harness.py), [`--cell-w`](label/harness.py) for the grid cell width and [`--max-spend`](label/harness.py) for a remaining allowance.
 
-The public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py) and [`openaoe`](prepare/openaoe.py), and [`configs/slices/`](configs/slices/) records the published selections. The generic readers keep source fields and encoded timestamps, and use publisher metadata to align episode frames with sensor samples. They do not apply a corpus release's cropping or task selection.
+The public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py), [`openaoe`](prepare/openaoe.py) and [`hiw500`](prepare/hiw500.py), and [`configs/slices/`](configs/slices/) records the published selections. The generic readers keep source fields and encoded timestamps, and use publisher metadata to align episode frames with sensor samples. They do not apply a corpus release's cropping or task selection.
 
 The MCAP reader falls back to a common recorder arrival clock when capture clocks cannot be shared, and arrival timing does not establish physical synchronization. A field whose clock cannot be related to the footage remains available as untimed source evidence, except an episode's own sensor file, which Argus places by assuming it starts with the video and marks as an assumption. Such a value shares no clock with the cameras. The request gives only its range over the recording, never a reading at a sampled frame, over a still span or as a contact's timing, and the board lists it by range instead of drawing it on the timeline. [`prepare/signal_alignment.py`](prepare/signal_alignment.py) makes this decision once for the request, the checks, the evidence and the board.
 
@@ -302,8 +302,10 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`prepare galaxea prepare`](prepare/galaxea.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
 | [`prepare galaxea sample`](prepare/galaxea.py) | `--out`, `--list`, `--raw`, `--hours`, `--jobs`, `--seed` |
 | [`prepare genhumanego prepare`](prepare/genhumanego.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
+| [`prepare hiw500 sample`](prepare/hiw500.py) | `--list`, `--raw`, `--hours` |
+| [`prepare hiw500 prepare`](prepare/hiw500.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
 | [`prepare habit prepare`](prepare/habit.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
-| [`prepare lerobot prepare`](prepare/lerobot.py) | `--episodes`, `--out`, `--jobs`, `--force`, `--root`, `--rig`, `--dataset` |
+| [`prepare lerobot prepare`](prepare/lerobot.py) | `--episodes`, `--out`, `--jobs`, `--force`, `--root`, `--rig`, `--dataset`, `--whole-body`, `--robot` |
 | [`prepare molmo prepare`](prepare/molmo.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
 | [`prepare molmo sample`](prepare/molmo.py) | `--list`, `--raw`, `--hours`, `--mode`, `--per-task-cap-hours` |
 | [`prepare openaoe prepare`](prepare/openaoe.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
@@ -383,6 +385,7 @@ The code is Apache-2.0 ([`LICENSE`](LICENSE)), and the few files that carry mate
 | Egocentric-100K (Build AI) | Apache-2.0 | [builddotai/Egocentric-100K](https://huggingface.co/datasets/builddotai/Egocentric-100K) |
 | Gen-HumanEgo (GenRobot) | CC BY-SA 4.0 | [genrobot2025/Gen-HumanEgo](https://huggingface.co/datasets/genrobot2025/Gen-HumanEgo) |
 | OpenAoE-2000h (inclusionAI) | Open-AoE Dataset License, attribution required; its MANO-derived files, which the adapter never reads, also fall under MANO's license | [inclusionAI/OpenAoE-2000h](https://huggingface.co/datasets/inclusionAI/OpenAoE-2000h/blob/main/LICENSE) |
+| HIW-500 (BitRobot) | CC BY 4.0 | [BitRobot/HIW-500-LeRobot](https://huggingface.co/datasets/BitRobot/HIW-500-LeRobot) |
 
 Running a dataset through this pipeline does not change its license. When you publish a dataset's footage or labels, credit it as its license asks. Because the hand keypoints come from the ACE-Ego-Hand checkpoints (CC BY-NC 4.0) and a model built on MANO (non-commercial research only), use them only for non-commercial purposes and credit ACE-Ego-Hand.
 
