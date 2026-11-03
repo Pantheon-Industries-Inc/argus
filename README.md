@@ -69,7 +69,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Depth, inspected by default | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
 | Proprioception and actions | Joint states, end-effector poses, gripper states and action trajectories provide motion context. Training targets keep their declared semantics and are not assumed to be executed commands. |
 | Other episode fields | Force/torque, numeric channels, event flags, waveform packets and structured metadata reach the prompt as their range over the recording. A channel the sampling rate resolves also gets a reading at each sampled instant, and a channel that tracks another is given only where it departs from it. A channel the sampling rate does not resolve gets its mean over each sampling window within a small share of the request, and otherwise the times of its largest and smallest readings. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
-| Task context | Instructions, annotations and calibration metadata provide context. The VLM checks publisher claims against the recording rather than assuming their correctness. |
+| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording rather than assuming it is correct. The per-episode statistics, storage offsets and dataset totals that LeRobot writes into its metadata are kept in the episode's context.json and left out of the prompt. |
 
 ## Install and review
 
