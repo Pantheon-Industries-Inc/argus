@@ -111,9 +111,9 @@ OTHER_ACTIVITY = [
 ]
 
 
-# The same kinds in words real UMI labels used (idle items of umi-argus-labels, the 1.8K copy and the native batches,
-# scanned 2026-11-03): a gripper that remains parked, rests on the table or has been set down, and work assisted by
-# someone else. Each was lowered before the rule read those words.
+# The same kinds in words real UMI labels used (every idle item of the UMI labels, scanned 2026-11-03): a gripper that
+# remains parked, rests on the table, has been set down or is left resting there, and work assisted by someone else.
+# Each was lowered before the rule read those words.
 OTHER_ACTIVITY += [
     ("idle_stretch", "Bag loading pauses while one gripper remains parked on the table.",
      "exo at 335.33-344.34 s shows the right gripper on the table"),
@@ -133,6 +133,14 @@ OTHER_ACTIVITY += [
     ("idle_stretch", "A parked-gripper pause records several seconds without excavation activity.", "exo 50-58 s"),
     ("idle_stretch", "There is a long pause around the externally assisted clearing of the headphones.",
      "exo and both gripper views show no card manipulation during 169.17-179.18 s."),
+    ("idle_stretch", "Both grippers are left resting on the table while the demonstrator leans away.", "exo 80-88 s"),
+    # a fob named elsewhere in the text does not hide phone use or a parked gripper
+    ("idle_stretch", "The operator pauses and looks at a phone.",
+     "exo 40-52 s; the recording fob lies untouched on the table."),
+    ("idle_stretch", "The right gripper remains parked while the left holds the bag.",
+     "exo 10-20 s. The fob is pressed at 95 s."),
+    ("idle_stretch", "Work stops while the operator checks an iPhone.", "exo 300-320 s"),
+    ("idle_stretch", "Work stops while the operator answers a call.", "exo 300-320 s"),
 ]
 
 
@@ -154,7 +162,33 @@ def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_categ
      "exo, left and right at 359.36-386.39 s show stationary grippers"),
     ("An extended pause occurs while the demonstrator looks toward a nearby person.",
      "exo and right at 1180.05-1196.06 s show the demonstrator oriented toward them"),
+    # real label text: a person nearby who never touches the work, the gripper's own fingers, a gripper held still in
+    # the air and a grasp are plain idle
+    ("Candy handling pauses while another person stands nearby and gestures.", "exo and right at 205.21-214.21 s"),
+    ("A long pause between handling sequences.",
+     "exo and both close views show nearly stationary grippers while another person stands at the doorway."),
+    ("The striped towel is left unchanged for an interval.",
+     "The towel remains unchanged in exo; the other person moves beside the workspace without visibly touching task "
+     "objects."),
+    ("The pitcher is held with little change.",
+     "left and right views show only small orientation and empty-finger movements without a new grasp."),
+    ("A pause in the pouch work.", "All three views show nearly unchanged positions, apart from small posture and "
+     "finger movements."),
+    ("Both grippers wait above the work.", "exo shows both grippers parked above the table at 98.10-108.11 s."),
+    ("A pause before the cup is lifted.", "right shows the operator places the gripper jaw around the cup and waits."),
 ])
 def test_a_plain_idle_item_is_still_low(issue, evidence):
     (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
     assert row["severity"] == "low" and row["severity_as_labelled"] == "medium"
+
+
+def test_the_head_camera_board_cap_never_lowers_an_idle_item_that_describes_other_activity():
+    """The ego_head board rule caps idle tags at low (board/rules.py); an idle item that is really other activity keeps
+    its severity there too, as it does in the parser."""
+    from board import build as board_build, rules
+    phone = {**_issue("idle_stretch", "high"), "issue": "The wearer stops and looks at a phone."}
+    plain = _issue("idle_stretch", "high")
+    d = {"data_issues": [phone, plain]}
+    board_build.apply_rules(d, {}, rules.rules_for("ego_head"))
+    assert d["data_issues"][0] == phone
+    assert d["data_issues"][1]["severity"] == "low" and d["data_issues"][1]["model_severity"] == "high"
