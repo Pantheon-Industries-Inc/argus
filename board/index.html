@@ -6426,8 +6426,7 @@ function requestNotesClockHtml(d, x) {
 // An idle step (an arm parked while the other works, or waiting while someone else finishes the task) places a point
 // only when it raises the level. Read at its end, a parked arm's step spanning the episode would draw a drop to its own
 // progress, while a goal completed during a wait (a collaborator closing a lid) would otherwise never reach the chart.
-// The last level holds to the end of the episode. tests/progress_points.js runs this on real cases, and Data Review's
-// QA viewer (teleop-labeler/scripts/serve_qa.py) carries the same two functions, checked identical by its tests.
+// The last level holds to the end of the episode. tests/progress_points.js runs this on real cases.
 function progressPoints(eventLabels, duration, goal) {
   goal = goal || {};
   if (goal.progressScope === 'request_parts') return [];

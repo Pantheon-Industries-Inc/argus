@@ -1,8 +1,7 @@
 // The board's progress chart (progressPoints and progressAt in board/serve.py), held to one rule: it reaches 100% exactly
 // at the goal frame the board shows and nowhere else, so the chart, the goal frame and the outcome never disagree. Run on
 // real episodes where they used to disagree (tests/fixtures/progress_cases.json, cut from the published board) and on
-// the synthetic cases the chart once got wrong. Data Review's QA viewer carries the same two functions; its tests check
-// they are identical.
+// the synthetic cases the chart once got wrong.
 //
 //   node tests/progress_points.js [PAGE_SOURCE]     (default board/serve.py)
 //
