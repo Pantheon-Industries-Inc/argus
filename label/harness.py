@@ -1096,6 +1096,7 @@ def parse_response(text: str) -> tuple[dict, bool]:
         had_rows = bool(labels.get('timeline'))
         labels = typed_labels(normalize_timeline(labels))
         derive_instruction_mismatch(labels)
+        idle_issues_low(labels)
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
@@ -1147,6 +1148,34 @@ def derive_instruction_mismatch(labels: dict) -> None:
     labels['data_issues'] = list(issues or []) + [{
         'issue': what, 'category': 'instruction_mismatch', 'severity': 'high', 't_s': None, 'end_s': None,
         'evidence': 'goal_alignment of this reply', 'derived_from': 'goal_alignment'}]
+
+
+# An idle data issue is one whose category names the work pausing: idle, idling, pause, stall or inactivity in any
+# spelling ("idle_stretch", "operator_paused", "Stalled", "inactivity"), read word by word so "install" is not a stall.
+# A category that also names the camera or recording ("camera_stall", "video_paused", "frozen_frame") is a recording
+# fault, a frozen or black camera, and not idleness.
+IDLE_WORD = re.compile(r'^(?:idl|paus|stall|inactiv)')
+RECORDING_WORDS = frozenset({'recording', 'camera', 'cam', 'video', 'frame', 'frames', 'stream', 'feed', 'sensor',
+                             'frozen', 'freeze', 'black', 'dropout', 'fault'})
+
+
+def idle_category(category) -> bool:
+    """Whether a data issue's category names idleness (IDLE_WORD) and not a recording fault (RECORDING_WORDS)."""
+    if not isinstance(category, str):
+        return False
+    words = [w for w in re.split(r'[^a-z0-9]+', re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', category).lower()) if w]
+    return any(IDLE_WORD.match(w) for w in words) and not RECORDING_WORDS.intersection(words)
+
+
+def idle_issues_low(labels: dict) -> None:
+    """The rule that an idle stretch is never more than a low data issue (label/prompts.py data_contract), held in
+    code: idleness is trimmed from the dataset, it is not a defect of the footage. Every data issue with an idle
+    category (idle_category) gets severity low, and one the model rated otherwise keeps that rating in
+    severity_as_labelled. Operator mistakes are left as they are. Running this again on its output changes nothing."""
+    for row in labels.get('data_issues') or []:
+        if isinstance(row, dict) and idle_category(row.get('category')) and row.get('severity') != 'low':
+            row.setdefault('severity_as_labelled', row.get('severity'))
+            row['severity'] = 'low'
 
 
 def json_kind(x) -> str:

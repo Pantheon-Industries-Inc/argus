@@ -2046,6 +2046,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         else:
             events.append(event)
     L["key_events"] = events
+    # a part labelled before the rule that an idle stretch is a low data issue gets it here (label/harness.py)
+    from label.harness import idle_issues_low
+    idle_issues_low(L)
     # the parts' lists were appended part after part: every list in time order
     chronological(L)
     first = parts[0][1]

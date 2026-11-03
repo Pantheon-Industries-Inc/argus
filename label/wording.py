@@ -292,7 +292,7 @@ _TIMING_WORDS = re.compile(r'\b(?:timing|instants?|moments?|time|is|are|was|were
 # keys whose values are enums or ids, never prose: left as they are
 ENUM_KEYS = frozenset({'arm', 'contribution', 'kind', 'outcome', 'category', 'severity', 'deliberate', 'basis', 'list',
                        'excluded_by', 'by', 'side', 'task_completed', 'view', 'content', 'fingerprint', 'signals',
-                       'progress_scope', 'id', 'sha256', 'status'})
+                       'progress_scope', 'id', 'sha256', 'status', 'severity_as_labelled'})
 # task text stays as Argus wrote it, "in this window" included: a task name names the time window it was labelled in
 TASK_TEXT_KEYS = frozenset({'task', 'task_summary', 'instruction_variants'})
 # subtrees Argus writes itself about its stitching: left as they are
