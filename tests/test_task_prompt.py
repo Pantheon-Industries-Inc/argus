@@ -52,12 +52,13 @@ def main(rig, recorded=True):
 # the edits below.
 TWO_ACTORS_BEFORE = '- Keep values terse: short action/object strings'
 ACTOR = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}
-TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions, for example the left
-  {actor} grasps one object while the right {actor} places another, write one step for each {actor}, with
-  overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no step of its
-  own; when none works, the idle step is written as before. Two {actor}s working on one object stay one "both"
-  step, for example the left {actor} holds a jar while the right {actor} unscrews its lid. This adds no other
-  steps: the granularity above is unchanged.
+TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions on DIFFERENT objects,
+  for example the left {actor} grasps one object while the right {actor} places another, write one step for each
+  {actor}, with overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no
+  step of its own; when none works, the idle step is written as before. Two {actor}s working on one object stay
+  one "both" step, even when each does something different to it: one holds, steadies or braces it while the other
+  works it, or one hands it to the other. For example the left {actor} holds a jar while the right {actor} unscrews
+  its lid. This adds no other steps: the granularity above is unchanged.
 """ for rig, actor in ACTOR.items()}
 
 
@@ -423,6 +424,9 @@ def test_each_side_gets_its_own_step_only_while_the_two_act_apart(rig, given):
     assert f'write one step for each {actor}, with overlapping times' in s
     assert 'when none works, the idle step is written as before' in s
     assert f'holds a jar while the right {actor} unscrews its lid' in s
+    # one object held, steadied, braced or handed over by one side while the other works it stays one step
+    assert 'one holds, steadies or braces it while the other works it, or one hands it to the other' in s
+    assert f'DIFFERENT task-relevant actions on DIFFERENT objects' in s
     assert s.index('TIMELINE GRANULARITY') < s.index(f'When two {actor}s act at the same moment')
 
 
