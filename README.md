@@ -336,6 +336,21 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 
 </details>
 
+## Citation
+
+If you use Argus or the labels it produces, please cite the [blog post](https://pantheon.inc/research/argus). GitHub's "Cite this repository" button reads the same entry from [`CITATION.cff`](CITATION.cff).
+
+```bibtex
+@article{li2026data2,
+  author = {Eric Li},
+  title = {Argus: A Dense Annotator for Robotics Data},
+  journal = {Pantheon Research},
+  year = {2026},
+  month = {October},
+  day = {1}
+}
+```
+
 ## Credits
 
 The capture checks in [`checks/vendor/public_dataset_adapter_qc.py`](checks/vendor/public_dataset_adapter_qc.py) are Sambhav Gupta's, from public-dataset-adapter (commit 99d0a9e), with the changes listed in that file's header. The hand pose model is ACE-Ego-Hand (Yufei Liu et al., [arXiv:2608.20308](https://arxiv.org/abs/2608.20308)), built on Wan2.2, VideoX-Fun and MANO (Romero, Tzionas and Black, 2017).
