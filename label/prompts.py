@@ -1099,7 +1099,9 @@ UNHELD_CONTACT_NOTE = (" A contact that moves an object without holding it is\n"
 # overlapped in time, so when the two did different things at once (the left grasps one object while the right grasps
 # another) usually only one of them was written. Each then gets its own step; one at rest or holding still while the
 # other works gets none, an idle moment of both is written as before, and shared work on one object stays "both", so
-# the timeline grows only where the two really act apart. Worded conditionally, since a one-armed rig gets the same
+# the timeline grows only where the two really act apart. The same action by both at once, each on its own object,
+# also stays "both": the rule's A/B split it into two steps with one action text (each gripper squeezing its own duck,
+# each turning its own ball) in 5 pairs of 40 UMI runs, where main wrote one "both" step in all 80. Worded conditionally, since a one-armed rig gets the same
 # text (no field gives the number of arms). It goes before the note's last two points, on every rig but a robot with
 # no arms (fixed_instructions takes it out).
 TWO_ACTORS_BEFORE = "- Keep values terse: short action/object strings"
@@ -1112,7 +1114,9 @@ def two_actors_note(actor: str) -> str:
   step of its own; when none works, the idle step is written as before. Two {actor}s working on one object stay
   one "both" step, even when each does something different to it: one holds, steadies or braces it while the other
   works it, or one hands it to the other. For example the left {actor} holds a jar while the right {actor} unscrews
-  its lid. This adds no other steps: the granularity above is unchanged.
+  its lid. Two {actor}s doing the same action at the same moment, each on its own object (each squeezes a toy, each
+  turns a ball), are also one "both" step, naming both objects. This adds no other steps: the granularity above is
+  unchanged.
 """
 
 
