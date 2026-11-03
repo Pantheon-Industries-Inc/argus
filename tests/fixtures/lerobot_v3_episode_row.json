@@ -1,0 +1,465 @@
+{
+ "about": "One real LeRobot v3.0 meta/episodes row (dancher00/go2_object_approach_v1, meta/episodes/chunk-000/file-018.parquet, row 5) and the top-level fields of that dataset's meta/info.json, as read.",
+ "episode_row": {
+  "episode_index": 100,
+  "tasks": [
+   "Approach the target object and stop in a manipulation-ready pose."
+  ],
+  "length": 228,
+  "data/chunk_index": 0,
+  "data/file_index": 19,
+  "dataset_from_index": 28274,
+  "dataset_to_index": 28502,
+  "videos/observation.images.front/chunk_index": 0,
+  "videos/observation.images.front/file_index": 19,
+  "videos/observation.images.front/from_timestamp": 63.199999999999996,
+  "videos/observation.images.front/to_timestamp": 74.6,
+  "stats/action/min": [
+   0.0,
+   -0.30000001192092896,
+   -0.6000000238418579
+  ],
+  "stats/action/max": [
+   0.30000001192092896,
+   0.0,
+   0.6000000238418579
+  ],
+  "stats/action/mean": [
+   0.07236844301223755,
+   -0.11973674595355988,
+   0.047368425875902176
+  ],
+  "stats/action/std": [
+   0.12834849953651428,
+   0.14691556990146637,
+   0.22680483758449554
+  ],
+  "stats/action/count": [
+   228
+  ],
+  "stats/action/q01": [
+   -1.000000013351432e-10,
+   -0.30000001192092896,
+   -0.6000000238418579
+  ],
+  "stats/action/q10": [
+   -1.000000013351432e-10,
+   -0.30000001192092896,
+   1.8306859989756163e-05
+  ],
+  "stats/action/q50": [
+   -1.000000013351432e-10,
+   -4.9920396255388734e-05,
+   0.00013111669992663195
+  ],
+  "stats/action/q90": [
+   0.29997514247894286,
+   -9.984000670735506e-06,
+   0.5997895901019756
+  ],
+  "stats/action/q99": [
+   0.2999975249767303,
+   -9.98311664188543e-07,
+   0.5999789804678697
+  ],
+  "stats/observation.state/min": [
+   -0.13713423907756805,
+   -0.25859755277633667,
+   -0.7233144640922546,
+   -0.05732325091958046,
+   -0.04205191880464554,
+   -1.3227815628051758
+  ],
+  "stats/observation.state/max": [
+   0.3953360319137573,
+   0.09566402435302734,
+   0.7190533876419067,
+   0.024487897753715515,
+   0.08244013786315918,
+   -0.5773801207542419
+  ],
+  "stats/observation.state/mean": [
+   0.056394003331661224,
+   -0.04943002015352249,
+   0.06382708251476288,
+   -0.014517023228108883,
+   0.016999423503875732,
+   -0.9032303690910339
+  ],
+  "stats/observation.state/std": [
+   0.10558122396469116,
+   0.08193095773458481,
+   0.1972070187330246,
+   0.016769733279943466,
+   0.023467158898711205,
+   0.31474602222442627
+  ],
+  "stats/observation.state/count": [
+   228
+  ],
+  "stats/observation.state/q01": [
+   -0.06554041564464569,
+   -0.22570223927497865,
+   -0.27927288055419924,
+   -0.05537156477570534,
+   -0.03191129297018051,
+   -1.3226254781087239
+  ],
+  "stats/observation.state/q10": [
+   -0.0250172957777977,
+   -0.1759979248046875,
+   -0.10863500833511353,
+   -0.039933474361896516,
+   -0.013846999779343606,
+   -1.3132702350616454
+  ],
+  "stats/observation.state/q50": [
+   0.00397038459777832,
+   -0.0006242692470550537,
+   0.015081683794657389,
+   -0.009398277848958969,
+   0.014168690890073776,
+   -0.6525166034698486
+  ],
+  "stats/observation.state/q90": [
+   0.2293331116437912,
+   0.0352411687374115,
+   0.36198073625564575,
+   0.0040383838117122655,
+   0.05296539813280106,
+   -0.6152167201042176
+  ],
+  "stats/observation.state/q99": [
+   0.33258126020431517,
+   0.07290059804916382,
+   0.6477196097373963,
+   0.016433102041482926,
+   0.0693614947795868,
+   -0.5793599224090576
+  ],
+  "stats/timestamp/min": [
+   0.0
+  ],
+  "stats/timestamp/max": [
+   11.35
+  ],
+  "stats/timestamp/mean": [
+   5.675000000000001
+  ],
+  "stats/timestamp/std": [
+   3.2908648812533547
+  ],
+  "stats/timestamp/count": [
+   228
+  ],
+  "stats/timestamp/q01": [
+   0.10051559990177121
+  ],
+  "stats/timestamp/q10": [
+   1.100495999919392
+  ],
+  "stats/timestamp/q50": [
+   5.65002999999956
+  ],
+  "stats/timestamp/q90": [
+   10.24950400008061
+  ],
+  "stats/timestamp/q99": [
+   11.249484400098229
+  ],
+  "stats/frame_index/min": [
+   0.0
+  ],
+  "stats/frame_index/max": [
+   227.0
+  ],
+  "stats/frame_index/mean": [
+   113.5
+  ],
+  "stats/frame_index/std": [
+   65.81729762506714
+  ],
+  "stats/frame_index/count": [
+   228
+  ],
+  "stats/frame_index/q01": [
+   2.010311999901771
+  ],
+  "stats/frame_index/q10": [
+   22.00991999991939
+  ],
+  "stats/frame_index/q50": [
+   113.00059999999954
+  ],
+  "stats/frame_index/q90": [
+   204.99008000008058
+  ],
+  "stats/frame_index/q99": [
+   224.9896880000982
+  ],
+  "stats/episode_index/min": [
+   100.0
+  ],
+  "stats/episode_index/max": [
+   100.0
+  ],
+  "stats/episode_index/mean": [
+   100.0
+  ],
+  "stats/episode_index/std": [
+   0.0
+  ],
+  "stats/episode_index/count": [
+   228
+  ],
+  "stats/episode_index/q01": [
+   100.0
+  ],
+  "stats/episode_index/q10": [
+   100.0
+  ],
+  "stats/episode_index/q50": [
+   100.00000000000003
+  ],
+  "stats/episode_index/q90": [
+   100.00000000000004
+  ],
+  "stats/episode_index/q99": [
+   100.00000000000004
+  ],
+  "stats/index/min": [
+   28274.0
+  ],
+  "stats/index/max": [
+   28501.0
+  ],
+  "stats/index/mean": [
+   28387.5
+  ],
+  "stats/index/std": [
+   65.81729762476526
+  ],
+  "stats/index/count": [
+   228
+  ],
+  "stats/index/q01": [
+   28276.010311999904
+  ],
+  "stats/index/q10": [
+   28296.00991999992
+  ],
+  "stats/index/q50": [
+   28387.0006
+  ],
+  "stats/index/q90": [
+   28478.99008000008
+  ],
+  "stats/index/q99": [
+   28498.989688000096
+  ],
+  "stats/task_index/min": [
+   0.0
+  ],
+  "stats/task_index/max": [
+   0.0
+  ],
+  "stats/task_index/mean": [
+   0.0
+  ],
+  "stats/task_index/std": [
+   0.0
+  ],
+  "stats/task_index/count": [
+   228
+  ],
+  "stats/task_index/q01": [
+   3.999999999999418e-16
+  ],
+  "stats/task_index/q10": [
+   3.999999999999417e-15
+  ],
+  "stats/task_index/q50": [
+   1.9999999999997088e-14
+  ],
+  "stats/task_index/q90": [
+   3.599999999999476e-14
+  ],
+  "stats/task_index/q99": [
+   3.9599999999994235e-14
+  ],
+  "stats/observation.images.front/min": [
+   [
+    [
+     0.0
+    ]
+   ],
+   [
+    [
+     0.0
+    ]
+   ],
+   [
+    [
+     0.0
+    ]
+   ]
+  ],
+  "stats/observation.images.front/max": [
+   [
+    [
+     1.0
+    ]
+   ],
+   [
+    [
+     1.0
+    ]
+   ],
+   [
+    [
+     1.0
+    ]
+   ]
+  ],
+  "stats/observation.images.front/mean": [
+   [
+    [
+     0.4674392640590668
+    ]
+   ],
+   [
+    [
+     0.459055095911026
+    ]
+   ],
+   [
+    [
+     0.44496750831604004
+    ]
+   ]
+  ],
+  "stats/observation.images.front/std": [
+   [
+    [
+     0.25300076603889465
+    ]
+   ],
+   [
+    [
+     0.25606822967529297
+    ]
+   ],
+   [
+    [
+     0.2670488655567169
+    ]
+   ]
+  ],
+  "stats/observation.images.front/count": [
+   4377600
+  ],
+  "stats/observation.images.front/q01": [
+   [
+    [
+     0.0352347442293262
+    ]
+   ],
+   [
+    [
+     0.035211693828198894
+    ]
+   ],
+   [
+    [
+     0.027477829507537358
+    ]
+   ]
+  ],
+  "stats/observation.images.front/q10": [
+   [
+    [
+     0.07456336094818583
+    ]
+   ],
+   [
+    [
+     0.07446339552897707
+    ]
+   ],
+   [
+    [
+     0.06661531262584111
+    ]
+   ]
+  ],
+  "stats/observation.images.front/q50": [
+   [
+    [
+     0.592198304848325
+    ]
+   ],
+   [
+    [
+     0.5883422624299507
+    ]
+   ],
+   [
+    [
+     0.5921306914761016
+    ]
+   ]
+  ],
+  "stats/observation.images.front/q90": [
+   [
+    [
+     0.7018488305707358
+    ]
+   ],
+   [
+    [
+     0.7019527800096884
+    ]
+   ],
+   [
+    [
+     0.7019303423548133
+    ]
+   ]
+  ],
+  "stats/observation.images.front/q99": [
+   [
+    [
+     0.980280874529301
+    ]
+   ],
+   [
+    [
+     0.9960068913030524
+    ]
+   ],
+   [
+    [
+     0.9920627956859129
+    ]
+   ]
+  ],
+  "meta/episodes/chunk_index": 0,
+  "meta/episodes/file_index": 18
+ },
+ "info": {
+  "codebase_version": "v3.0",
+  "fps": 20,
+  "total_episodes": 202,
+  "total_frames": 48889,
+  "total_tasks": 1,
+  "chunks_size": 1000,
+  "data_files_size_in_mb": 100,
+  "video_files_size_in_mb": 200,
+  "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+  "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+  "robot_type": "unitree_go2",
+  "splits": {
+   "train": "0:202"
+  }
+ }
+}

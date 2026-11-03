@@ -57,7 +57,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Input support | Details |
 |---|---|
 | Recording types | Teleop, UMI and human ego |
-| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, HDF5, video files and folders |
+| Native formats | LeRobot v2.0/v2.1/v3.0, MCAP, ROS 2 bags stored as SQLite (.db3, read by the MCAP reader), HDF5, video files and folders |
 | Archives | ZIP and TAR, plain or compressed with gzip, bzip2 or xz |
 | Sidecar metadata | JSON, JSON Lines, CSV, TSV, text and Markdown notes, and LeRobot's Parquet and JSON Lines annotation tables |
 | Public dataset adapters | Nine, each downloading and preparing a public dataset |
@@ -69,7 +69,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Depth, inspected by default | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
 | Proprioception and actions | Joint states, end-effector poses, gripper states and action trajectories provide motion context. Training targets keep their declared semantics and are not assumed to be executed commands. |
 | Other episode fields | Force/torque, numeric channels, event flags, waveform packets and structured metadata reach the prompt as their range over the recording. A channel the sampling rate resolves also gets a reading at each sampled instant, and a channel that tracks another is given only where it departs from it. A channel the sampling rate does not resolve gets its mean over each sampling window within a small share of the request, and otherwise the times of its largest and smallest readings. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
-| Task context | Instructions, annotations and calibration metadata provide context. The VLM checks publisher claims against the recording rather than assuming their correctness. |
+| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording rather than assuming it is correct. The per-episode statistics, storage offsets and dataset totals that LeRobot writes into its metadata are kept in the episode's context.json and left out of the prompt. |
 
 ## Install and review
 
@@ -81,7 +81,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. OpenRouter requests carry an app attribution header ([`OPENROUTER_APP_HEADERS`](label/harness.py)), so their usage counts toward Argus in OpenRouter's app rankings. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
 
 Annotate a dataset under a spending cap, then open its board. Add [`--free`](review/__main__.py) to build the same requests without model calls.
 
@@ -121,7 +121,7 @@ A teleop or UMI recording with an instruction is judged as a whole against it, a
 
 A human ego clip of one task takes that task's outcome unless the dataset provides timed subtasks, and a clip of several tasks gets no overall verdict. When the annotation gives a goal, the verdict is whether the clip fully reached it. Without a goal, a task cut off by the end of the clip is named after the work the clip shows.
 
-Argus cuts a recording that is too long for one request (450s at default sampling) at still moments, labels each part separately and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s around each cut, so a task that runs across a cut is joined into one, and labels made without that overlap are joined by a small seam check ([`python -m review seam`](label/seam.py)). A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. Data issues that several parts report, such as swapped wrist cameras, are merged into one issue by a small text-only request ([`label/issue_groups.py`](label/issue_groups.py)), which `ARGUS_ISSUE_GROUPS=0` turns off.
+Argus cuts a recording that is too long for one request (450s at default sampling) at still moments, labels each part separately and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s around each cut, and both parts label whatever is under way there. When a task or a timeline step from one side of the cut shares at least half of its seconds in the overlap with one from the other side, the stitch joins the two into one, however differently the two requests worded them. A step stays split at the cut only where one part saw the action change there, or where the two parts gave it to different arms. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)). A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. Data issues that several parts report, such as swapped wrist cameras, are merged into one issue by a small text-only request ([`label/issue_groups.py`](label/issue_groups.py)), which `ARGUS_ISSUE_GROUPS=0` turns off.
 
 > [!NOTE]
 > `python -m review` does all post-processing itself once the labelling requests return. It stitches a long recording's parts onto one timeline, merges data issues that several parts reported, and builds the review board. Before a result is published, it also removes the phrases the model writes about the labelling itself, such as "in this supplied window" ([`label/wording.py`](label/wording.py)), and it drops a sentence only when every word in it is about the labelling. Nothing else needs to be run.
@@ -337,6 +337,21 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`gate score`](gate/score.py) | `--json` |
 
 </details>
+
+## Citation
+
+If you use Argus or the labels it produces, please cite the [blog post](https://pantheon.inc/research/argus). GitHub's "Cite this repository" button reads the same entry from [`CITATION.cff`](CITATION.cff).
+
+```bibtex
+@article{li2026data2,
+  author = {Eric Li},
+  title = {Argus: A Dense Annotator for Robotics Data},
+  journal = {Pantheon Research},
+  year = {2026},
+  month = {October},
+  day = {1}
+}
+```
 
 ## Credits
 
