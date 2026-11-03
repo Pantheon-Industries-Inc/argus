@@ -111,6 +111,31 @@ OTHER_ACTIVITY = [
 ]
 
 
+# The same kinds in words real UMI labels used (idle items of umi-argus-labels, the 1.8K copy and the native batches,
+# scanned 2026-11-03): a gripper that remains parked, rests on the table or has been set down, and work assisted by
+# someone else. Each was lowered before the rule read those words.
+OTHER_ACTIVITY += [
+    ("idle_stretch", "Bag loading pauses while one gripper remains parked on the table.",
+     "exo at 335.33-344.34 s shows the right gripper on the table"),
+    ("idle_stretch", "A long non-task pause includes headphone adjustment while the right gripper remains on the table.",
+     "exo and left show no task-object manipulation around 272-277 s"),
+    ("idle_stretch", "A roughly ten-second pause interrupts the paper work while the right gripper rests on the table.",
+     "exo shows no paper work at 140-150 s"),
+    ("idle_stretch", "Resting after hardware manipulation stops.",
+     "All three views at 436.44-446.45 s show no further task-object manipulation; the left gripper rests on the table."),
+    ("idle_stretch", "The recording continues through a long inactive stretch after the rice transfers; the right gripper "
+     "has been set down.", "exo shows no further task-object manipulation"),
+    ("idle_stretch", "The demonstrator pauses and turns toward the neighboring participant while the right gripper "
+     "remains set down.", "Exo shows the pause"),
+    ("idle_stretch", "A long pause with no task contact.",
+     "exo and both wrist views at 780.31-787.32 s show unchanged fixtures and no task contact; the right gripper is "
+     "visibly parked."),
+    ("idle_stretch", "A parked-gripper pause records several seconds without excavation activity.", "exo 50-58 s"),
+    ("idle_stretch", "There is a long pause around the externally assisted clearing of the headphones.",
+     "exo and both gripper views show no card manipulation during 169.17-179.18 s."),
+]
+
+
 @pytest.mark.parametrize("category,issue,evidence", OTHER_ACTIVITY)
 def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_category(category, issue, evidence):
     item = {**_issue(category, "medium"), "issue": issue, "evidence": evidence}
@@ -123,6 +148,12 @@ def test_an_idle_item_that_describes_other_activity_keeps_its_severity_and_categ
     ("A long pause before the operator starts the task.", "all cameras 0-12s, the scene is static"),
     ("The operator presses the phone-like fob on the table to stop the recording, then nothing happens.",
      "top camera 88-96s, a gripper set down to press the fob"),
+    # real label text: grippers that stay still, near the table or clear of the work, are plain idle
+    ("Both grippers remain inactive for about ten seconds between jug placements.", "All three views show no change"),
+    ("A prolonged stretch contains no puzzle manipulation while both grippers remain near the table edge.",
+     "exo, left and right at 359.36-386.39 s show stationary grippers"),
+    ("An extended pause occurs while the demonstrator looks toward a nearby person.",
+     "exo and right at 1180.05-1196.06 s show the demonstrator oriented toward them"),
 ])
 def test_a_plain_idle_item_is_still_low(issue, evidence):
     (row,) = _parse({**_issue("idle_stretch", "medium"), "issue": issue, "evidence": evidence})["data_issues"]
