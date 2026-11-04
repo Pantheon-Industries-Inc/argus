@@ -34,7 +34,9 @@ a rate. A time more than one frame period from every frame, after the episode's 
 is left out and listed in the report with its distance. The period is the shorter of 1 / the fps in meta/info.json
 and the median gap between the episode's frames (frame_period). When two subtask boundaries round to the same frame,
 the later one is kept, and repeated texts in a row merge. After writing, the copy is checked (validate below), and
-any failure stops the command with exit 1.
+any failure stops the command with exit 1. An episode with frames whose distinct times are one value in float32, the
+type a subtask start is stored in (from 8192s at 2 kHz, 65536s at 200 fps), is listed in float32_collisions, since a
+reader cannot tell those frames apart by timestamp.
 
 The five event styles must be registered in LeRobot before its loaders route them, the way its docs register a
 project style: add them to lerobot.datasets.language.EXTENDED_STYLES and EVENT_ONLY_STYLES (EVENT_STYLES below).
@@ -280,7 +282,7 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out} is not empty")
     by_episode, report = {}, {"labels": 0, "unmatched_labels": [], "episodes_written": 0, "events": {},
-                              "untimed": {}, "refused": [], "repeated_timestamps": [],
+                              "untimed": {}, "refused": [], "repeated_timestamps": [], "float32_collisions": [],
                               "max_snap_s": 0.0}
     for p in sorted(Path(labels).glob("*.json")):
         label = json.loads(p.read_text())
@@ -315,6 +317,12 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
                 counts = Counter(times)
                 report["repeated_timestamps"] += [{"episode": p.name, "t_s": t - min(times), "frames": n}
                                                   for t, n in sorted(counts.items()) if n > 1]
+                # distinct frame times that one float32, the type of a stored subtask start, cannot tell apart
+                stored = Counter(float(np.float32(t)) for t in counts)
+                apart = sorted(t for t in counts if stored[float(np.float32(t))] > 1)
+                if apart:
+                    report["float32_collisions"].append({"episode": p.name, "frames": len(apart),
+                                                         "first_t_s": apart[0] - min(times)})
                 found.add(e)
         persistent = [rows[int(e)][0] if int(e) in rows else [] for e in eps]
         # an event goes on the first frame with its timestamp, never on every frame that repeats it
