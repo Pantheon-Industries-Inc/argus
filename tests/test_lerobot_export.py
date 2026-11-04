@@ -22,13 +22,14 @@ def frame_times(n):
     return [np.float32(k / FPS + JITTER.get(k, 0.)).item() for k in range(n)]
 
 
-def dataset(root: Path, ep0_times=None, fps=True) -> Path:
-    """ep0_times replaces episode 0's 30 frame timestamps; fps=False leaves the rate out of meta/info.json."""
+def dataset(root: Path, ep0_times=None, fps=True, rate=FPS) -> Path:
+    """ep0_times replaces episode 0's 30 frame timestamps; rate is the fps meta/info.json declares, and fps=False
+    leaves it out."""
     (root / 'meta' / 'episodes' / 'chunk-000').mkdir(parents=True)
     (root / 'data' / 'chunk-000').mkdir(parents=True)
     (root / 'videos' / 'observation.images.front' / 'chunk-000').mkdir(parents=True)
     (root / 'videos' / 'observation.images.front' / 'chunk-000' / 'file-000.mp4').write_bytes(b'\0' * 64)
-    info = {'codebase_version': 'v3.0', 'robot_type': 'so100', 'fps': FPS, 'total_episodes': 2, 'total_frames': 50,
+    info = {'codebase_version': 'v3.0', 'robot_type': 'so100', 'fps': rate, 'total_episodes': 2, 'total_frames': 50,
             'chunks_size': 1000, 'data_path': 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet',
             'video_path': 'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4',
             'features': {'observation.state': {'dtype': 'float32', 'shape': [6], 'names': None},
@@ -240,3 +241,38 @@ def test_each_episode_is_one_row_group_and_the_old_annotation_columns_are_droppe
 def test_the_checks_say_which_rules_are_the_exporters_own():
     doc = ' '.join(lx.validate.__doc__.split())
     assert "the exporter's own rules, not LeRobot's" in doc
+
+
+def test_a_declared_rate_lower_than_the_frames_does_not_widen_how_far_a_time_may_snap(tmp_path):
+    # meta/info.json says 10 fps, episode 0's frames run at 30 fps: one frame period is 33ms, not 100ms, so a time
+    # 2.5 real frames past the last frame is refused instead of landing on it (issue 196)
+    times = [np.float32(k / 30).item() for k in range(30)]
+    late = round(times[-1] + 2.5 / 30, 4)
+    ep0 = {'event_labels': [], 'key_events': [{'t_s': late, 'label': 'after the end', 'kind': '', 'outcome': '',
+                                                'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times)
+    assert [(r['what'], r['t_s']) for r in report['refused']] == [('key_event', late)]
+    assert not any(r['language_events'] for r in per_episode(table, 0))
+
+
+def test_dropped_frames_do_not_widen_how_far_a_time_may_snap(tmp_path):
+    # 30 fps declared and true, but 3 frames in every 10 dropped: the frames' span rate is about 21 fps (48ms), while
+    # one frame period is still 33ms, so a time 1.2 real frames past the last frame is refused
+    kept = [k for k in range(50) if k % 10 not in (2, 5, 8)][:30]
+    times = [np.float32(k / 30).item() for k in kept]
+    late = round(times[-1] + 1.2 / 30, 4)
+    ep0 = {'event_labels': [], 'key_events': [{'t_s': late, 'label': 'after the end', 'kind': '', 'outcome': '',
+                                                'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times, rate=30)
+    assert [(r['what'], r['t_s']) for r in report['refused']] == [('key_event', late)]
+    assert not any(r['language_events'] for r in per_episode(table, 0))
+
+
+def test_a_declared_rate_higher_than_the_frames_still_places_a_time_on_the_nearer_frame(tmp_path):
+    # 10 fps frames under a 30 fps declaration: a time 20ms after a frame lands on that frame
+    ep0 = {'event_labels': [], 'key_events': [{'t_s': 1.42, 'label': 'between frames', 'kind': '', 'outcome': '',
+                                                'note': ''}]}
+    report, table = export_one(tmp_path, ep0, rate=30)
+    assert report['refused'] == []
+    rows = per_episode(table, 0)
+    assert [r['timestamp'] for r in rows if r['language_events']] == [rows[14]['timestamp']]
