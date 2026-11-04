@@ -50,8 +50,8 @@ def main(rig, recorded=True):
 # left and right steps overlapped in time, so when the two grippers did different things at once (the left grasps one
 # object while the right grasps another) usually only one of them was written. Each then gets its own step; one at
 # rest while the other works gets none, an idle moment of both is written as before, and work on one object stays
-# "both". It is worded conditionally, because a one-armed rig gets the same text. The test holds its own copy, as for
-# the edits below.
+# "both", as does the same action done by both at once, each on its own object. It is worded conditionally, because
+# a one-armed rig gets the same text. The test holds its own copy, as for the edits below.
 TWO_ACTORS_BEFORE = '- Keep values terse: short action/object strings'
 ACTOR = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}
 TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions on DIFFERENT objects,
@@ -60,7 +60,9 @@ TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERE
   step of its own; when none works, the idle step is written as before. Two {actor}s working on one object stay
   one "both" step, even when each does something different to it: one holds, steadies or braces it while the other
   works it, or one hands it to the other. For example the left {actor} holds a jar while the right {actor} unscrews
-  its lid. This adds no other steps: the granularity above is unchanged.
+  its lid. Two {actor}s doing the same action at the same moment, each on its own object (each squeezes a toy, each
+  turns a ball), are also one "both" step, naming both objects. This adds no other steps: the granularity above is
+  unchanged.
 """ for rig, actor in ACTOR.items()}
 
 
@@ -444,6 +446,11 @@ def test_each_side_gets_its_own_step_only_while_the_two_act_apart(rig, given):
     # one object held, steadied, braced or handed over by one side while the other works it stays one step
     assert 'one holds, steadies or braces it while the other works it, or one hands it to the other' in s
     assert f'DIFFERENT task-relevant actions on DIFFERENT objects' in s
+    # the same action by both at once, each on its own object, stays one "both" step: PR 187's A/B wrote 5 such
+    # overlapping pairs with one action text on both sides in 40 UMI runs (each gripper squeezing its own duck, each
+    # turning its own ball), where main wrote one "both" step in all 80
+    assert (f'Two {actor}s doing the same action at the same moment, each on its own object (each squeezes a toy, '
+            'each turns a ball), are also one "both" step, naming both objects.') in s
     assert s.index('TIMELINE GRANULARITY') < s.index(f'When two {actor}s act at the same moment')
 
 
