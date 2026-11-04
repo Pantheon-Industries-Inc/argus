@@ -276,3 +276,23 @@ def test_a_declared_rate_higher_than_the_frames_still_places_a_time_on_the_neare
     assert report['refused'] == []
     rows = per_episode(table, 0)
     assert [r['timestamp'] for r in rows if r['language_events']] == [rows[14]['timestamp']]
+
+
+def test_a_float64_timestamp_column_passes_the_checks(tmp_path):
+    # a dataset storing timestamp as float64 (issue 199): the subtask start 1.3s is kept as float32 in
+    # language_persistent and must still be read as the frame at 1.3s, not refused as off every frame
+    src = dataset(tmp_path / 'src')
+    path = src / 'data' / 'chunk-000' / 'file-000.parquet'
+    t = pq.read_table(path)
+    ts = pa.array([k / 10 for k in range(30)] + [k / 10 for k in range(20)], type=pa.float64())
+    t = t.set_column(t.column_names.index('timestamp'), 'timestamp', ts)
+    path.unlink()
+    pq.write_table(t, path)
+    folder = tmp_path / 'labels'
+    folder.mkdir()
+    ep0 = {'event_labels': [step(0., 1.3, 'right', 'grasp the cup'), step(1.3, 2.9, 'right', 'pour the water')]}
+    (folder / 'episode_000000.json').write_text(json.dumps(ep0))
+    report = lx.export(src, folder, tmp_path / 'out')
+    assert report['validation_errors'] == []
+    rows = per_episode(pq.read_table(tmp_path / 'out' / 'data' / 'chunk-000' / 'file-000.parquet'), 0)
+    assert [r['content'] for r in rows[0]['language_persistent']] == ['grasp the cup', 'pour the water', 'idle']
