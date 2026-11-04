@@ -892,7 +892,7 @@ def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, req
         price_in, price_out = rates[0][0], rates[0][2]
     else:
         price_in, price_out = max(t[0] for t in rates), max(t[2] for t in rates)
-    return math.ceil((prompt_bound * price_in + max_tokens * price_out) * 1_000_000) / 1_000_000 * 1.1
+    return math.ceil((prompt_bound * price_in + max_tokens * price_out) * 1_000_000) / 1_000_000
 
 
 def persist_final_claim(path: Path, claim: dict) -> None:
