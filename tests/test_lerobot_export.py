@@ -303,3 +303,17 @@ def test_the_checks_catch_an_event_carried_by_two_frames(exported, tmp_path):
     path.unlink()
     pq.write_table(broken, path)
     assert any('carried by more than one frame' in e for e in lx.validate(out))
+
+
+def test_a_finding_written_twice_sits_twice_on_one_frame_and_passes_the_checks(tmp_path):
+    # the model can repeat a finding; both rows land on one frame, as on main, and only a row that two different
+    # frames carry is refused
+    k = {'t_s': 1.2, 'label': 'cup lifted', 'kind': '', 'outcome': '', 'note': ''}
+    m = {'issue': 'cup slips in the grip', 'category': 'failed_grasp', 'severity': 'low', 't_s': 1.7, 'end_s': 1.9,
+         'recovered': True}
+    report, table = export_one(tmp_path, {'event_labels': [step(0., 2.9, 'right', 'grasp')], 'key_events': [k, k],
+                                          'operator_mistakes': [m, m]})
+    assert report['validation_errors'] == []
+    rows = per_episode(table, 0)
+    carried = [(i, [e['style'] for e in r['language_events']]) for i, r in enumerate(rows) if r['language_events']]
+    assert carried == [(12, ['key_event', 'key_event']), (17, ['mistake', 'mistake'])]
