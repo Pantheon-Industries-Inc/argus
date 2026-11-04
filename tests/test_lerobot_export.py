@@ -331,3 +331,24 @@ def test_a_subtask_that_loses_its_frame_to_a_later_boundary_is_listed(tmp_path):
     lost = [(r['episode'], r['text'], r['t_s'], r['replaced_by']) for r in report['subtasks_lost']]
     assert lost == [('episode_000000.json', 'tap the rim', .71, 'pour the water')]
     assert abs(report['subtasks_lost'][0]['frame_s'] - GAP_TIMES[20]) < 1e-6
+
+
+@pytest.mark.parametrize('steps', [
+    [step(.5, 2., 'right', 'grasp the cup'), step(2.01, 2.8, 'right', 'pour the water')],
+    [step(.5, 2.01, 'left', 'grasp the cup'), step(2., 2.8, 'right', 'pour the water')],
+], ids=['idle between two steps', 'two sides overlapping for 10ms'])
+def test_a_subtask_whose_steps_all_keep_a_frame_is_never_listed_as_lost(tmp_path, steps):
+    # the 10ms idle, or the 10ms "left: grasp; right: pour", loses its frame to the pour, but no step goes unlabelled:
+    # idle names no step, and grasp and pour each keep frames of their own
+    report, _ = export_one(tmp_path, {'event_labels': steps})
+    assert report['subtasks_lost'] == []
+
+
+def test_only_the_step_with_no_frame_is_listed_when_idle_and_a_tap_lose_theirs(tmp_path):
+    # grasp ends at 2.0s, tap runs 2.01s to 2.04s, pour starts at 2.04s: idle, tap and pour all land on the 2.0s frame
+    # and pour keeps it; the tap is listed, the idle between grasp and tap is not
+    ep0 = {'event_labels': [step(.5, 2., 'right', 'grasp the cup'), step(2.01, 2.04, 'right', 'tap the rim'),
+                            step(2.04, 2.8, 'right', 'pour the water')]}
+    report, _ = export_one(tmp_path, ep0)
+    assert [(r['text'], r['t_s'], r['replaced_by']) for r in report['subtasks_lost']] == \
+        [('tap the rim', 2.01, 'pour the water')]
