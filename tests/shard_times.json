@@ -222,5 +222,6 @@
  "tests/test_killed_call_holds.py": 2.0,
  "tests/test_idle_issues_low.py": 2.3,
  "tests/test_face_issues_timed.py": 2.4,
- "tests/test_lerobot_export.py": 0.6
+ "tests/test_lerobot_export.py": 0.6,
+ "tests/test_inference_rollout_views.py": 0.5
 }
