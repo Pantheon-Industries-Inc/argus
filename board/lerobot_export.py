@@ -29,8 +29,9 @@ row group, and the older subtask_index and tools columns are dropped (from meta/
 - Argus writes no plan and no memory rows, since it labels neither. LeRobot's validator only warns about that.
 
 Every time is snapped to the nearest frame timestamp read from the data file, never computed from a frame index and
-a rate. A time more than one frame period from every frame, after the episode's end for example, is refused: its row
-is left out and listed in the report with its distance. The period is the shorter of 1 / the fps in meta/info.json
+a rate. A time between the episode's first and last frame lands on the nearer frame, however far apart the two are. A
+time more than one frame period before the first frame or after the last is refused: its row is left out and listed
+in the report with its distance. The period is the shorter of 1 / the fps in meta/info.json
 and the median gap between the episode's frames (frame_period). When two subtask boundaries round to the same frame,
 the later one is kept, and repeated texts in a row merge. After writing, the copy is checked (validate below), and
 any failure stops the command with exit 1.
@@ -182,7 +183,8 @@ def _snap(times: list[float], t: float) -> tuple[float, float]:
 
 
 def frame_period(fps, frame_ts: list[float]) -> float:
-    """One frame period, the farthest a time may sit from a frame and still be placed on it: the shorter of 1 / the
+    """One frame period, the farthest a time before the first frame or after the last may sit from it and still be
+    placed on it (a time between them always lands on the nearer frame): the shorter of 1 / the
     dataset's declared fps and the median positive gap between the episode's frames. Each bound covers a failure of the
     other. A declared 10 fps on frames that run at 30 fps would allow 100ms and place a time 2.5 frames past the end on
     the last frame (issue 196), and the median gap catches it. Dropped frames lower the rate over the recorded span
@@ -207,8 +209,11 @@ def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
     start, duration = frame_ts[0], frame_ts[-1] - frame_ts[0] + period
 
     def place(t: float, what: str):
+        # a time between the first and last frame always has a frame on each side and lands on the nearer one, even
+        # across dropped frames or under a declared rate above the frames' own; only one past either end by more than
+        # a frame period is refused
         at, off = _snap(frame_ts, start + t)
-        if off > period + 1e-6:
+        if off > period + 1e-6 and not frame_ts[0] <= start + t <= frame_ts[-1]:
             report["refused"].append({"episode": name, "what": what, "t_s": t, "nearest_frame_s": at - start,
                                       "off_s": round(off, 6)})
             return None
