@@ -278,6 +278,82 @@ def test_a_declared_rate_higher_than_the_frames_still_places_a_time_on_the_neare
     assert [r['timestamp'] for r in rows if r['language_events']] == [rows[14]['timestamp']]
 
 
+def test_a_declared_rate_higher_than_the_frames_places_a_time_midway_between_two_frames(tmp_path):
+    # 10 fps frames under a 30 fps declaration: a time 50ms from the frames on both sides lies inside the episode and
+    # lands on the nearer frame, as one 20ms from a frame does; only a time past the episode's ends is refused
+    ep0 = {'event_labels': [step(1.45, 2.95, 'right', 'pour the water')],
+           'key_events': [{'t_s': 1.45, 'label': 'between frames', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, rate=30)
+    assert report['refused'] == []
+    rows = per_episode(table, 0)
+    assert len([r for r in rows if r['language_events']]) == 1
+    assert [r['content'] for r in rows[0]['language_persistent']] == ['idle', 'pour the water']
+
+
+def test_a_step_that_starts_in_a_run_of_dropped_frames_still_starts_its_subtask(tmp_path):
+    # 30 fps declared and true, frames 20 to 24 dropped: a step starting at 0.75s, 83ms from the nearer frame of the
+    # gap, starts its subtask on that frame instead of leaving every frame after it with the step before
+    times = [np.float32(k / 30).item() for k in range(35) if not 20 <= k <= 24]
+    ep0 = {'event_labels': [step(0., .75, 'right', 'grasp the cup'), step(.75, 1.1, 'right', 'pour the water')]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times, rate=30)
+    rows = per_episode(table, 0)
+    assert [(r['timestamp'], r['content']) for r in rows[0]['language_persistent']] == \
+        [(times[0], 'grasp the cup'), (times[20], 'pour the water'), (times[28], 'idle')]
+    assert report['refused'] == [] and report['validation_errors'] == []
+
+
+# episode 0 at 30 fps with frames 21 to 29 dropped: a 333ms gap from 0.667s to 1.0s
+GAP_TIMES = [np.float32(k / 30).item() for k in range(39) if not 21 <= k <= 29]
+
+
+def test_a_time_written_more_than_one_frame_period_from_its_frame_is_listed_with_its_distance(tmp_path):
+    # a step and a key event at 0.82s land on the 0.667s frame, 153ms away: each is written and listed by row, as a
+    # refused time is, never shown only in the dataset-wide max_snap_s
+    ep0 = {'event_labels': [step(.82, 1.2, 'right', 'pour the water')],
+           'key_events': [{'t_s': .82, 'label': 'cup tipped', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=GAP_TIMES, rate=30)
+    assert report['refused'] == []
+    far = sorted((r['episode'], r['what'], r['text'], r['t_s'], r['nearest_frame_s'], round(r['off_s'], 3))
+                 for r in report['far_snaps'])
+    assert [f[:4] for f in far] == [('episode_000000.json', 'key_event', 'cup tipped', .82),
+                                    ('episode_000000.json', 'subtask', 'pour the water', .82)]
+    assert all(abs(f[4] - GAP_TIMES[20]) < 1e-6 and f[5] == .153 for f in far)
+
+
+def test_a_subtask_that_loses_its_frame_to_a_later_boundary_is_listed(tmp_path):
+    # tap runs 0.71s to 0.74s inside the gap: its start and the pour's both land on the 0.667s frame, the pour is kept
+    # there, and the tap, which then has no frame of its own, is listed instead of dropped without a word
+    ep0 = {'event_labels': [step(0., .71, 'right', 'grasp the cup'), step(.71, .74, 'right', 'tap the rim'),
+                            step(.74, 1.2, 'right', 'pour the water')]}
+    report, table = export_one(tmp_path, ep0, ep0_times=GAP_TIMES, rate=30)
+    rows = per_episode(table, 0)
+    assert [r['content'] for r in rows[0]['language_persistent']] == ['grasp the cup', 'pour the water', 'idle']
+    lost = [(r['episode'], r['text'], r['t_s'], r['replaced_by']) for r in report['subtasks_lost']]
+    assert lost == [('episode_000000.json', 'tap the rim', .71, 'pour the water')]
+    assert abs(report['subtasks_lost'][0]['frame_s'] - GAP_TIMES[20]) < 1e-6
+
+
+@pytest.mark.parametrize('steps', [
+    [step(.5, 2., 'right', 'grasp the cup'), step(2.01, 2.8, 'right', 'pour the water')],
+    [step(.5, 2.01, 'left', 'grasp the cup'), step(2., 2.8, 'right', 'pour the water')],
+], ids=['idle between two steps', 'two sides overlapping for 10ms'])
+def test_a_subtask_whose_steps_all_keep_a_frame_is_never_listed_as_lost(tmp_path, steps):
+    # the 10ms idle, or the 10ms "left: grasp; right: pour", loses its frame to the pour, but no step goes unlabelled:
+    # idle names no step, and grasp and pour each keep frames of their own
+    report, _ = export_one(tmp_path, {'event_labels': steps})
+    assert report['subtasks_lost'] == []
+
+
+def test_only_the_step_with_no_frame_is_listed_when_idle_and_a_tap_lose_theirs(tmp_path):
+    # grasp ends at 2.0s, tap runs 2.01s to 2.04s, pour starts at 2.04s: idle, tap and pour all land on the 2.0s frame
+    # and pour keeps it; the tap is listed, the idle between grasp and tap is not
+    ep0 = {'event_labels': [step(.5, 2., 'right', 'grasp the cup'), step(2.01, 2.04, 'right', 'tap the rim'),
+                            step(2.04, 2.8, 'right', 'pour the water')]}
+    report, _ = export_one(tmp_path, ep0)
+    assert [(r['text'], r['t_s'], r['replaced_by']) for r in report['subtasks_lost']] == \
+        [('tap the rim', 2.01, 'pour the water')]
+
+
 def test_an_event_is_carried_by_one_frame_when_two_frames_share_its_timestamp(tmp_path):
     # frame 11 of episode 0 repeats frame 10's 1.0s (issue 200): the key event at 1.0s is carried by frame 10 alone,
     # and the repeated timestamp is listed in the report
