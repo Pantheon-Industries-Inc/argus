@@ -19,6 +19,14 @@ neither an instruction nor timed steps, where idle footage holds none. A record 
 label_schema) is held to what its mode asked: completion.task_completed for an episode, a tasks list with an outcome on
 every task for a session or the head camera.
 
+The face issues. A request sent under the rule that a face is reported over each stretch it is seen (its config
+says face_issues_timed) asks every data issue whose category names a face (face_visible, face-visible,
+FaceVisible, bystander_face; face_category) for a t_s and an end_s, and an issue grouped from several (label/issue_groups.py) for both on each
+occurrence. The face blur reads those stretches; an issue with no times means the whole recording, and the blur then
+runs a face detector over every frame. A reply that reports a face without its times is therefore not finished, and
+the harness sends it again automatically (label/harness.py auto_resend). A record asked before the rule is judged as
+it was, so no delivered label turns into a failure.
+
 A recording labelled in parts is complete when every part was, each against its own request (label/pieces.py
 stitch). A record that names no sampled instants (written by hand, or by a harness older than the receipt) is held
 to a timed timeline and the outcome only.
@@ -26,6 +34,7 @@ to a timed timeline and the outcome only.
 from __future__ import annotations
 
 import math
+import re
 
 
 def _number(value) -> bool:
@@ -146,6 +155,47 @@ def outcome_gaps(labels: dict, record: dict) -> list[str]:
     return []
 
 
+FACE_WORDS = {'face', 'faces'}
+
+
+def face_category(category) -> bool:
+    """Whether a category names a face as one of its words (face_visible, face-visible, "face visible", FaceVisible,
+    bystanderFace), split as label/idle.py idle_category splits: at camelCase and at any separator. A word that only
+    contains one (surface_glare, interface_glitch, typeface_text) or another form of it (facing_away) is not one."""
+    if not isinstance(category, str):
+        return False
+    words = re.split(r'[^a-z0-9]+', re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', category).lower())
+    return bool(FACE_WORDS.intersection(words))
+FACE_GAP = 'each stretch a face is seen is its own timed issue'
+
+
+def _timed(row) -> bool:
+    return isinstance(row, dict) and _number(row.get('t_s')) and _number(row.get('end_s')) and row['end_s'] >= row['t_s']
+
+
+def face_gaps(labels: dict) -> list[str]:
+    """Why the reply's face issues lack their times, or [] when each has them: one reason per data issue whose
+    category names a face and that has no t_s and end_s, or an occurrence without them."""
+    gaps = []
+    for index, row in enumerate(labels.get('data_issues') or []):
+        if not isinstance(row, dict) or not isinstance(row.get('category'), str):
+            continue
+        category = row['category'].strip()
+        if not face_category(category):
+            continue
+        occurrences = row.get('occurrences')
+        rows = occurrences if isinstance(occurrences, list) and occurrences else [row]
+        if not all(_timed(r) for r in rows):
+            gaps.append(f'data issue {index} ({category}) has no t_s and end_s: {FACE_GAP}')
+    return gaps
+
+
+def face_rule_asked(record: dict) -> bool:
+    """Whether the request was sent under the rule that every face issue is timed (config.face_issues_timed)."""
+    config = record.get('config') if isinstance(record.get('config'), dict) else {}
+    return config.get('face_issues_timed') is True
+
+
 def parts_gaps(record: dict) -> list[str]:
     """Why a recording labelled in parts is not complete: each part with no labels, with its own reason."""
     stitched = record.get('stitched') if isinstance(record.get('stitched'), dict) else {}
@@ -161,4 +211,5 @@ def annotation_gaps(labels: dict, record: dict) -> list[str]:
         return ['the labels are not a JSON object']
     if isinstance(record.get('stitched'), dict):
         return parts_gaps(record)
-    return timeline_gaps(labels, record) + outcome_gaps(labels, record)
+    return (timeline_gaps(labels, record) + outcome_gaps(labels, record)
+            + (face_gaps(labels) if face_rule_asked(record) else []))

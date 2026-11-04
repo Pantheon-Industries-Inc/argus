@@ -239,7 +239,9 @@ def _retry_after(headers, attempt: int) -> float:
 # automatically, up to AUTO_RESENDS more times per unit, after AUTO_RESEND_DELAYS_S.
 # Each attempt that may have been billed keeps its charge in the unit's billing history and against the cap, as an
 # explicit --retry-received does; past the bound only --retry-received sends it again. A reply the model wrote that
-# does not parse, a reply cut at the output limit and a complete annotation are never resent automatically.
+# does not parse, a reply cut at the output limit and a complete annotation are never resent automatically. A reply
+# whose only gap is a face issue without its times is resent within the same bound, since the face blur needs them
+# and a second sample of the same request usually gives them (label/completeness.py face_gaps).
 AUTO_RESENDS = 2
 AUTO_RESEND_DELAYS_S = (30.0, 120.0)
 
@@ -299,10 +301,17 @@ def dispatched_attempts(record: dict) -> int:
 
 def auto_resend(record: dict) -> str | None:
     """Why to send this unit again, while it has been sent at most AUTO_RESENDS times, or None: a provider failure,
-    or a connection our client found dead, each named as what it was."""
+    a connection our client found dead, or a reply whose only gap is a face issue without its times
+    (label/completeness.py face_gaps), each named as what it was."""
     failure = provider_failure(record)
     ours = None if failure else client_timeout(record)
     why = f'provider failure: {failure}' if failure else f'our client closed a dead connection: {ours}' if ours else None
+    if why is None and isinstance(record, dict) and not record.get('dry_run') and record.get('response') is not None \
+            and not reply_truncated(record):
+        from label.completeness import FACE_GAP
+        problems = annotation_problems(record)
+        if problems and all(p.endswith(FACE_GAP) for p in problems):
+            why = f'the reply reports a face without its times ({problems[0]})'
     return why if why and dispatched_attempts(record) <= AUTO_RESENDS else None
 
 
@@ -522,7 +531,9 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                    "contact_detail_s": req["contact_s"], "resolution_route": route,
                    "timesteps_s": req["timesteps"], "detail": DETAIL, "circular_image": req["lens"],
                    "prompt_blocks": req["blocks"], "schema_fields": req["schema_fields"],
-                   "checks_implied": req["checks_implied"]},
+                   "checks_implied": req["checks_implied"],
+                   # every face issue is asked with its times (label/completeness.py face_gaps)
+                   "face_issues_timed": True},
     }
     if pricing_quote is not None:
         fields['config']['pricing_quote'] = pricing_quote

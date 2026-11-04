@@ -178,7 +178,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: <<ISSUE_TAGS>>. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it starts, or null if it spans the episode>,
+     "t_s": <float when it starts, or null if it spans the episode (never for face_visible: each stretch a face is seen is its own timed issue)>,
      "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
   ],
@@ -527,7 +527,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: instruction_mismatch, other_person_same_object, camera_fault, recording_fault, observability_loss, setup_change, idle_stretch. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it starts, or null if it spans the episode>,
+     "t_s": <float when it starts, or null if it spans the episode (never for face_visible: each stretch a face is seen is its own timed issue)>,
      "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
   ],
@@ -764,7 +764,8 @@ _VISIBILITY = {
         "  face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly\n"
         "  face_visible, over its span; report every one, and anything that may be a face: bystanders, faces in a mirror\n"
         "  or screen, at a frame edge or seen for under a second, and the operator's own; report each reappearance as\n"
-        "  its own data issue.\n"
+        "  its own data issue with the t_s and end_s of that stretch: a face that comes and goes is several timed issues,\n"
+        "  never one issue without times.\n"
         "  Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or\n"
         "  end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how\n"
         "  the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task\n"
