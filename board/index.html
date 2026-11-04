@@ -1709,7 +1709,10 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .qual-cells { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .qual-cell { padding: 10px 14px 12px; border-right: 1px solid var(--row-divider); min-width: 0; }
 .qual-cell:last-child { border-right: 0; }
-.qual-cell .qc-k { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--fg-2); font-weight: 600; }
+/* a part's name and its weight share a line where they fit; in a narrow cell or a wider fallback font the weight
+   moves below the name instead of running out of the cell */
+.qual-cell .qc-k { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 6px; font-size: 11px;
+  color: var(--fg-2); font-weight: 600; }
 /* the weight a part carries in execution, beside its name */
 .qc-w { font: 500 10px/1.2 var(--mono); color: var(--fg-3); }
 .qual-cell .qc-v { font-family: var(--mono); font-size: 17px; font-weight: 700; margin: 3px 0 6px; }
