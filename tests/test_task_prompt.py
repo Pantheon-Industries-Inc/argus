@@ -34,6 +34,8 @@ def main(rig, recorded=True):
     text = text.replace(REPETITION, MISSED_GRASPS.format(actor=actor))
     assert text.count(IDLE_LOW[0]) == 1
     text = text.replace(*IDLE_LOW)
+    assert text.count(FACE_TIMED[0]) == 1
+    text = text.replace(*FACE_TIMED)
     if rig != 'ego_head':
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
@@ -84,6 +86,14 @@ MISSED_GRASPS = '''  Repeated failed attempts at the same aim are wasteful, but 
 IDLE_LOW = ('  it is would barely be affected. For operator mistakes',
             '  it is would barely be affected. An idle stretch is always a low data issue, since trimming it is all it'
             ' needs; a\n  frozen or black camera is a recording fault, not idleness. For operator mistakes')
+
+
+# An approved edit to every rig's data issue format (2026-11-03): in 44 in-the-wild UMI recordings, 17 of 1,241 face
+# issues came back with no times, so the face blur had to search every frame of the recording for them; a face issue
+# now always gives its stretch (label/completeness.py face_gaps). The test holds its own copy, as for the edits below.
+FACE_TIMED = ('     "t_s": <float when it starts, or null if it spans the episode>,\n',
+              '     "t_s": <float when it starts, or null if it spans the episode (never for face_visible: each stretch a'
+              ' face is seen is its own timed issue)>,\n')
 
 
 # An edit to the robot rigs' prompts (2026-10-24): every example action was a grasp-based phase, and the handheld
@@ -236,7 +246,9 @@ HANDHELD_SIDES = """- WHICH HAND EACH GRIPPER CAMERA IS ON. Where the dataset na
 # copy, as for the edits above. Then (Eric, 2026-11-01): any face at all is medium, tagged face_visible, so the pipeline
 # blurs it rather than dropping the take. Then (2026-11-03): a detector pass on 15h of in-the-wild takes found 6.4% of the
 # frames with a face outside every face_visible span (bystanders, faces in a mirror, a close face seen briefly), so the
-# rule names those cases and asks for one occurrence per appearance.
+# rule names those cases and asks for one occurrence per appearance. Then (2026-11-03): 17 of 1,241 face issues on the
+# same takes came back with no times, one issue for a face that came and went, so each reappearance now gives the t_s
+# and end_s of its stretch (label/completeness.py face_gaps).
 HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of the following is a data issue over its span
   and goes in data_issues even when the timeline already describes it. These severities are minimums set by what the
   dataset may ship, not by the training-impact scale below; apply them even when a model would learn little wrong
@@ -247,7 +259,8 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
   face_visible, over its span; report every one, and anything that may be a face: bystanders, faces in a mirror
   or screen, at a frame edge or seen for under a second, and the operator's own; report each reappearance as
-  its own data issue.
+  its own data issue with the t_s and end_s of that stretch: a face that comes and goes is several timed issues,
+  never one issue without times.
   Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or
   end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how
   the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task
