@@ -364,7 +364,8 @@ def validate(root: Path) -> list[str]:
         frame_ts: dict[int, set] = {}
         for e, ts, per, ev in zip(t.column("episode_index").to_pylist(), t.column("timestamp").to_pylist(),
                                   t.column(LANGUAGE_PERSISTENT).to_pylist(), t.column(LANGUAGE_EVENTS).to_pylist()):
-            frame_ts.setdefault(e, set()).add(ts)
+            # in float32, the type language_persistent stores a subtask start in, whatever type the column has
+            frame_ts.setdefault(e, set()).add(float(np.float32(ts)))
             if e not in first:
                 first[e] = (ts, per)
             elif per != first[e][1]:
