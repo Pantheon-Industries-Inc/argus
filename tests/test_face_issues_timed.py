@@ -59,9 +59,15 @@ def test_timed_faces_and_untimed_other_issues_are_no_gap():
     assert completeness.annotation_gaps(labels(face(), face(30.0, 31.0), other, surface), request()) == []
 
 
-@pytest.mark.parametrize('category', ['face_visible', 'Face_Visible', 'faces_in_view', 'bystander_face'])
+@pytest.mark.parametrize('category', ['face_visible', 'Face_Visible', 'faces_in_view', 'bystander_face',
+                                      'face-visible', 'face visible', 'FaceVisible', 'bystanderFace'])
 def test_any_face_category_is_held_to_the_rule(category):
     assert completeness.annotation_gaps(labels(face(None, None, category=category)), request()) != []
+
+
+@pytest.mark.parametrize('category', ['surface_glare', 'interface_glitch', 'typeface_text', 'facing_away'])
+def test_a_word_that_only_contains_face_is_not_a_face_category(category):
+    assert completeness.annotation_gaps(labels(face(None, None, category=category)), request()) == []
 
 
 def test_a_grouped_face_issue_needs_every_occurrence_timed():
