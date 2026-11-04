@@ -354,6 +354,47 @@ def test_only_the_step_with_no_frame_is_listed_when_idle_and_a_tap_lose_theirs(t
         [('tap the rim', 2.01, 'pour the water')]
 
 
+def test_an_event_is_carried_by_one_frame_when_two_frames_share_its_timestamp(tmp_path):
+    # frame 11 of episode 0 repeats frame 10's 1.0s (issue 200): the key event at 1.0s is carried by frame 10 alone,
+    # and the repeated timestamp is listed in the report
+    times = frame_times(30)
+    times[11] = times[10]
+    ep0 = {'event_labels': [step(0., 2.9, 'right', 'pour the water')],
+           'key_events': [{'t_s': 1.0, 'label': 'cup lifted', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times)
+    rows = per_episode(table, 0)
+    assert [i for i, r in enumerate(rows) if r['language_events']] == [10]
+    assert report['events'] == {'key_event': 1}
+    assert report['repeated_timestamps'] == [{'episode': 'episode_000000.json', 't_s': times[10], 'frames': 2}]
+
+
+def test_the_checks_catch_an_event_carried_by_two_frames(exported, tmp_path):
+    _, out, _, table = exported
+    path = out / 'data' / 'chunk-000' / 'file-000.parquet'
+    events = table.column('language_events').to_pylist()
+    i = next(i for i, ev in enumerate(events) if ev)
+    events[i + 1] = events[i]                   # the next frame of the episode carries the same event row
+    broken = table.drop_columns(['language_events']).append_column('language_events',
+                                                                    lx._array(events, 'language_events'))
+    path.unlink()
+    pq.write_table(broken, path)
+    assert any('carried by more than one frame' in e for e in lx.validate(out))
+
+
+def test_a_finding_written_twice_sits_twice_on_one_frame_and_passes_the_checks(tmp_path):
+    # the model can repeat a finding; both rows land on one frame, as on main, and only a row that two different
+    # frames carry is refused
+    k = {'t_s': 1.2, 'label': 'cup lifted', 'kind': '', 'outcome': '', 'note': ''}
+    m = {'issue': 'cup slips in the grip', 'category': 'failed_grasp', 'severity': 'low', 't_s': 1.7, 'end_s': 1.9,
+         'recovered': True}
+    report, table = export_one(tmp_path, {'event_labels': [step(0., 2.9, 'right', 'grasp')], 'key_events': [k, k],
+                                          'operator_mistakes': [m, m]})
+    assert report['validation_errors'] == []
+    rows = per_episode(table, 0)
+    carried = [(i, [e['style'] for e in r['language_events']]) for i, r in enumerate(rows) if r['language_events']]
+    assert carried == [(12, ['key_event', 'key_event']), (17, ['mistake', 'mistake'])]
+
+
 def test_a_float64_timestamp_column_passes_the_checks(tmp_path):
     # a dataset storing timestamp as float64 (issue 199): the subtask start 1.3s is kept as float32 in
     # language_persistent and must still be read as the frame at 1.3s, not refused as off every frame
