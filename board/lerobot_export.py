@@ -360,10 +360,11 @@ def validate(root: Path) -> list[str]:
                 t.schema.field(LANGUAGE_EVENTS).type != column_types()[LANGUAGE_EVENTS]:
             errors.append(f"{path.name}: the language columns do not have LeRobot's types")
         first: dict[int, tuple[float, list]] = {}
-        carried: dict[int, set] = {}
+        carried: dict[int, dict] = {}       # episode -> {event row: the index of the first frame that carries it}
         frame_ts: dict[int, set] = {}
-        for e, ts, per, ev in zip(t.column("episode_index").to_pylist(), t.column("timestamp").to_pylist(),
-                                  t.column(LANGUAGE_PERSISTENT).to_pylist(), t.column(LANGUAGE_EVENTS).to_pylist()):
+        for i, (e, ts, per, ev) in enumerate(zip(
+                t.column("episode_index").to_pylist(), t.column("timestamp").to_pylist(),
+                t.column(LANGUAGE_PERSISTENT).to_pylist(), t.column(LANGUAGE_EVENTS).to_pylist())):
             # in float32, the type language_persistent stores a subtask start in, whatever type the column has
             frame_ts.setdefault(e, set()).add(float(np.float32(ts)))
             if e not in first:
@@ -377,9 +378,10 @@ def validate(root: Path) -> list[str]:
                     errors.append(f"ep={e}: camera field on style {row['style']!r}")
             for row in ev:
                 key = (row["style"], row["content"], json.dumps(row["tool_calls"], sort_keys=True, default=str))
-                if key in carried.setdefault(e, set()):
+                # the same finding twice on one frame is two rows the labels hold; only another frame repeating it
+                # is a duplicate
+                if carried.setdefault(e, {}).setdefault(key, i) != i:
                     errors.append(f"ep={e}: an event row ({row['style']}) is carried by more than one frame")
-                carried[e].add(key)
                 if row["style"] not in events_ok:
                     errors.append(f"ep={e}: style {row['style']!r} in {LANGUAGE_EVENTS}")
                 if (row["camera"] is not None) != (row["style"] in VIEW_DEPENDENT_STYLES):
