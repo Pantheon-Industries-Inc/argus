@@ -337,3 +337,29 @@ def test_a_float64_timestamp_column_passes_the_checks(tmp_path):
     assert report['validation_errors'] == []
     rows = per_episode(pq.read_table(tmp_path / 'out' / 'data' / 'chunk-000' / 'file-000.parquet'), 0)
     assert [r['content'] for r in rows[0]['language_persistent']] == ['grasp the cup', 'pour the water', 'idle']
+
+
+def float64_episode(tmp_path, ep0_times):
+    """The test dataset with episode 0's timestamps replaced by ep0_times (30 of them), stored as float64."""
+    src = dataset(tmp_path / 'src')
+    path = src / 'data' / 'chunk-000' / 'file-000.parquet'
+    t = pq.read_table(path)
+    ts = pa.array(list(ep0_times) + [k / 10 for k in range(20)], type=pa.float64())
+    t = t.set_column(t.column_names.index('timestamp'), 'timestamp', ts)
+    path.unlink()
+    pq.write_table(t, path)
+    return src
+
+
+@pytest.mark.parametrize('origin, listed', [(9000., True), (3600., False)], ids=['past 8192s', 'at 3600s'])
+def test_an_episode_whose_frame_times_collide_in_float32_is_listed(tmp_path, origin, listed):
+    # 2 kHz frames from 9000s: float32 holds times there to about 1ms, so neighbouring frames share a stored
+    # timestamp and a subtask start cannot say which frame it means (issue 203). From 3600s they stay apart.
+    src = float64_episode(tmp_path, [origin + k / 2000 for k in range(30)])
+    folder = tmp_path / 'labels'
+    folder.mkdir()
+    (folder / 'episode_000000.json').write_text(json.dumps(
+        {'event_labels': [step(0., .004, 'right', 'grasp'), step(.004, .0145, 'right', 'pour')]}))
+    report = lx.export(src, folder, tmp_path / 'out')
+    got = [(r['episode'], r['frames']) for r in report['float32_collisions']]
+    assert got == ([('episode_000000.json', 28)] if listed else [])
