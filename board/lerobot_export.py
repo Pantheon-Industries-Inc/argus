@@ -29,10 +29,11 @@ row group, and the older subtask_index and tools columns are dropped (from meta/
 - Argus writes no plan and no memory rows, since it labels neither. LeRobot's validator only warns about that.
 
 Every time is snapped to the nearest frame timestamp read from the data file, never computed from a frame index and
-a rate. A time more than one frame period (1 / fps from meta/info.json, else the median gap between frames) from
-every frame, after the episode's end for example, is refused: its row is left out and listed in the report with its
-distance. When two subtask boundaries round to the same frame, the later one is kept, and repeated texts in a row
-merge. After writing, the copy is checked (validate below), and any failure stops the command with exit 1.
+a rate. A time more than one frame period from every frame, after the episode's end for example, is refused: its row
+is left out and listed in the report with its distance. The period is 1 / the fps in meta/info.json unless the
+frames' own timestamps contradict it, and else comes from the median gap between frames (frame_period). When two
+subtask boundaries round to the same frame, the later one is kept, and repeated texts in a row merge. After writing,
+the copy is checked (validate below), and any failure stops the command with exit 1.
 
 The five event styles must be registered in LeRobot before its loaders route them, the way its docs register a
 project style: add them to lerobot.datasets.language.EXTENDED_STYLES and EVENT_ONLY_STYLES (EVENT_STYLES below).
@@ -180,15 +181,14 @@ def _snap(times: list[float], t: float) -> tuple[float, float]:
 
 
 def frame_period(fps, frame_ts: list[float]) -> float:
-    """One frame period: 1 / the dataset's fps from meta/info.json, else the median gap between frames. Never the
-    smallest gap, which one late frame shrinks to a millisecond."""
-    try:
-        if float(fps) > 0:
-            return 1.0 / float(fps)
-    except (TypeError, ValueError):
-        pass
-    gaps = sorted(b - a for a, b in zip(frame_ts, frame_ts[1:]) if b > a)
-    return gaps[len(gaps) // 2] if gaps else 0.0
+    """One frame period: 1 / the dataset's fps from meta/info.json, unless the frames' own timestamps contradict it
+    (prepare/frame_rate.py supported_rate), else 1 / the rate of the median gap between frames (measured_rate). Never
+    the smallest gap, which one late frame shrinks to a millisecond."""
+    from prepare.frame_rate import measured_rate, supported_rate
+    rate = supported_rate(fps, frame_ts)[0] if fps is not None else None
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not rate > 0:
+        rate = measured_rate(frame_ts)
+    return 1.0 / rate if rate else 0.0
 
 
 def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
@@ -285,7 +285,8 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
         rel = src.relative_to(dataset)
         if src.is_file() and not (rel.parts[0] == "data" and src.suffix == ".parquet"):
             _link_or_copy(src, out / rel)
-    fps = json.loads((dataset / "meta" / "info.json").read_text()).get("fps")
+    from prepare.frame_rate import declared_fps
+    fps = declared_fps(json.loads((dataset / "meta" / "info.json").read_text()))
     found = set()
     for src in data_files(dataset):
         table = pq.read_table(src)
