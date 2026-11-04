@@ -22,7 +22,8 @@ def frame_times(n):
     return [np.float32(k / FPS + JITTER.get(k, 0.)).item() for k in range(n)]
 
 
-def dataset(root: Path) -> Path:
+def dataset(root: Path, ep0_times=None, fps=True) -> Path:
+    """ep0_times replaces episode 0's 30 frame timestamps; fps=False leaves the rate out of meta/info.json."""
     (root / 'meta' / 'episodes' / 'chunk-000').mkdir(parents=True)
     (root / 'data' / 'chunk-000').mkdir(parents=True)
     (root / 'videos' / 'observation.images.front' / 'chunk-000').mkdir(parents=True)
@@ -38,11 +39,13 @@ def dataset(root: Path) -> Path:
                          'episode_index': {'dtype': 'int64', 'shape': [1], 'names': None},
                          'index': {'dtype': 'int64', 'shape': [1], 'names': None},
                          'task_index': {'dtype': 'int64', 'shape': [1], 'names': None}}}
+    if not fps:
+        del info['fps']
     (root / 'meta' / 'info.json').write_text(json.dumps(info, indent=4))
     pq.write_table(pa.table({'episode_index': [0, 1], 'tasks': [['put the cup on the plate']] * 2,
                              'length': [30, 20], 'dataset_from_index': [0, 30], 'dataset_to_index': [30, 50]}),
                    root / 'meta' / 'episodes' / 'chunk-000' / 'file-000.parquet')
-    ts = frame_times(30) + frame_times(20)
+    ts = (frame_times(30) if ep0_times is None else ep0_times) + frame_times(20)
     eps = [0] * 30 + [1] * 20
     pq.write_table(pa.table({
         'observation.state': pa.array([[0.] * 6] * 50, type=pa.list_(pa.float32(), 6)),
@@ -51,7 +54,10 @@ def dataset(root: Path) -> Path:
         'frame_index': pa.array(list(range(30)) + list(range(20)), type=pa.int64()),
         'episode_index': pa.array(eps, type=pa.int64()),
         'index': pa.array(range(50), type=pa.int64()),
-        'task_index': pa.array([0] * 50, type=pa.int64())}), root / 'data' / 'chunk-000' / 'file-000.parquet')
+        'task_index': pa.array([0] * 50, type=pa.int64()),
+        # columns LeRobot's annotation writer drops when it writes the language columns
+        'subtask_index': pa.array([0] * 50, type=pa.int64()),
+        'tools': pa.array(['[]'] * 50, type=pa.string())}), root / 'data' / 'chunk-000' / 'file-000.parquet')
     return root
 
 
@@ -112,7 +118,8 @@ def test_the_columns_have_lerobots_types_and_pass_its_checks(exported):
     assert table.schema.field('language_events').type == lx.column_types()['language_events']
     # every source column is kept, row for row
     source = pq.read_table(src / 'data' / 'chunk-000' / 'file-000.parquet')
-    assert table.select(source.column_names).equals(source)
+    kept = [c for c in source.column_names if c not in ('subtask_index', 'tools')]
+    assert table.select(kept).equals(source.select(kept))
     info = json.loads((out / 'meta' / 'info.json').read_text())
     assert info['features']['language_events'] == {'dtype': 'language', 'shape': [1], 'names': None}
     assert (out / 'videos' / 'observation.images.front' / 'chunk-000' / 'file-000.mp4').read_bytes() == b'\0' * 64
@@ -184,3 +191,52 @@ def test_it_refuses_a_folder_that_is_not_empty_and_two_files_for_one_episode(tmp
     (tmp_path / 'labels' / 'again.json').write_text(json.dumps(EP1))
     with pytest.raises(SystemExit, match='two episode files for LeRobot episode 1'):
         lx.export(src, tmp_path / 'labels', tmp_path / 'out2')
+
+
+def export_one(tmp_path, ep0, **kw):
+    """Export episode 0's label ep0 (and episode 1's usual one) from a dataset built with kw. (report, table)"""
+    src = dataset(tmp_path / 'src', **kw)
+    folder = tmp_path / 'labels'
+    folder.mkdir()
+    (folder / 'episode_000000.json').write_text(json.dumps(ep0))
+    (folder / 'b.json').write_text(json.dumps(EP1))
+    report = lx.export(src, folder, tmp_path / 'out')
+    return report, pq.read_table(tmp_path / 'out' / 'data' / 'chunk-000' / 'file-000.parquet')
+
+
+def test_a_step_that_starts_on_the_frame_another_ends_on_keeps_its_own_subtask(tmp_path):
+    # the pour starts 10ms after the grasp ends, so both boundaries round to the frame at 2.0s: the later one wins
+    ep0 = {'event_labels': [step(.5, 2., 'right', 'grasp the cup'), step(2.01, 2.8, 'right', 'pour the water')]}
+    report, table = export_one(tmp_path, ep0)
+    rows = per_episode(table, 0)
+    ts = [r['timestamp'] for r in rows]
+    got = [(r['timestamp'], r['content']) for r in rows[0]['language_persistent']]
+    assert got == [(ts[0], 'idle'), (ts[5], 'grasp the cup'), (ts[20], 'pour the water'), (ts[28], 'idle')]
+    assert report['validation_errors'] == []
+
+
+@pytest.mark.parametrize('fps', [True, False], ids=['rate from meta/info.json', 'median frame gap'])
+def test_one_frame_close_to_the_next_does_not_narrow_how_far_a_time_may_snap(tmp_path, fps):
+    # frame 5 arrives 1ms before frame 6; a time 40ms from a frame is still well inside one frame period (100ms)
+    times = frame_times(30)
+    times[5] = np.float32(.599).item()
+    ep0 = {'event_labels': [], 'key_events': [{'t_s': 2.04, 'label': 'cup lifted', 'kind': '', 'outcome': '',
+                                                'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times, fps=fps)
+    assert report['refused'] == []
+    rows = per_episode(table, 0)
+    assert [r['timestamp'] for r in rows if r['language_events']] == [rows[20]['timestamp']]
+
+
+def test_each_episode_is_one_row_group_and_the_old_annotation_columns_are_dropped(exported):
+    _, out, _, table = exported
+    f = pq.ParquetFile(out / 'data' / 'chunk-000' / 'file-000.parquet')
+    groups = [set(f.read_row_group(i, columns=['episode_index']).column(0).to_pylist())
+              for i in range(f.num_row_groups)]
+    assert groups == [{0}, {1}]
+    assert 'subtask_index' not in table.column_names and 'tools' not in table.column_names
+
+
+def test_the_checks_say_which_rules_are_the_exporters_own():
+    doc = ' '.join(lx.validate.__doc__.split())
+    assert "the exporter's own rules, not LeRobot's" in doc
