@@ -283,7 +283,12 @@ def layout_check(browser: str, base: str, page: str, width: int, height: int = H
     src = page + ("&" if "?" in page else "?") + "check=layout"
     frame = f"{base}/layout-frame?" + urllib.parse.urlencode({"src": src, "w": width, "h": height})
     with tempfile.TemporaryDirectory() as profile:
+        # Every host but the board's own server is unreachable, so the page's web fonts never load and the check
+        # measures the fallback fonts every time. With the font host reachable, a check ran in whichever font had
+        # arrived by then, and the same commit passed on one run and failed on the next (issue 189: a 390px cell
+        # 4.6px too narrow on some runs). A reader whose font host is slow or blocked sees the fallback too.
         send, close = _devtools(browser, ["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
+                                          "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
                                           "--hide-scrollbars", "--disable-extensions", f"--user-data-dir={profile}",
                                           f"--window-size={max(width, 500) + 40},{height + 200}", "about:blank"])
         try:

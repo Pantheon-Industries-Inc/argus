@@ -9,6 +9,7 @@ from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_label import _packed_episode
 from test_request_attestation import source_edit
 import complete_reply
+from conftest import ROOMY_CAP
 
 # every request here inspects a recorded signal of the packed fixture, which only inspection all reaches
 pytestmark = pytest.mark.usefixtures('inspect_every_field')
@@ -69,12 +70,12 @@ def test_a_failed_card_call_leaves_the_paid_annotation_current_after_a_code_chan
     assert calls == before and output_spend(out) == paid
 
 
-def test_the_card_call_is_checked_against_what_the_final_call_billed_not_its_bound(tmp_path, monkeypatch):
-    # At this cap the final call's bound (about $1.08) plus the card bound ($1.05) exceeds the cap, while the billed
-    # final ($0.003) plus the card bound fits easily: an unsettled final bound refused these cards. The cap also holds
-    # the inspection selection's reservation beside the final call's bound, which grows with the shared instructions:
-    # at $1.90 it no longer fit once the contribution rule gained its sentences on missed grasps.
-    cap = 2.0
+def test_the_card_call_is_checked_against_what_the_final_call_billed_not_its_bound(tmp_path, monkeypatch, prompt_growth):
+    # The cap sits below the final call's bound (about $1.08) plus the card bound ($1.05), and above the billed final
+    # ($0.003) plus the card bound: an unsettled final bound refused these cards. It also holds the inspection
+    # selection's reservation beside the final call's floor. Every bound grows with the shared instructions (a fixed
+    # $1.90 stopped fitting once the contribution rule gained its sentences on missed grasps), so the cap is set from
+    # the bounds a first run reserves, halfway between what the run needs and what an unsettled bound would need.
     bounds = []
     real = harness.final_cost_bound
     def spy(content, max_tokens, **kw):
@@ -85,10 +86,18 @@ def test_the_card_call_is_checked_against_what_the_final_call_billed_not_its_bou
     ep, _ = _packed_episode(tmp_path)
     calls = []
     install(monkeypatch, calls, lambda: response('{"cards": []}'))
+    card_tokens = policy.output_limit(sensor_cards.ANSWER_TOKENS, 'medium')
+    probe = tmp_path / 'probe'
+    assert harness.run_batch([ep], probe, **{**options(), 'max_tokens': 12000, 'max_spend': ROOMY_CAP}) == 0
+    final_bound = max(v for t, v in bounds if t == 12000)
+    card_bound = next(v for t, v in bounds if t == card_tokens)
+    # the first two bounds are the final call's floor and the selection, reserved together
+    needed = max(bounds[0][1] + bounds[1][1], final_bound, output_spend(probe) + card_bound)
+    assert needed < final_bound + card_bound
+    cap = (needed + final_bound + card_bound) / 2
+    bounds.clear(); calls.clear()
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **{**options(), 'max_tokens': 12000, 'max_spend': cap}) == 0
-    final_bound = max(v for t, v in bounds if t == 12000)
-    card_bound = next(v for t, v in bounds if t == policy.output_limit(sensor_cards.ANSWER_TOKENS, 'medium'))
     assert final_bound + card_bound > cap > output_spend(out) + card_bound
     assert 'cards' in calls
 

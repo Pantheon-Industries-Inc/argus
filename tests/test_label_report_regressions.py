@@ -8,6 +8,7 @@ import pytest
 
 from label import evidence_access as ea, harness, pieces, reparse, run, sensor_evidence
 import complete_reply
+from conftest import ROOMY_CAP
 
 
 @pytest.mark.parametrize('reply', [{}, {'timeline': [], 'completion': {'task_completed': 'banana'}}])
@@ -191,7 +192,7 @@ def test_unknown_model_without_cost_cannot_invent_astra_charge():
         None, 'unverified')
 
 
-def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatch):
+def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatch, prompt_growth):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     calls = []
@@ -209,7 +210,7 @@ def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatc
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-proj-bad', 'sk-proj-good'], concurrency=1, force=False,
-        model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=1) == 0
+        model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=ROOMY_CAP) == 0
     result = json.loads((out / f'{ep.name}.json').read_text())
     assert result['parse_ok'] and harness.episode_cost(result) == pytest.approx(.02)
     assert calls == ['Bearer sk-proj-bad', 'Bearer sk-proj-good', 'Bearer sk-proj-good']
@@ -217,7 +218,7 @@ def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatc
     assert inspection['rounds'][0]['rejected_attempts'][0]['rejection_code'] == 'insufficient_quota'
 
 
-def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, monkeypatch):
+def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, monkeypatch, prompt_growth):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     calls = []
@@ -229,7 +230,7 @@ def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, mo
     monkeypatch.setattr(harness, 'call_model', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, model=harness.DEFAULT_MODEL, reasoning='medium',
-                max_tokens=100, timeout=1, cell_w=128, max_spend=1)
+                max_tokens=100, timeout=1, cell_w=128, max_spend=ROOMY_CAP)
     for index in range(3):
         assert harness.run_batch([ep], out, force=bool(index), **args) == 0
         assert run.billed_cost(tmp_path) == pytest.approx((index + 1) * .02)

@@ -8,6 +8,7 @@ import pytest
 
 from label import dictionary as dd, harness
 import complete_reply
+from conftest import ROOMY_CAP
 
 
 def answer(content, *, cost=.01):
@@ -18,6 +19,7 @@ def answer(content, *, cost=.01):
 def reject(request, status, body):
     raise urllib.error.HTTPError(request.full_url, status, 'rejected', {},
                                  io.BytesIO(json.dumps(body).encode()))
+
 
 
 def test_dictionary_quota_failover_uses_transport_unpaid_proof(tmp_path, monkeypatch):
@@ -94,7 +96,7 @@ def test_completion_case_variation_preserves_the_result_without_a_false_violatio
     ('handheld_gripper', 'object', ['cup']), ('ego_head', 'hands_visible', 'true'),
     ('ego_head', 'hands_wearing', False), ('ego_head', 'progress', 'late'),
 ])
-def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypatch, profile, bad_field, bad_value):
+def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypatch, prompt_growth, profile, bad_field, bad_value):
     from test_camera_timing import recording
     columns = (harness.TIMELINE_COLUMNS[:-1] + ['hands_visible', 'hands_wearing', 'notes']
                if profile == 'ego_head' else harness.TIMELINE_COLUMNS)
@@ -127,7 +129,7 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     # the cap only has to admit one episode's estimate (as the tests below set it); at $1 the handheld estimate sat at
     # the edge, and a longer face rule (2026-11-03) pushed it over, deferring the episode
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model=harness.DEFAULT_MODEL,
-                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=2.)
+                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=ROOMY_CAP)
     assert harness.run_batch([ep], out, **args) == 0
     target = out / (ep.name + '.json')
     result = json.loads(target.read_text())
@@ -143,7 +145,7 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}, 'success'),
     ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': .5}, 'Success'),
 ])
-def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, row, outcome):
+def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, prompt_growth, row, outcome):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
@@ -156,7 +158,7 @@ def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch,
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model=harness.DEFAULT_MODEL,
-                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=1.)
+                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=ROOMY_CAP)
     assert harness.run_batch([ep], out, **args) == 0
     target = out / (ep.name + '.json')
     result = json.loads(target.read_text())
@@ -176,7 +178,7 @@ def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize('rejected_stage', ['selection', 'final'])
 @pytest.mark.parametrize('error_length', [20, 1000])
-def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, rejected_stage, error_length):
+def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, prompt_growth, rejected_stage, error_length):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
@@ -191,7 +193,7 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(concurrency=1, model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100,
-                timeout=1, cell_w=128, max_spend=1.)
+                timeout=1, cell_w=128, max_spend=ROOMY_CAP)
     assert harness.run_batch([ep], out, keys=['sk-proj-first'], force=False, **args) == 0
     fail_final[0] = True
     assert harness.run_batch([ep], out, keys=['sk-proj-first', 'sk-proj-second'], force=True, **args) == 0
@@ -211,7 +213,7 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
     {'timeline': [{'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}]},
     {'completion': {'task_completed': 'Success'}},
 ])
-def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has_identity, labels):
+def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, prompt_growth, has_identity, labels):
     """A saved paid reply that lacks a timeline or an outcome is not a finished annotation (label/completeness.py),
     and it is never sent again on its own: the run fails and names how to resend it."""
     from test_camera_timing import recording
@@ -227,13 +229,13 @@ def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has
     target.write_text(json.dumps(result))
     original = target.read_bytes()
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('paid output replayed'))
-    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, max_spend=1., **args) == 1
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, max_spend=ROOMY_CAP, **args) == 1
     assert target.read_bytes() == original
     assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] in ('stale', 'unverified')
 
 
 @pytest.mark.parametrize('status', [429, 503])
-def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, status):
+def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, prompt_growth, status):
     # The provider answered with an error instead of a completion, so nothing was billed: the reservation is released
     # and a plain resume sends the final request again, with no --force.
     from test_camera_timing import recording
@@ -248,7 +250,7 @@ def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, st
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     monkeypatch.setattr(harness.time, 'sleep', lambda seconds: None)
     out = tmp_path / 'out'
-    args = dict(keys=['sk-or-first', 'sk-or-second'], concurrency=1, force=False, max_spend=1.,
+    args = dict(keys=['sk-or-first', 'sk-or-second'], concurrency=1, force=False, max_spend=ROOMY_CAP,
                 model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128)
     assert harness.run_batch([ep], out, **args) == 1
     receipt = json.loads((out / ('noreply_' + ep.name + '.json')).read_text())
@@ -261,7 +263,7 @@ def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, st
 
 
 @pytest.mark.parametrize('outcome', ['timeout', 504])
-def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_path, monkeypatch, outcome):
+def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_path, monkeypatch, prompt_growth, outcome):
     # Sent, then no answer (a read timeout, a gateway timeout): the request may have been billed, so its reservation
     # stays. Argus sends it again automatically, at most twice (AUTO_RESENDS), each attempt keeping its reservation,
     # and a plain resume past that bound never sends it again.
@@ -278,12 +280,15 @@ def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_p
         return answer({'requests': []})
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
-    args = dict(keys=['sk-or-first', 'sk-or-second'], concurrency=1, force=False, max_spend=1.,
+    args = dict(keys=['sk-or-first', 'sk-or-second'], concurrency=1, force=False, max_spend=ROOMY_CAP,
                 model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128)
-    # a cap that covers one reservation but not a second stops the resend: the first possible charge still counts
-    assert harness.run_batch([ep], tmp_path / 'capped', **args) == 1 and sent.count('final') == 1
-    sent.clear()
-    args['max_spend'] = 5.
+    # what each request reserves, read as the run reserves it, so the capped run at the end can be set between one
+    # attempt and two at any prompt length
+    bounds, real_bound = [], harness.final_cost_bound
+    def bound(content, max_tokens, **kw):
+        bounds.append((max_tokens, real_bound(content, max_tokens, **kw)))
+        return bounds[-1][1]
+    monkeypatch.setattr(harness, 'final_cost_bound', bound)
     assert harness.run_batch([ep], out, **args) == 1
     receipt = out / ('noreply_' + ep.name + '.json')
     result = json.loads(receipt.read_text())
@@ -295,6 +300,16 @@ def test_unknown_final_outcome_is_sent_again_twice_and_keeps_every_reserve(tmp_p
     # Resume reports the unresolved charge while retaining the receipt and refusing a fourth send.
     assert harness.run_batch([ep], out, **args) == 1
     assert receipt.read_bytes() == original and sent == before
+    # a cap that covers one reservation but not a second stops the resend: the first possible charge still counts.
+    # The first attempt reserves the selection together with the final request's floor, then the final request;
+    # a second attempt adds another final reservation.
+    final = [value for tokens, value in bounds if tokens == args['max_tokens']]
+    one = max(sum(value for _, value in bounds[:2]), max(final))
+    two = 2 * max(final)
+    assert one < two
+    sent.clear()
+    assert harness.run_batch([ep], tmp_path / 'capped', **{**args, 'max_spend': (one + two) / 2}) == 1
+    assert sent.count('final') == 1
 
 
 def endpoint_metadata(model):
@@ -493,7 +508,7 @@ def test_non_openai_provider_quote_still_obeys_dispatch_cap(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('contribution', [None, 'Advancing'])
-def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path, monkeypatch, contribution):
+def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path, monkeypatch, prompt_growth, contribution):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     row = [0, .3, 'left', 'reach', 'cup', None, None, contribution, .2]
@@ -504,7 +519,7 @@ def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path,
         return answer({'requests': []} if selection else {**complete_reply.uninstructed(), 'timeline': [row]})
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
-    args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=1.,
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=ROOMY_CAP,
                 model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128)
     assert harness.run_batch([ep], out, **args) == 0
     result = json.loads((out / (ep.name + '.json')).read_text())
@@ -641,7 +656,7 @@ def test_native_search_fee_without_enforceable_ceiling_refuses_paid_dispatch(tmp
     'Inspection selection exceeds the remaining batch spend cap.',
     'Inspection selection stopped at the cost or dispatch boundary.',
 ])
-def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path, monkeypatch, capsys, limitation):
+def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path, monkeypatch, prompt_growth, capsys, limitation):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     out = tmp_path / 'out'
@@ -657,7 +672,7 @@ def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path
     original = target.read_bytes()
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('paid output replayed'))
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
-                             max_spend=1., timeout=1, **args) == 0
+                             max_spend=ROOMY_CAP, timeout=1, **args) == 0
     assert target.read_bytes() == original
     warning = json.loads((out / ('stale_' + ep.name + '.json')).read_text())
     assert warning['refresh'] == '--force' and 'inspection' in warning['reason']
