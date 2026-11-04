@@ -30,10 +30,10 @@ row group, and the older subtask_index and tools columns are dropped (from meta/
 
 Every time is snapped to the nearest frame timestamp read from the data file, never computed from a frame index and
 a rate. A time more than one frame period from every frame, after the episode's end for example, is refused: its row
-is left out and listed in the report with its distance. The period is 1 / the fps in meta/info.json unless the
-frames' own timestamps contradict it, and else comes from the median gap between frames (frame_period). When two
-subtask boundaries round to the same frame, the later one is kept, and repeated texts in a row merge. After writing,
-the copy is checked (validate below), and any failure stops the command with exit 1.
+is left out and listed in the report with its distance. The period is 1 / the fps in meta/info.json while the
+frames' own rate agrees with it, and 1 / the frames' own rate when the two disagree (frame_period). When two subtask
+boundaries round to the same frame, the later one is kept, and repeated texts in a row merge. After writing, the
+copy is checked (validate below), and any failure stops the command with exit 1.
 
 The five event styles must be registered in LeRobot before its loaders route them, the way its docs register a
 project style: add them to lerobot.datasets.language.EXTENDED_STYLES and EVENT_ONLY_STYLES (EVENT_STYLES below).
@@ -181,14 +181,18 @@ def _snap(times: list[float], t: float) -> tuple[float, float]:
 
 
 def frame_period(fps, frame_ts: list[float]) -> float:
-    """One frame period: 1 / the dataset's fps from meta/info.json, unless the frames' own timestamps contradict it
-    (prepare/frame_rate.py supported_rate), else 1 / the rate of the median gap between frames (measured_rate). Never
-    the smallest gap, which one late frame shrinks to a millisecond."""
-    from prepare.frame_rate import measured_rate, supported_rate
-    rate = supported_rate(fps, frame_ts)[0] if fps is not None else None
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not rate > 0:
-        rate = measured_rate(frame_ts)
-    return 1.0 / rate if rate else 0.0
+    """One frame period, the farthest a time may sit from a frame and still be placed on it. It is 1 / the frames' own
+    rate (prepare/frame_rate.py measured_rate: the median gap, checked against the recorded span) whenever that rate
+    disagrees with the dataset's declared fps by more than SPAN_AGREEMENT. A declared 10 fps on frames that run at
+    30 fps would otherwise allow 100ms and place a time 2.5 frames past the end on the last frame (issue 196). The
+    declared fps is used when the two agree, and when the episode has too few frames to measure. Never the smallest
+    gap, which one late frame shrinks to a millisecond."""
+    from prepare.frame_rate import SPAN_AGREEMENT, measured_rate
+    measured = measured_rate(frame_ts)
+    declared = fps if not isinstance(fps, bool) and isinstance(fps, (int, float)) and fps > 0 else None
+    if measured and (declared is None or abs(measured / declared - 1.0) > SPAN_AGREEMENT):
+        return 1.0 / measured
+    return 1.0 / declared if declared else 0.0
 
 
 def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
