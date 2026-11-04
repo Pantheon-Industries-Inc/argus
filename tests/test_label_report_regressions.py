@@ -191,7 +191,7 @@ def test_unknown_model_without_cost_cannot_invent_astra_charge():
         None, 'unverified')
 
 
-def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatch):
+def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatch, prompt_growth):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     calls = []
@@ -217,7 +217,7 @@ def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatc
     assert inspection['rounds'][0]['rejected_attempts'][0]['rejection_code'] == 'insufficient_quota'
 
 
-def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, monkeypatch):
+def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, monkeypatch, prompt_growth):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     calls = []

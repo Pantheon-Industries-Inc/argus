@@ -304,7 +304,7 @@ def test_legacy_sensor_finding_offset_is_recomputed_from_part_clock():
 
 
 @pytest.mark.parametrize('force', [False, True])
-def test_run_resume_before_primary_output_keeps_claim_and_finishes_untouched_work(tmp_path, monkeypatch, force):
+def test_run_resume_before_primary_output_keeps_claim_and_finishes_untouched_work(tmp_path, monkeypatch, prompt_growth, force):
     from types import SimpleNamespace
     root = tmp_path / 'episodes'; root.mkdir()
     episodes = []

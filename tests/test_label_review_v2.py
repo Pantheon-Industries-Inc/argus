@@ -8,6 +8,7 @@ import pytest
 
 from label import dictionary as dd, harness
 import complete_reply
+from conftest import ROOMY_CAP
 
 
 def answer(content, *, cost=.01):
@@ -19,23 +20,6 @@ def reject(request, status, body):
     raise urllib.error.HTTPError(request.full_url, status, 'rejected', {},
                                  io.BytesIO(json.dumps(body).encode()))
 
-
-@pytest.fixture(params=[0, 20_000], ids=['prompt as is', 'prompt 20KB longer'])
-def prompt_growth(request, monkeypatch):
-    """The instructions as they are, and 20KB longer (a few more rules). A request reserves about $1 per 100KB of
-    prompt before it is sent, and a test whose subject is not the spend cap must give the same result at either
-    length. Fixed caps of $1 and $2 a few KB above the reservation made such tests fail whenever a rule was added
-    (issue 189: the handheld face rule of #184 and the two-sides rule of #187 each pushed one over)."""
-    if request.param:
-        from label import prompts
-        real = prompts.fixed_instructions_for_rig
-        monkeypatch.setattr(prompts, 'fixed_instructions_for_rig',
-                            lambda *a, **k: real(*a, **k) + '\n- ' + 'x' * request.param + '\n')
-    return request.param
-
-
-# The cap of a test whose subject is not the cap: far above what any request here reserves, at either prompt length
-ROOMY_CAP = 50.
 
 
 def test_dictionary_quota_failover_uses_transport_unpaid_proof(tmp_path, monkeypatch):

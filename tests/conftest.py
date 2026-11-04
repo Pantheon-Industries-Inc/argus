@@ -90,3 +90,22 @@ def inspect_every_field(monkeypatch):
     inspected (label/policy.py INSPECTION)."""
     from label import policy
     monkeypatch.setattr(policy, 'INSPECTION', 'all')
+
+
+@pytest.fixture(params=[0, 20_000], ids=['prompt as is', 'prompt 20KB longer'])
+def prompt_growth(request, monkeypatch):
+    """The instructions as they are, and 20KB longer (a few more rules). A request reserves about $1 per 100KB of
+    prompt before it is sent, and a billing test whose subject is not the spend cap must give the same result at either
+    length. Fixed caps a few KB above the reservation made such tests fail whenever a rule was added (issues 189 and
+    192: the handheld face rule of #184 and the two-sides rule of #187 each pushed one over)."""
+    if request.param:
+        from label import prompts
+        real = prompts.fixed_instructions_for_rig
+        monkeypatch.setattr(prompts, 'fixed_instructions_for_rig',
+                            lambda *a, **k: real(*a, **k) + '\n- ' + 'x' * request.param + '\n')
+    return request.param
+
+
+# The cap of a billing test whose subject is not the cap: far above what any request in the tests reserves, at either
+# prompt length of prompt_growth
+ROOMY_CAP = 50.

@@ -93,7 +93,7 @@ def test_completed_mixed_limits_resume_without_payment(tmp_path, monkeypatch):
     assert calls.count('final') == 3
 
 
-def test_unknown_charge_plain_resume_is_not_success(tmp_path, monkeypatch):
+def test_unknown_charge_plain_resume_is_not_success(tmp_path, monkeypatch, prompt_growth):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     def transport(request, timeout):
         if provider_kind(request) == 'selection': return response('{"requests":[]}')
@@ -371,7 +371,7 @@ def test_atomic_publication_cannot_pair_new_annotation_with_old_billing(tmp_path
 
 
 @pytest.mark.parametrize('mode', ['cap', 'timeout'])
-def test_absent_final_response_is_not_a_schema_failure(tmp_path, monkeypatch, mode):
+def test_absent_final_response_is_not_a_schema_failure(tmp_path, monkeypatch, prompt_growth, mode):
     from compare.metrics import _responses
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     calls = []

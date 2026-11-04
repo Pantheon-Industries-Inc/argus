@@ -69,7 +69,7 @@ def test_a_failed_card_call_leaves_the_paid_annotation_current_after_a_code_chan
     assert calls == before and output_spend(out) == paid
 
 
-def test_the_card_call_is_checked_against_what_the_final_call_billed_not_its_bound(tmp_path, monkeypatch):
+def test_the_card_call_is_checked_against_what_the_final_call_billed_not_its_bound(tmp_path, monkeypatch, prompt_growth):
     # At this cap the final call's bound (about $1.08) plus the card bound ($1.05) exceeds the cap, while the billed
     # final ($0.003) plus the card bound fits easily: an unsettled final bound refused these cards. The cap also holds
     # the inspection selection's reservation beside the final call's bound, which grows with the shared instructions:
