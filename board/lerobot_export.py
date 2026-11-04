@@ -13,7 +13,8 @@ then the file name. Argus times are seconds from the episode's first frame.
 
 The columns follow LeRobot's schema (src/lerobot/datasets/language.py upstream) and its writer's layout
 (src/lerobot/annotations/steerable_pipeline/writer.py): every frame of an episode carries the episode's whole
-persistent list, and a frame carries the event rows whose time is that frame's own timestamp.
+persistent list, a frame carries the event rows whose time is that frame's own timestamp, each episode is its own
+row group, and the older subtask_index and tools columns are dropped (from meta/info.json too).
 
 - language_persistent holds `subtask` rows. The Argus timeline can run a step for each side at once, while LeRobot
   keeps exactly one subtask active on every frame, so a new subtask row starts at every moment a step starts or ends,
@@ -28,9 +29,10 @@ persistent list, and a frame carries the event rows whose time is that frame's o
 - Argus writes no plan and no memory rows, since it labels neither. LeRobot's validator only warns about that.
 
 Every time is snapped to the nearest frame timestamp read from the data file, never computed from a frame index and
-a rate. A time more than one frame period from every frame (after the episode's end, for example) is refused: its
-row is left out and listed in the report with its distance. After writing, the copy is checked against LeRobot's
-validator rules and its writer's invariants (validate below), and any failure stops the command with exit 1.
+a rate. A time more than one frame period (1 / fps from meta/info.json, else the median gap between frames) from
+every frame, after the episode's end for example, is refused: its row is left out and listed in the report with its
+distance. When two subtask boundaries round to the same frame, the later one is kept, and repeated texts in a row
+merge. After writing, the copy is checked (validate below), and any failure stops the command with exit 1.
 
 The five event styles must be registered in LeRobot before its loaders route them, the way its docs register a
 project style: add them to lerobot.datasets.language.EXTENDED_STYLES and EVENT_ONLY_STYLES (EVENT_STYLES below).
@@ -58,6 +60,8 @@ LEROBOT_EVENT_STYLES = frozenset({"interjection", "vqa", "trace"})
 EVENT_STYLES = ("outcome", "mistake", "recovery", "key_event", "state_change")
 VIEW_DEPENDENT_STYLES = frozenset({"vqa", "trace"})
 IDLE = "idle"
+# columns LeRobot's annotation writer drops from a data file when it writes the language columns
+DROPPED = ("subtask_index", "tools")
 SIDE_ORDER = {"left": 0, "right": 1, "both": 2}
 
 
@@ -175,10 +179,23 @@ def _snap(times: list[float], t: float) -> tuple[float, float]:
     return best, abs(best - t)
 
 
-def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str) -> tuple[list[dict], dict[float, list]]:
+def frame_period(fps, frame_ts: list[float]) -> float:
+    """One frame period: 1 / the dataset's fps from meta/info.json, else the median gap between frames. Never the
+    smallest gap, which one late frame shrinks to a millisecond."""
+    try:
+        if float(fps) > 0:
+            return 1.0 / float(fps)
+    except (TypeError, ValueError):
+        pass
+    gaps = sorted(b - a for a, b in zip(frame_ts, frame_ts[1:]) if b > a)
+    return gaps[len(gaps) // 2] if gaps else 0.0
+
+
+def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
+                 fps=None) -> tuple[list[dict], dict[float, list]]:
     """The episode's persistent rows and its event rows by frame timestamp. frame_ts are the episode's frame
-    timestamps from the data file, sorted."""
-    period = min((b - a for a, b in zip(frame_ts, frame_ts[1:]) if b > a), default=0.0)
+    timestamps from the data file, sorted, and fps the dataset's declared rate (None when it declares none)."""
+    period = frame_period(fps, frame_ts)
     start, duration = frame_ts[0], frame_ts[-1] - frame_ts[0] + period
 
     def place(t: float, what: str):
@@ -190,13 +207,18 @@ def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str) ->
         report["max_snap_s"] = max(report["max_snap_s"], off)       # of the rows written
         return at
 
-    persistent, seen = [], set()
+    # Two boundaries that round to one frame (a step ending at 2.0s and the next starting at 2.01s) keep the later
+    # one, which is the subtask in force from that frame on; then repeated texts in a row merge into one subtask.
+    on_frame: dict[float, str] = {}
     for t, text in subtask_spans(label, duration):
         at = place(t, "subtask")
-        if at is None or at in seen:
+        if at is not None:
+            on_frame[at] = text
+    persistent = []
+    for at in sorted(on_frame):
+        if persistent and persistent[-1]["content"] == on_frame[at]:
             continue
-        seen.add(at)
-        persistent.append({"role": "assistant", "content": text, "style": "subtask", "timestamp": at,
+        persistent.append({"role": "assistant", "content": on_frame[at], "style": "subtask", "timestamp": at,
                            "camera": None, "tool_calls": None})
     if persistent and persistent[0]["timestamp"] != frame_ts[0]:
         persistent[0]["timestamp"] = frame_ts[0]
@@ -222,6 +244,18 @@ def _link_or_copy(src: Path, dst: Path) -> None:
         os.link(src, dst)
     except OSError:
         shutil.copy2(src, dst)
+
+
+def write_one_row_group_per_episode(table: pa.Table, path: Path) -> None:
+    """One row group per run of rows of one episode, as LeRobot's writer re-emits a data file
+    (io_utils.write_table_one_row_group_per_episode), through a sibling file renamed into place."""
+    eps = table.column("episode_index").to_pylist()
+    starts = [i for i in range(len(eps)) if i == 0 or eps[i] != eps[i - 1]] + [len(eps)]
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with pq.ParquetWriter(tmp, table.schema) as w:
+        for a, b in zip(starts, starts[1:]):
+            w.write_table(table.slice(a, b - a), row_group_size=b - a)
+    tmp.replace(path)
 
 
 def data_files(root: Path) -> list[Path]:
@@ -251,6 +285,7 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
         rel = src.relative_to(dataset)
         if src.is_file() and not (rel.parts[0] == "data" and src.suffix == ".parquet"):
             _link_or_copy(src, out / rel)
+    fps = json.loads((dataset / "meta" / "info.json").read_text()).get("fps")
     found = set()
     for src in data_files(dataset):
         table = pq.read_table(src)
@@ -264,20 +299,22 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
         for e, times in frames.items():
             if e in by_episode:
                 label, p = by_episode[e]
-                rows[e] = episode_rows(label, sorted(times), report, p.name)
+                rows[e] = episode_rows(label, sorted(times), report, p.name, fps)
                 found.add(e)
         persistent = [rows[int(e)][0] if int(e) in rows else [] for e in eps]
         events = [rows[int(e)][1].get(float(t), []) if int(e) in rows else [] for e, t in zip(eps, ts)]
-        keep = [n for n in table.column_names if n not in (LANGUAGE_PERSISTENT, LANGUAGE_EVENTS)]
+        keep = [n for n in table.column_names if n not in (LANGUAGE_PERSISTENT, LANGUAGE_EVENTS, *DROPPED)]
         new = table.select(keep).append_column(LANGUAGE_PERSISTENT, _array(persistent, LANGUAGE_PERSISTENT))
         new = new.append_column(LANGUAGE_EVENTS, _array(events, LANGUAGE_EVENTS))
         dst = out / src.relative_to(dataset)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(new, dst)
+        write_one_row_group_per_episode(new, dst)
     report["episodes_written"] = len(found)
     report["labels_without_episode"] = sorted(by_episode.keys() - found)
     info_path = out / "meta" / "info.json"
     info = json.loads(info_path.read_text())
+    for name in DROPPED:
+        info.setdefault("features", {}).pop(name, None)
     info.setdefault("features", {}).update({c: {"dtype": "language", "shape": [1], "names": None}
                                             for c in (LANGUAGE_PERSISTENT, LANGUAGE_EVENTS)})
     info_path.unlink()          # a hard link to the source's file: replace it, never write through it
@@ -289,10 +326,12 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
 
 
 def validate(root: Path) -> list[str]:
-    """LeRobot's validator rules (steerable_pipeline/validator.py) and its writer's invariants, on the written data:
-    every row routes to the column its style belongs in, only view-dependent styles carry a camera, every event lies on
-    the frame whose timestamp it fires at, an episode's persistent list is the same on every frame, and its subtasks
-    start on its first frame at distinct frame timestamps (one active subtask on every frame)."""
+    """Checks on the written data. From LeRobot's validator (steerable_pipeline/validator.py) and its writer's
+    invariants: every row routes to the column its style belongs in, only view-dependent styles carry a camera, every
+    event lies on the frame whose timestamp it fires at, an episode's persistent list is the same on every frame, and
+    the columns have LeRobot's types. That the subtasks start on the episode's first frame and at distinct frame
+    timestamps (one active subtask on every frame) is the exporter's own rules, not LeRobot's: its validator does not
+    check either."""
     errors = []
     events_ok = LEROBOT_EVENT_STYLES | set(EVENT_STYLES)
     for path in data_files(Path(root)):
