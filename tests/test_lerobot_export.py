@@ -276,3 +276,30 @@ def test_a_declared_rate_higher_than_the_frames_still_places_a_time_on_the_neare
     assert report['refused'] == []
     rows = per_episode(table, 0)
     assert [r['timestamp'] for r in rows if r['language_events']] == [rows[14]['timestamp']]
+
+
+def test_an_event_is_carried_by_one_frame_when_two_frames_share_its_timestamp(tmp_path):
+    # frame 11 of episode 0 repeats frame 10's 1.0s (issue 200): the key event at 1.0s is carried by frame 10 alone,
+    # and the repeated timestamp is listed in the report
+    times = frame_times(30)
+    times[11] = times[10]
+    ep0 = {'event_labels': [step(0., 2.9, 'right', 'pour the water')],
+           'key_events': [{'t_s': 1.0, 'label': 'cup lifted', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times)
+    rows = per_episode(table, 0)
+    assert [i for i, r in enumerate(rows) if r['language_events']] == [10]
+    assert report['events'] == {'key_event': 1}
+    assert report['repeated_timestamps'] == [{'episode': 'episode_000000.json', 't_s': times[10], 'frames': 2}]
+
+
+def test_the_checks_catch_an_event_carried_by_two_frames(exported, tmp_path):
+    _, out, _, table = exported
+    path = out / 'data' / 'chunk-000' / 'file-000.parquet'
+    events = table.column('language_events').to_pylist()
+    i = next(i for i, ev in enumerate(events) if ev)
+    events[i + 1] = events[i]                   # the next frame of the episode carries the same event row
+    broken = table.drop_columns(['language_events']).append_column('language_events',
+                                                                    lx._array(events, 'language_events'))
+    path.unlink()
+    pq.write_table(broken, path)
+    assert any('carried by more than one frame' in e for e in lx.validate(out))
