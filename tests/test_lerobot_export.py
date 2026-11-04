@@ -276,3 +276,27 @@ def test_a_declared_rate_higher_than_the_frames_still_places_a_time_on_the_neare
     assert report['refused'] == []
     rows = per_episode(table, 0)
     assert [r['timestamp'] for r in rows if r['language_events']] == [rows[14]['timestamp']]
+
+
+def test_a_declared_rate_higher_than_the_frames_places_a_time_midway_between_two_frames(tmp_path):
+    # 10 fps frames under a 30 fps declaration: a time 50ms from the frames on both sides lies inside the episode and
+    # lands on the nearer frame, as one 20ms from a frame does; only a time past the episode's ends is refused
+    ep0 = {'event_labels': [step(1.45, 2.95, 'right', 'pour the water')],
+           'key_events': [{'t_s': 1.45, 'label': 'between frames', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, rate=30)
+    assert report['refused'] == []
+    rows = per_episode(table, 0)
+    assert len([r for r in rows if r['language_events']]) == 1
+    assert [r['content'] for r in rows[0]['language_persistent']] == ['idle', 'pour the water']
+
+
+def test_a_step_that_starts_in_a_run_of_dropped_frames_still_starts_its_subtask(tmp_path):
+    # 30 fps declared and true, frames 20 to 24 dropped: a step starting at 0.75s, 83ms from the nearer frame of the
+    # gap, starts its subtask on that frame instead of leaving every frame after it with the step before
+    times = [np.float32(k / 30).item() for k in range(35) if not 20 <= k <= 24]
+    ep0 = {'event_labels': [step(0., .75, 'right', 'grasp the cup'), step(.75, 1.1, 'right', 'pour the water')]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times, rate=30)
+    rows = per_episode(table, 0)
+    assert [(r['timestamp'], r['content']) for r in rows[0]['language_persistent']] == \
+        [(times[0], 'grasp the cup'), (times[20], 'pour the water'), (times[28], 'idle')]
+    assert report['refused'] == [] and report['validation_errors'] == []
