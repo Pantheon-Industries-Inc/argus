@@ -13,7 +13,8 @@ then the file name. Argus times are seconds from the episode's first frame.
 
 The columns follow LeRobot's schema (src/lerobot/datasets/language.py upstream) and its writer's layout
 (src/lerobot/annotations/steerable_pipeline/writer.py): every frame of an episode carries the episode's whole
-persistent list, a frame carries the event rows whose time is that frame's own timestamp, each episode is its own
+persistent list, a frame carries the event rows whose time is that frame's own timestamp (the first such frame when
+the recorder repeated a timestamp, which the report lists in repeated_timestamps), each episode is its own
 row group, and the older subtask_index and tools columns are dropped (from meta/info.json too).
 
 - language_persistent holds `subtask` rows. The Argus timeline can run a step for each side at once, while LeRobot
@@ -49,6 +50,7 @@ import os
 import re
 import shutil
 from bisect import bisect_left
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -278,7 +280,8 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out} is not empty")
     by_episode, report = {}, {"labels": 0, "unmatched_labels": [], "episodes_written": 0, "events": {},
-                              "untimed": {}, "refused": [], "max_snap_s": 0.0}
+                              "untimed": {}, "refused": [], "repeated_timestamps": [],
+                              "max_snap_s": 0.0}
     for p in sorted(Path(labels).glob("*.json")):
         label = json.loads(p.read_text())
         idx = episode_index_of(label, p) if isinstance(label, dict) else None
@@ -309,9 +312,17 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
             if e in by_episode:
                 label, p = by_episode[e]
                 rows[e] = episode_rows(label, sorted(times), report, p.name, fps)
+                counts = Counter(times)
+                report["repeated_timestamps"] += [{"episode": p.name, "t_s": t - min(times), "frames": n}
+                                                  for t, n in sorted(counts.items()) if n > 1]
                 found.add(e)
         persistent = [rows[int(e)][0] if int(e) in rows else [] for e in eps]
-        events = [rows[int(e)][1].get(float(t), []) if int(e) in rows else [] for e, t in zip(eps, ts)]
+        # an event goes on the first frame with its timestamp, never on every frame that repeats it
+        events, carried = [], set()
+        for e, t in zip(eps, ts):
+            key = (int(e), float(t))
+            events.append(rows[key[0]][1].get(key[1], []) if key[0] in rows and key not in carried else [])
+            carried.add(key)
         keep = [n for n in table.column_names if n not in (LANGUAGE_PERSISTENT, LANGUAGE_EVENTS, *DROPPED)]
         new = table.select(keep).append_column(LANGUAGE_PERSISTENT, _array(persistent, LANGUAGE_PERSISTENT))
         new = new.append_column(LANGUAGE_EVENTS, _array(events, LANGUAGE_EVENTS))
@@ -337,7 +348,7 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
 def validate(root: Path) -> list[str]:
     """Checks on the written data. From LeRobot's validator (steerable_pipeline/validator.py) and its writer's
     invariants: every row routes to the column its style belongs in, only view-dependent styles carry a camera, every
-    event lies on the frame whose timestamp it fires at, an episode's persistent list is the same on every frame, and
+    event lies on the frame whose timestamp it fires at and on no other frame, an episode's persistent list is the same on every frame, and
     the columns have LeRobot's types. That the subtasks start on the episode's first frame and at distinct frame
     timestamps (one active subtask on every frame) is the exporter's own rules, not LeRobot's: its validator does not
     check either."""
@@ -349,6 +360,7 @@ def validate(root: Path) -> list[str]:
                 t.schema.field(LANGUAGE_EVENTS).type != column_types()[LANGUAGE_EVENTS]:
             errors.append(f"{path.name}: the language columns do not have LeRobot's types")
         first: dict[int, tuple[float, list]] = {}
+        carried: dict[int, set] = {}
         frame_ts: dict[int, set] = {}
         for e, ts, per, ev in zip(t.column("episode_index").to_pylist(), t.column("timestamp").to_pylist(),
                                   t.column(LANGUAGE_PERSISTENT).to_pylist(), t.column(LANGUAGE_EVENTS).to_pylist()):
@@ -363,6 +375,10 @@ def validate(root: Path) -> list[str]:
                 if (row["camera"] is not None) != (row["style"] in VIEW_DEPENDENT_STYLES):
                     errors.append(f"ep={e}: camera field on style {row['style']!r}")
             for row in ev:
+                key = (row["style"], row["content"], json.dumps(row["tool_calls"], sort_keys=True, default=str))
+                if key in carried.setdefault(e, set()):
+                    errors.append(f"ep={e}: an event row ({row['style']}) is carried by more than one frame")
+                carried[e].add(key)
                 if row["style"] not in events_ok:
                     errors.append(f"ep={e}: style {row['style']!r} in {LANGUAGE_EVENTS}")
                 if (row["camera"] is not None) != (row["style"] in VIEW_DEPENDENT_STYLES):
