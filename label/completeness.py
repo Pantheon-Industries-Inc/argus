@@ -20,8 +20,8 @@ label_schema) is held to what its mode asked: completion.task_completed for an e
 every task for a session or the head camera.
 
 The face issues. A request sent under the rule that a face is reported over each stretch it is seen (its config
-says face_issues_timed) asks every data issue whose category names a face (face_visible, faces_in_view,
-bystander_face) for a t_s and an end_s, and an issue grouped from several (label/issue_groups.py) for both on each
+says face_issues_timed) asks every data issue whose category names a face (face_visible, face-visible,
+FaceVisible, bystander_face; face_category) for a t_s and an end_s, and an issue grouped from several (label/issue_groups.py) for both on each
 occurrence. The face blur reads those stretches; an issue with no times means the whole recording, and the blur then
 runs a face detector over every frame. A reply that reports a face without its times is therefore not finished, and
 the harness sends it again automatically (label/harness.py auto_resend). A record asked before the rule is judged as
@@ -155,9 +155,17 @@ def outcome_gaps(labels: dict, record: dict) -> list[str]:
     return []
 
 
-# a category that names a face as a word of its snake_case tag (face_visible, faces_in_view, bystander_face), never
-# a word that only contains one (surface_glare)
-FACE_CATEGORY = re.compile(r'(?:^|_)faces?(?:_|$)')
+FACE_WORDS = {'face', 'faces'}
+
+
+def face_category(category) -> bool:
+    """Whether a category names a face as one of its words (face_visible, face-visible, "face visible", FaceVisible,
+    bystanderFace), split as label/idle.py idle_category splits: at camelCase and at any separator. A word that only
+    contains one (surface_glare, interface_glitch, typeface_text) or another form of it (facing_away) is not one."""
+    if not isinstance(category, str):
+        return False
+    words = re.split(r'[^a-z0-9]+', re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', category).lower())
+    return bool(FACE_WORDS.intersection(words))
 FACE_GAP = 'each stretch a face is seen is its own timed issue'
 
 
@@ -173,7 +181,7 @@ def face_gaps(labels: dict) -> list[str]:
         if not isinstance(row, dict) or not isinstance(row.get('category'), str):
             continue
         category = row['category'].strip()
-        if not FACE_CATEGORY.search(category.lower()):
+        if not face_category(category):
             continue
         occurrences = row.get('occurrences')
         rows = occurrences if isinstance(occurrences, list) and occurrences else [row]
