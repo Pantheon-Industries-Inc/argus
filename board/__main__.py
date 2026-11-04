@@ -9,6 +9,8 @@
     python -m board sensors --qa BOARD/qa --episodes EPS --out OUT the sensors panel files (board build runs it)
 
     python -m board grids BOARD [--jobs 4]                       verify and rebuild recorded frame grids
+    python -m board export-lerobot --dataset DS --labels L --out OUT   a copy of a LeRobot dataset with the labels
+                                                                 in its language columns
 
 Each command takes --help.
 """
@@ -17,7 +19,7 @@ import sys
 
 COMMANDS = {"build": "board.build", "clips": "board.clips", "serve": "board.serve", "static": "board.static",
             "to_board": "board.to_board", "hands": "board.hands",
-            "sensors": "board.sensors", "grids": "board.grids"}
+            "sensors": "board.sensors", "grids": "board.grids", "export-lerobot": "board.lerobot_export"}
 if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
     print(__doc__)
     raise SystemExit(0 if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help") else 2)
