@@ -2391,6 +2391,37 @@ const currentEp = document.getElementById('current-ep');
 
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
 function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + ' min' : Math.round(s) + 's'); }
+
+// An inference rollout's ground truth, stamped into _meta.rollout by the recorder of the rollout: the instruction the
+// policy was given and whether it succeeded, shown under the model's own reading so the two can be compared. Any other
+// episode has no rollout and draws nothing.
+function rolloutHtml(roll) {
+  if (!roll || typeof roll !== 'object') return '';
+  const ok = String(roll.status || '').toLowerCase() === 'succeeded';
+  const pills = [`<span class="pm${ok ? ' pm-green' : ''}"><span class="pm-k">result</span><b>${esc(roll.status || '?')}</b></span>`];
+  if (roll.elapsed_s != null) pills.push(`<span class="pm"><span class="pm-k">ran</span><b>${fmtDur(roll.elapsed_s)}</b></span>`);
+  if (roll.actions != null) pills.push(`<span class="pm"><span class="pm-k">chunks</span><b>${esc(roll.actions)}</b></span>`);
+  if (roll.reasoning_effort) pills.push(`<span class="pm"><span class="pm-k">effort</span><b>${esc(roll.reasoning_effort)}</b></span>`);
+  return `<div class="prompt-banner rollout">
+      <div class="label">Rollout${roll.model ? ', ' + esc(roll.model) : ''}</div>
+      <div class="text">${esc(roll.instruction || 'no instruction recorded')}</div>
+      <div class="prompt-meta">${pills.join('')}</div>
+    </div>`;
+}
+
+// An inference rollout's policy latency from the episode's idle record: the robot holds still while the policy
+// computes each action chunk, so a rollout's time is mostly these pauses. The count, their total and the first four.
+function policyLatencyHtml(idle) {
+  if (!idle || typeof idle !== 'object' || !idle.n) return '';
+  const gaps = (Array.isArray(idle.thinking_gaps_s) ? idle.thinking_gaps_s : []).slice(0, 4)
+    .map(g => `<span class="pm"><span class="pm-k">gap</span><b>${fmtDur(g)}</b></span>`).join('');
+  return `<div class="prompt-banner latency">
+      <div class="label">Policy latency</div>
+      <div class="prompt-meta"><span class="pm"><span class="pm-k">chunks</span><b>${esc(idle.n)}</b></span>`
+    + (idle.total_idle_s != null ? `<span class="pm"><span class="pm-k">held still</span><b>${fmtDur(idle.total_idle_s)}</b></span>` : '')
+    + `${gaps}</div>
+    </div>`;
+}
 // what "both" means on the open episode's rig: a head camera films a person's hands, a handheld rig two grippers
 let ARM_NOUN = 'arms';
 function armLabel(a) { return a === 'both' ? `both ${ARM_NOUN}` : (a || '?'); }
@@ -7614,6 +7645,8 @@ function renderEp(d, opts) {
       ${ivHtml && !hasTasks ? `<div class="task-variants"><div class="tv-label">Prompt variants</div><ul>${ivHtml}`
         + `</ul></div>` : ''}
     </div>
+    ${rolloutHtml(meta.rollout)}
+    ${policyLatencyHtml(d.idle)}
 
     <h3 class="section dense-head">Dense timeline</h3>
     <div class="dense-stats">
