@@ -31,9 +31,11 @@ row group, and the older subtask_index and tools columns are dropped (from meta/
 Every time is snapped to the nearest frame timestamp read from the data file, never computed from a frame index and
 a rate. A time between the episode's first and last frame lands on the nearer frame, however far apart the two are. A
 time more than one frame period before the first frame or after the last is refused: its row is left out and listed
-in the report with its distance. The period is the shorter of 1 / the fps in meta/info.json
+in the report with its distance, and one written more than a frame period from its frame, across dropped frames
+for example, is listed in far_snaps with its episode, text and distance. The period is the shorter of 1 / the fps in meta/info.json
 and the median gap between the episode's frames (frame_period). When two subtask boundaries round to the same frame,
-the later one is kept, and repeated texts in a row merge. After writing, the copy is checked (validate below), and
+the later one is kept and the earlier subtask, left with no frame, is listed in subtasks_lost; repeated texts in a row
+merge. After writing, the copy is checked (validate below), and
 any failure stops the command with exit 1.
 
 The five event styles must be registered in LeRobot before its loaders route them, the way its docs register a
@@ -175,6 +177,14 @@ def findings(label: dict) -> list[tuple[str, float | None, dict]]:
     return out
 
 
+def finding_text(item: dict) -> str:
+    """A finding's own words, for the report: its label, issue, task, object or failure, whichever it has first."""
+    for k in ("label", "issue", "task", "failure", "object"):
+        if isinstance(item.get(k), str) and item[k].strip():
+            return item[k].strip()
+    return ""
+
+
 def _snap(times: list[float], t: float) -> tuple[float, float]:
     """(nearest frame timestamp, its distance from t)."""
     i = bisect_left(times, t)
@@ -208,25 +218,34 @@ def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
     period = frame_period(fps, frame_ts)
     start, duration = frame_ts[0], frame_ts[-1] - frame_ts[0] + period
 
-    def place(t: float, what: str):
+    def place(t: float, what: str, text: str):
         # a time between the first and last frame always has a frame on each side and lands on the nearer one, even
         # across dropped frames or under a declared rate above the frames' own; only one past either end by more than
-        # a frame period is refused
+        # a frame period is refused. One written more than a frame period from its frame is listed in far_snaps.
         at, off = _snap(frame_ts, start + t)
-        if off > period + 1e-6 and not frame_ts[0] <= start + t <= frame_ts[-1]:
-            report["refused"].append({"episode": name, "what": what, "t_s": t, "nearest_frame_s": at - start,
-                                      "off_s": round(off, 6)})
-            return None
+        row = {"episode": name, "what": what, "text": text, "t_s": t, "nearest_frame_s": at - start,
+               "off_s": round(off, 6)}
+        if off > period + 1e-6:
+            if not frame_ts[0] <= start + t <= frame_ts[-1]:
+                report["refused"].append(row)
+                return None
+            report["far_snaps"].append(row)
         report["max_snap_s"] = max(report["max_snap_s"], off)       # of the rows written
         return at
 
     # Two boundaries that round to one frame (a step ending at 2.0s and the next starting at 2.01s) keep the later
-    # one, which is the subtask in force from that frame on; then repeated texts in a row merge into one subtask.
-    on_frame: dict[float, str] = {}
+    # one, which is the subtask in force from that frame on, and the earlier one, left with no frame, is listed in
+    # subtasks_lost; then repeated texts in a row merge into one subtask.
+    on_frame: dict[float, tuple[float, str]] = {}
     for t, text in subtask_spans(label, duration):
-        at = place(t, "subtask")
-        if at is not None:
-            on_frame[at] = text
+        at = place(t, "subtask", text)
+        if at is None:
+            continue
+        if at in on_frame and on_frame[at][1] != text:
+            report["subtasks_lost"].append({"episode": name, "text": on_frame[at][1], "t_s": on_frame[at][0],
+                                            "frame_s": at - start, "replaced_by": text})
+        on_frame[at] = (t, text)
+    on_frame = {at: text for at, (_, text) in on_frame.items()}
     persistent = []
     for at in sorted(on_frame):
         if persistent and persistent[-1]["content"] == on_frame[at]:
@@ -240,7 +259,7 @@ def episode_rows(label: dict, frame_ts: list[float], report: dict, name: str,
         if t is None:
             report["untimed"][style] = report["untimed"].get(style, 0) + 1
             continue
-        at = place(t, style)
+        at = place(t, style, finding_text(item))
         if at is None:
             continue
         events.setdefault(at, []).append({"role": "assistant", "style": style, "camera": None, "tool_calls": None,
@@ -283,7 +302,8 @@ def export(dataset: Path, labels: Path, out: Path) -> dict:
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out} is not empty")
     by_episode, report = {}, {"labels": 0, "unmatched_labels": [], "episodes_written": 0, "events": {},
-                              "untimed": {}, "refused": [], "max_snap_s": 0.0}
+                              "untimed": {}, "refused": [], "far_snaps": [], "subtasks_lost": [],
+                              "max_snap_s": 0.0}
     for p in sorted(Path(labels).glob("*.json")):
         label = json.loads(p.read_text())
         idx = episode_index_of(label, p) if isinstance(label, dict) else None
