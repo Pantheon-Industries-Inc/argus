@@ -240,3 +240,15 @@ def test_each_episode_is_one_row_group_and_the_old_annotation_columns_are_droppe
 def test_the_checks_say_which_rules_are_the_exporters_own():
     doc = ' '.join(lx.validate.__doc__.split())
     assert "the exporter's own rules, not LeRobot's" in doc
+
+
+def test_a_declared_rate_lower_than_the_frames_does_not_widen_how_far_a_time_may_snap(tmp_path):
+    # meta/info.json says 10 fps, episode 0's frames run at 30 fps: one frame period is 33ms, not 100ms, so a time
+    # 2.5 real frames past the last frame is refused instead of landing on it (issue 196)
+    times = [np.float32(k / 30).item() for k in range(30)]
+    late = round(times[-1] + 2.5 / 30, 4)
+    ep0 = {'event_labels': [], 'key_events': [{'t_s': late, 'label': 'after the end', 'kind': '', 'outcome': '',
+                                                'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=times)
+    assert [(r['what'], r['t_s']) for r in report['refused']] == [('key_event', late)]
+    assert not any(r['language_events'] for r in per_episode(table, 0))
