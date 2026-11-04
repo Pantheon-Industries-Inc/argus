@@ -300,3 +300,34 @@ def test_a_step_that_starts_in_a_run_of_dropped_frames_still_starts_its_subtask(
     assert [(r['timestamp'], r['content']) for r in rows[0]['language_persistent']] == \
         [(times[0], 'grasp the cup'), (times[20], 'pour the water'), (times[28], 'idle')]
     assert report['refused'] == [] and report['validation_errors'] == []
+
+
+# episode 0 at 30 fps with frames 21 to 29 dropped: a 333ms gap from 0.667s to 1.0s
+GAP_TIMES = [np.float32(k / 30).item() for k in range(39) if not 21 <= k <= 29]
+
+
+def test_a_time_written_more_than_one_frame_period_from_its_frame_is_listed_with_its_distance(tmp_path):
+    # a step and a key event at 0.82s land on the 0.667s frame, 153ms away: each is written and listed by row, as a
+    # refused time is, never shown only in the dataset-wide max_snap_s
+    ep0 = {'event_labels': [step(.82, 1.2, 'right', 'pour the water')],
+           'key_events': [{'t_s': .82, 'label': 'cup tipped', 'kind': '', 'outcome': '', 'note': ''}]}
+    report, table = export_one(tmp_path, ep0, ep0_times=GAP_TIMES, rate=30)
+    assert report['refused'] == []
+    far = sorted((r['episode'], r['what'], r['text'], r['t_s'], r['nearest_frame_s'], round(r['off_s'], 3))
+                 for r in report['far_snaps'])
+    assert [f[:4] for f in far] == [('episode_000000.json', 'key_event', 'cup tipped', .82),
+                                    ('episode_000000.json', 'subtask', 'pour the water', .82)]
+    assert all(abs(f[4] - GAP_TIMES[20]) < 1e-6 and f[5] == .153 for f in far)
+
+
+def test_a_subtask_that_loses_its_frame_to_a_later_boundary_is_listed(tmp_path):
+    # tap runs 0.71s to 0.74s inside the gap: its start and the pour's both land on the 0.667s frame, the pour is kept
+    # there, and the tap, which then has no frame of its own, is listed instead of dropped without a word
+    ep0 = {'event_labels': [step(0., .71, 'right', 'grasp the cup'), step(.71, .74, 'right', 'tap the rim'),
+                            step(.74, 1.2, 'right', 'pour the water')]}
+    report, table = export_one(tmp_path, ep0, ep0_times=GAP_TIMES, rate=30)
+    rows = per_episode(table, 0)
+    assert [r['content'] for r in rows[0]['language_persistent']] == ['grasp the cup', 'pour the water', 'idle']
+    lost = [(r['episode'], r['text'], r['t_s'], r['replaced_by']) for r in report['subtasks_lost']]
+    assert lost == [('episode_000000.json', 'tap the rim', .71, 'pour the water')]
+    assert abs(report['subtasks_lost'][0]['frame_s'] - GAP_TIMES[20]) < 1e-6
