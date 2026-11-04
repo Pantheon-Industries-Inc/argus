@@ -14,6 +14,7 @@ from test_camera_timing import recording
 from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_execution_integrity_v6 import episodes
 import complete_reply
+from conftest import ROOMY_CAP
 
 
 def transport_fixture(monkeypatch, contents, cost=.003):
@@ -100,10 +101,10 @@ def test_unknown_charge_plain_resume_is_not_success(tmp_path, monkeypatch, promp
         raise TimeoutError('response may have been charged')
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     monkeypatch.setattr(harness.time, 'sleep', lambda *args: None)
-    assert harness.run_batch([ep], out, **options()) == 1
+    assert harness.run_batch([ep], out, **{**options(), 'max_spend': ROOMY_CAP}) == 1
     original = harness.billing_record(out, ep.name + '.json')[1]
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda *args, **kwargs: pytest.fail('unknown replay'))
-    assert harness.run_batch([ep], out, **options()) == 1
+    assert harness.run_batch([ep], out, **{**options(), 'max_spend': ROOMY_CAP}) == 1
     assert harness.billing_record(out, ep.name + '.json')[1] == original
 
 
@@ -381,7 +382,7 @@ def test_absent_final_response_is_not_a_schema_failure(tmp_path, monkeypatch, pr
             return response('{"requests":[]}')
         raise TimeoutError('final response lost')
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
-    settings = options()
+    settings = {**options(), 'max_spend': ROOMY_CAP}
     if mode == 'cap': settings['max_spend'] = .000001
     harness.run_batch([ep], out, **settings)
     result = compared({'run': tmp_path, 'status': 'exit 1'}, ep.name)

@@ -15,6 +15,7 @@ from label import evidence_access as ea, harness, run
 from label.dictionary_stage import output_spend
 from test_camera_timing import recording
 import complete_reply
+from conftest import ROOMY_CAP
 
 
 def response(content, cost=.003):
@@ -314,12 +315,12 @@ def test_run_resume_before_primary_output_keeps_claim_and_finishes_untouched_wor
         target = root / ('episode_' + str(index)); episode.rename(target); episodes.append(target)
     folder = tmp_path / 'run'; folder.mkdir()
     (folder / 'run.json').write_text(json.dumps({'dataset': 'fixture', 'kind': 'full', 'code': 'fixture',
-        'slice': str(root), 'cap_usd': 2., 'status': 'exit 137'}))
+        'slice': str(root), 'cap_usd': ROOMY_CAP, 'status': 'exit 137'}))
     def killed(request, timeout):
         if provider_kind(request) == 'final': os._exit(137)
         return response('{"requests":[]}')
     monkeypatch.setattr(harness.urllib.request, 'urlopen', killed)
-    worker = mp.get_context('fork').Process(target=lambda: harness.run_batch(episodes, folder / 'out', **options()))
+    worker = mp.get_context('fork').Process(target=lambda: harness.run_batch(episodes, folder / 'out', **{**options(), 'max_spend': ROOMY_CAP}))
     worker.start(); worker.join(5)
     assert worker.exitcode == 137
     claim = folder / 'out' / 'noreply_episode_0.json'
