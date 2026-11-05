@@ -288,3 +288,54 @@ def test_unreadable_earlier_counts_do_not_stop_a_run_that_has_finished(tmp_path,
     tier.configure('flex', False)
     tier.write(tmp_path)
     assert 'could not record' in capsys.readouterr().out
+
+
+# What OpenRouter sent on 2026-11-05 for a Sol flex request at capacity: status 200, no choices, no usage. It was held as a possibly billed call, so
+# a run that spent $0.77 read $4.58, which a stop line per footage hour would read as a cost rise.
+FLEX_BUSY = {'message': 'Flex processing is temporarily unavailable. Please try again later or use standard processing.', 'code': 502,
+             'metadata': {'error_type': 'provider_unavailable'}}
+
+
+def busy_then(sent, busy, reply=None):
+    left = [busy]
+    def provider(request, timeout):
+        body = json.loads(request.data); sent.append(body)
+        if left[0] and body.get('service_tier') == 'flex':
+            left[0] -= 1
+            return io.BytesIO(json.dumps(FLEX_BUSY).encode())
+        return io.BytesIO(json.dumps(reply or {'service_tier': body.get('service_tier', 'default'), 'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}).encode())
+    return provider
+
+
+def test_a_capacity_rejection_inside_a_200_is_retried_as_unpaid(monkeypatch):
+    sent = []
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', busy_then(sent, 2))
+    tier.configure('flex', False)
+    assert harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)['service_tier'] == 'flex'
+    assert len(sent) == 3 and tier.counts()['rejected'] == 2
+
+
+def test_a_lasting_one_ends_unpaid_so_no_reservation_is_held(monkeypatch):
+    sent = []
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', busy_then(sent, 99))
+    tier.configure('flex', False)
+    with pytest.raises(harness.DispatchError) as caught:
+        harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
+    assert caught.value.verified_unpaid and caught.value.http_status == 502 and caught.value.stage == 'rejected'
+
+
+def test_the_fallback_takes_it_too(monkeypatch):
+    sent = []
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', busy_then(sent, 99))
+    tier.configure('flex', True)
+    harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
+    assert 'service_tier' not in sent[-1] and tier.counts()['fell_back'] == 1
+
+
+@pytest.mark.parametrize('service_tier, body', [('flex', {'message': 'something else', 'code': 500}), (None, FLEX_BUSY)])
+def test_any_other_empty_200_stays_a_possibly_billed_call(monkeypatch, service_tier, body):
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout: io.BytesIO(json.dumps(body).encode()))
+    tier.configure(service_tier, False)
+    with pytest.raises(harness.DispatchError) as caught:
+        harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
+    assert not caught.value.verified_unpaid
