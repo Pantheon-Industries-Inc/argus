@@ -70,3 +70,25 @@ def test_the_page_filters_by_tag_and_shows_why(tmp_path, monkeypatch):
     assert "valid on 48% of frames" in res["why"] and "tracking/low valid" in res["why"]
     assert res["why_untagged"] == ""
     assert "tracking/low valid" in res["card"]
+
+
+def test_an_episode_is_filtered_once_until_its_file_changes(tmp_path, monkeypatch):
+    """A long stitched label takes seconds to filter for the page (public_export over a megabyte of text). The second
+    open of an unchanged file must not pay that again, and a changed file must not be answered from memory."""
+    from board import serve as S
+    board = _built_board(tmp_path)
+    httpd, url = _serve(monkeypatch, board, tmp_path / "clips")
+    calls = []
+    real = S.episode_view
+    monkeypatch.setattr(S, "episode_view", lambda d: calls.append(1) or real(d))
+    try:
+        first = _get(url + "/api/episode?file=episode_000000.json")[2]
+        assert _get(url + "/api/episode?file=episode_000000.json")[2] == first and len(calls) == 1
+        p = board / "qa" / "episode_000000.json"
+        d = json.loads(p.read_text())
+        d["episode_prompt"] = "changed"
+        p.write_text(json.dumps(d))
+        assert b"changed" in _get(url + "/api/episode?file=episode_000000.json")[2] and len(calls) == 2
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
