@@ -1774,6 +1774,8 @@ def _rail_record(p: Path, d: dict) -> dict:
         "n_mistakes": len(mistakes),
         "n_minor_mistakes": len(all_mistakes) - len(mistakes) - unrated_mistakes,
         "n_unrated_mistakes": unrated_mistakes,
+        # why the episode is on this board (manifest review_tags, board/build.py): the rail's filter and cards
+        **({"review_tags": [r["tag"] for r in d["review_tags"]]} if d.get("review_tags") else {}),
         "n_tasks": len(tasks),
         **({"verdict_first": True} if tasks_format(d) and verdict is not None else {}),
         "n_task_success": sum(1 for t in tasks if (t.get("outcome") or "").lower() == "success"),
