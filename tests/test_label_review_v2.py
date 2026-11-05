@@ -723,6 +723,35 @@ GEMINI_PRICING = {'prompt': '0.000002', 'completion': '0.00001', 'image': '0.000
                   'input_cache_read': '0.0000001', 'input_cache_write': '0.0000001875', 'discount': 0.5}
 
 
+# Endpoint pricing published for openai/gpt-6.1-sol on 2026-11-05 (standard tier): a search price beside the token rates.
+OPENAI_PRICING = {'prompt': '0.000002', 'completion': '0.00001', 'web_search': '0.01', 'input_cache_read': '0.0000001',
+                  'input_cache_write': '0.0000025', 'discount': 0}
+
+
+@pytest.mark.parametrize('model', ['openai/gpt-6.1-sol', 'openai/gpt-6.1-terra', 'openai/gpt-6-astra'])
+def test_quote_caps_an_openai_request_whose_search_price_cannot_apply(tmp_path, monkeypatch, model):
+    """OpenRouter published a search price on these models, and the quote then refused every one of them. Requests never
+    ask for search (the web plugin, :online, a tool or web_search_options), so the price cannot apply and the request
+    is capped by its token rates. The asserts on the body fail if a request ever starts asking."""
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    sent = []
+    def provider(request, timeout):
+        sent.append(request.get_method())
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 1_050_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        body = json.loads(request.data)
+        assert not {'plugins', 'tools', 'web_search_options'} & body.keys() and ':' not in body['model']
+        assert 'web_search' not in body['provider']['max_price'] and body['provider']['max_price']['completion'] == 10.
+        selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    assert harness.run_batch([ep], tmp_path / 'out', keys=['sk-or-test'], concurrency=1, force=False, model=model,
+        reasoning='medium', max_tokens=64000, timeout=1, cell_w=128, max_spend=8.) == 0
+    assert sent == ['GET', 'POST', 'POST']
+
+
 def test_quote_caps_a_gemini_request_whose_audio_and_search_prices_cannot_apply(tmp_path, monkeypatch):
     """Gemini lists audio prices and a search price. Requests carry text and images only and never ask for search (the
     web plugin or :online), so the quote accepts both and caps the request by its token and image rates."""
@@ -754,6 +783,9 @@ def test_quote_caps_a_gemini_request_whose_audio_and_search_prices_cannot_apply(
     ('google/gemini-4-argon', {**GEMINI_PRICING, 'video_seconds': '0.001'}, 'unsupported endpoint charge: video_seconds'),
     ('google/gemini-4-argon:online', GEMINI_PRICING, 'native search fees'),
     ('perplexity/sonar-x', {'prompt': '0.000001', 'completion': '0.000001', 'web_search': '0.005'}, 'native search fees'),
+    ('openai/gpt-6.1-sol:online', OPENAI_PRICING, 'native search fees'),
+    ('openai/gpt-4o-search-preview', OPENAI_PRICING, 'native search fees'),
+    ('openai/o4-deep-research', OPENAI_PRICING, 'native search fees'),
 ])
 def test_a_charge_that_could_apply_still_blocks_the_quote(monkeypatch, model, pricing, words):
     """Accepting Gemini's unsent-input and on-request search prices is scoped to exactly those: a charge the quote does
