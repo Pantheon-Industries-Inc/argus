@@ -410,6 +410,13 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             if not resp.get("choices"):
                 # HTTP 200 carrying an error body and no completion: fail loudly, never record an empty parse
                 err = json.dumps(resp.get("error") or resp)[:300]
+                if flex and tier.is_capacity_rejection(resp):
+                    # no generation ran, so it costs nothing, as a 429 does: retried with backoff and never held as a possible charge
+                    tier.note_rejection(); last = f"flex at capacity: {err}"; unpaid_left -= 1
+                    if unpaid_left > 0:
+                        time.sleep(_retry_after(None, tries - 1))
+                        continue
+                    raise DispatchError(f"model call failed after {tries} HTTP attempts: {last}", http_status=502, verified_unpaid=clean, stage='rejected')
                 raise DispatchError(f"200 response with no choices: {err}", http_status=200, stage='unknown')
             failure = reply_error(resp)
             cost = (resp.get('usage') or {}).get('cost') if isinstance(resp.get('usage'), dict) else None
