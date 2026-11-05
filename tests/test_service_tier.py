@@ -166,7 +166,8 @@ def test_a_run_writes_its_tier_in_each_record_and_its_counts_beside_them(tmp_pat
                              max_tokens=64000, timeout=1, cell_w=128, max_spend=8., service_tier='flex') == 0
     record = json.loads((out / (ep.name + '.json')).read_text())
     assert record['service_tier'] == 'flex' and record['config']['pricing_quote']['output_usd_per_token'] == pytest.approx(5e-6)
-    counts = json.loads((out / 'service_tier_counts.json').read_text())
+    assert sorted(p.name for p in out.glob('*.json')) == [ep.name + '.json']     # readers take every top level *.json as a label
+    counts = json.loads((out / tier.COUNTS).read_text())
     assert counts['requested'] == 'flex' and counts['replies']['flex'] == len(sent) and counts['rejected'] == 0
 
 
@@ -182,3 +183,88 @@ def test_the_harness_and_review_command_lines_take_both_settings(tmp_path, monke
     monkeypatch.setattr(sys, 'argv', ['h', '--episodes-root', str(tmp_path), '--out-dir', str(tmp_path / 'o')])
     seen.clear(); harness.main()
     assert seen['service_tier'] is None and seen['flex_fallback'] == 'off'
+
+
+def run_one(tmp_path, provider, monkeypatch, name='out', **kw):
+    from test_camera_timing import recording
+    made = tmp_path / 'made'
+    ep = next((p for p in made.glob('*') if p.is_dir()), None) if made.exists() else None
+    if ep is None:
+        made.mkdir()
+        ep = recording(made, np.arange(12) / 30)
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    out = tmp_path / name
+    return ep, out, harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, model=SOL, reasoning='high',
+                                      max_tokens=64000, timeout=1, cell_w=128, max_spend=8., service_tier='flex', **kw)
+
+
+def test_a_lasting_rejection_costs_nothing_through_the_whole_batch_and_a_resume_sends_it(tmp_path, monkeypatch):
+    """Not counted as paid: no reservation stays, nothing is recorded as possibly billed, and a plain resume sends it."""
+    sent = []
+    ep, out, rc = run_one(tmp_path, provider_for(SOL, sent, rejections=10_000), monkeypatch)
+    assert rc != 0 and sent and all(b['service_tier'] == 'flex' for b in sent)
+    records = {p.name: json.loads(p.read_text()) for p in out.glob('*.json')}
+    assert records and not [n for n, r in records.items() if r.get('final_reserved_usd') or r.get('final_dispatch_outcome') in ('unverified', 'claimed')]
+    assert json.loads((out / tier.COUNTS).read_text())['rejected'] == len(sent)
+    sent.clear()
+    ep, out, rc = run_one(tmp_path, provider_for(SOL, sent), monkeypatch)
+    assert rc == 0 and sent and (out / (ep.name + '.json')).exists()
+    assert json.loads((out / (ep.name + '.json')).read_text()).get('parse_ok') is True
+
+
+def test_with_the_fallback_a_run_quotes_standard_rates_so_the_cap_and_max_price_hold_at_standard(tmp_path, monkeypatch):
+    """The fallback request costs the standard rate, so a flex quote would undercount its reservation, and its max_price
+    would refuse the very request the fallback sends."""
+    sent = []
+    ep, out, rc = run_one(tmp_path, provider_for(SOL, sent, rejections=10_000), monkeypatch, flex_fallback='standard')
+    assert rc == 0
+    record = json.loads((out / (ep.name + '.json')).read_text())
+    assert record['config']['pricing_quote']['output_usd_per_token'] == pytest.approx(1e-5)
+    fallen = [b for b in sent if 'service_tier' not in b]
+    assert fallen and all(b['provider']['max_price']['completion'] == 10. for b in fallen)
+    assert all(b['provider']['max_price']['completion'] == 10. for b in sent)
+
+
+@pytest.mark.parametrize('served, cost', [('flex', 1000 * 1e-6 + 1000 * 5e-6), ('default', 1000 * 2e-6 + 1000 * 1e-5), (None, 1000 * 2e-6 + 1000 * 1e-5)])
+def test_straight_to_openai_a_reply_is_priced_at_flex_only_if_it_says_flex_served_it(monkeypatch, served, cost):
+    reply = {'usage': {'prompt_tokens': 1000, 'completion_tokens': 1000}, 'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}],
+             **({'service_tier': served} if served else {})}
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider_for(SOL, [], reply=reply))
+    tier.configure('flex', False)
+    assert harness.call_model(TEXT, SOL, 'high', 'sk-proj-x', 10, 5)['usage']['list_cost'] == pytest.approx(cost)
+
+
+def test_a_rejection_after_a_timeout_is_not_proved_unpaid_so_it_never_goes_to_standard(monkeypatch):
+    """The timed out attempt may be billed even though the last one was refused, so a standard request could pay twice."""
+    sent = []
+    def provider(request, timeout):
+        sent.append(json.loads(request.data))
+        if len(sent) == 1:
+            raise TimeoutError('timed out')
+        raise urllib.error.HTTPError(request.full_url, 429, 'rejected', {}, io.BytesIO(b'{"error": {"message": "no capacity"}}'))
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    tier.configure('flex', True)
+    with pytest.raises(harness.DispatchError) as caught:
+        harness.call_model(TEXT, SOL, 'high', 'sk-or-test', 10, 5, attempts=2)
+    assert not caught.value.verified_unpaid and all(b['service_tier'] == 'flex' for b in sent)
+    assert tier.counts()['fell_back'] == 0
+
+
+def test_a_spent_key_is_not_a_capacity_rejection(monkeypatch):
+    sent = []
+    def provider(request, timeout):
+        sent.append(json.loads(request.data))
+        raise urllib.error.HTTPError(request.full_url, 429, 'quota', {}, io.BytesIO(b'{"error": {"code": "insufficient_quota"}}'))
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    tier.configure('flex', True)
+    with pytest.raises(harness.KeyExhausted):
+        harness.call_model(TEXT, SOL, 'high', 'sk-proj-x', 10, 5)
+    assert all(b['service_tier'] == 'flex' for b in sent) and tier.counts()['fell_back'] == 0
+
+
+def test_unreadable_earlier_counts_do_not_stop_a_run_that_has_finished(tmp_path, capsys):
+    (tmp_path / tier.COUNTS).parent.mkdir()
+    (tmp_path / tier.COUNTS).write_text('{cut off')
+    tier.configure('flex', False)
+    tier.write(tmp_path)
+    assert 'could not record' in capsys.readouterr().out

@@ -94,6 +94,15 @@ def test_review_hands_the_service_tier_to_the_dry_run_and_label_steps(tmp_path, 
         assert json.loads((job / 'run' / 'run.json').read_text())['service_tier'] == 'flex'
 
 
+def test_a_resume_without_the_tier_is_not_recorded_as_a_flex_run(tmp_path, monkeypatch):
+    job, run = review_fixture(tmp_path, monkeypatch)
+    funded_provider(monkeypatch, [])
+    run('--service-tier', 'flex')
+    assert json.loads((job / 'run' / 'run.json').read_text())['service_tier'] == 'flex'
+    run()
+    assert not {'service_tier', 'flex_fallback'} & json.loads((job / 'run' / 'run.json').read_text()).keys()
+
+
 def test_unpaid_review_can_resume_with_dictionary_and_publish(tmp_path, monkeypatch):
     job, run = review_fixture(tmp_path, monkeypatch)
     calls = []; funded_provider(monkeypatch, calls)

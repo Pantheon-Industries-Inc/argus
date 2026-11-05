@@ -856,7 +856,7 @@ def test_a_reply_that_searched_stops_every_later_request(monkeypatch, model, kw)
     monkeypatch.setattr(harness, '_post', post)
     call = lambda: harness.call_model([{'type': 'text', 'text': 'x'}], model, 'low', 'sk-or-test', 10, 5, pricing_quote=quote)
     assert call() == plain and call() == usage and pricing_module.search_seen
-    with pytest.raises(ValueError, match='counted a web search'):
+    with pytest.raises(harness.DispatchError, match='counted a web search'):
         call()
     assert len(posts) == 2
 
@@ -869,9 +869,72 @@ def test_a_model_priced_without_a_quote_stops_at_a_search_too(monkeypatch):
     monkeypatch.setattr(harness, '_post', lambda *args, **options: posts.append(args) or {
         'usage': {'server_tool_use_details': {'web_search_requests': 1}}})
     harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
-    with pytest.raises(ValueError, match='counted a web search'):
+    with pytest.raises(harness.DispatchError, match='counted a web search'):
         harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
     assert len(posts) == 1
+
+
+@pytest.mark.parametrize('usage, count', [
+    ({'server_tool_use': {'web_search_requests': 2}}, 2),           # the chat completions reference
+    ({'server_tool_use_details': {'web_search_requests': 2}}, 2),   # the web search guide
+    ({'server_tool_use': {'web_search_requests': 1.0}}, 1),
+    ({'cost_details': {'server_tool_cost': .01}}, 1),
+    ({'server_tool_use': {'web_search_requests': 0}, 'cost_details': {'server_tool_cost': 0}}, 0),
+    ({'prompt_tokens': 3, 'cost': .01}, 0),
+    ('not usage', 0),
+])
+def test_every_way_a_reply_reports_a_search_is_counted(usage, count):
+    """OpenRouter's two documents name the search count differently, and the stop is worth nothing if it reads the other."""
+    from label import pricing as pricing_module
+    assert pricing_module.searches_counted({'usage': usage}) == count
+
+
+def test_a_stopped_run_sends_nothing_more_and_leaves_the_rest_unpaid(tmp_path, monkeypatch):
+    """Through the whole batch: after the reply that searched no request leaves, and the unit it stopped keeps no
+    reservation, so it is not recorded as possibly billed and a resume can send it."""
+    import shutil
+    from label import pricing as pricing_module
+    from test_camera_timing import recording
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    model, posts = 'openai/gpt-6.1-terra', []
+    def provider(request, timeout):
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 1_050_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        posts.append(json.loads(request.data))
+        selection = 'FIELD INVENTORY' in json.dumps(posts[-1]['messages'])
+        reply = json.loads(answer({'requests': []} if selection else complete_reply.labels('The hand reaches.')).read())
+        reply['usage'] = {**reply.get('usage', {}), 'server_tool_use': {'web_search_requests': 1}}
+        return io.BytesIO(json.dumps(reply).encode())
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    (tmp_path / 'made').mkdir()
+    made = recording(tmp_path / 'made', np.arange(12) / 30)
+    episodes = [tmp_path / 'episode_000001', tmp_path / 'episode_000002']
+    for ep in episodes:
+        shutil.copytree(made, ep)
+    out = tmp_path / 'out'
+    assert harness.run_batch(episodes, out, keys=['sk-or-test'], concurrency=1, force=False, model=model, reasoning='medium',
+                             max_tokens=64000, timeout=1, cell_w=128, max_spend=8.) != 0
+    assert len(posts) == 1 and pricing_module.search_seen
+    records = {p.name: json.loads(p.read_text()) for p in out.glob('*.json')}
+    stopped = {name: r for name, r in records.items() if name.endswith('episode_000002.json')}
+    assert stopped and all(r.get('final_dispatch_outcome') in (None, 'not dispatched') and not r.get('final_reserved_usd')
+                           for r in stopped.values()), stopped
+
+
+@pytest.mark.parametrize('key', ['sk-or-test', 'sk-proj-test'])
+def test_no_request_path_asks_for_a_search(monkeypatch, key):
+    """The exemption rests on this, straight to OpenAI as well as through OpenRouter."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    sent = []
+    def provider(request, timeout):
+        sent.append(json.loads(request.data))
+        return answer({})
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', key, 10, 5)
+    assert len(sent) == 1 and not {'plugins', 'tools', 'tool_choice', 'web_search_options'} & sent[0].keys()
+    assert ':online' not in sent[0]['model']
 
 
 def test_a_request_part_with_no_verified_bound_is_refused():

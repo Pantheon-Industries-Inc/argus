@@ -14,6 +14,10 @@ import threading
 from collections import Counter
 from pathlib import Path
 
+from label.atomic import write_atomic
+
+COUNTS = '.service_tier/counts.json'
+
 _lock = threading.Lock()
 _requested: str | None = None
 _fallback = False
@@ -77,14 +81,21 @@ def counts() -> dict:
 
 
 def write(out_dir: Path) -> None:
-    """Add this run's counts to the folder's, since a resumed run writes to the same folder."""
+    """Add this run's counts to the folder's, since a resumed run writes to the same folder. They go in a subfolder,
+    as the inspection caches do, because board.lerobot_export, label.catalog, label.seam and label.issue_groups read
+    every *.json at the top of a labels folder as a label. The run's paid work is already saved, so a failure here
+    only warns."""
     if _requested is None:
         return
     now = counts()
-    path = Path(out_dir) / 'service_tier_counts.json'
-    if path.exists():
-        before = json.loads(path.read_text())
-        now['rejected'] += before.get('rejected', 0)
-        now['fell_back'] += before.get('fell_back', 0)
-        now['replies'] = dict(Counter(before.get('replies', {})) + Counter(now['replies']))
-    path.write_text(json.dumps(now, indent=1))
+    path = Path(out_dir) / COUNTS
+    try:
+        if path.exists():
+            before = json.loads(path.read_text())
+            now['rejected'] += before.get('rejected', 0)
+            now['fell_back'] += before.get('fell_back', 0)
+            now['replies'] = dict(Counter(before.get('replies', {})) + Counter(now['replies']))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(path, now, indent=1)
+    except (OSError, ValueError, AttributeError) as error:
+        print(f'WARN could not record the service tier counts: {error}', flush=True)

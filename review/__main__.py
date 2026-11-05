@@ -505,6 +505,9 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
             **({'service_tier': a.service_tier, 'flex_fallback': a.flex_fallback} if a.service_tier else {})}
     info.pop('error', None)
     info.pop('finished_at', None)
+    if not a.service_tier:
+        info.pop('service_tier', None)
+        info.pop('flex_fallback', None)
     if a.retry_received:
         info.setdefault('received_retries', []).append({'at': now(), 'episodes': a.retry_received,
                                                        'max_tokens': a.max_tokens, 'cap_usd': a.cap})
