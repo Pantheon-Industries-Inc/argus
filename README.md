@@ -103,13 +103,9 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--sample-fps`](label/policy.py) | A frame every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus the edges of still spans and the first and last frames; Sol samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
 | [`--inspection`](label/policy.py) | `auto`, for recordings with a touch sensor or with fields the prompt does not carry | `all` also inspects depth, force/torque, arm signals, actions and source metadata, for runs whose findings need exact values; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
 | [`--resolution-route`](label/harness.py) | `off`, every teleop episode at the narrow cells (224 px) with contact detail views and no routing call | `on` asks a small model, from the episode's task text alone, whether judging it needs fine detail such as lettering or which side of an object is up, and sends those episodes at 448 px |
-<<<<<<< HEAD
 | [`--service-tier`](review/__main__.py) | Unset, the provider's default tier | `flex` sends the same request at half the price with lower priority, so a reply can take longer and a request can be rejected when the provider has no capacity. It is independent of `--model` and `--reasoning`, the cap reserves flex rates, and each label records the tier that served it, with counts in `service_tier_counts.json` beside the labels |
 | [`--flex-fallback`](review/__main__.py) | `off`: after about 4 minutes of retries a rejected unit stays unlabelled and unpaid, and a resume sends it again | `standard` sends it once at the standard tier, at twice the price, and the cap reserves that rate for every request. A flex request that timed out is never sent again at standard, since it may still be billed |
-| [`--allow-unverified-fees`](label/pricing.py) | Off: no request goes to a model whose published search fee could apply, since no cap can limit that fee | On sends those requests with a printed warning. Normal runs do not need it, because a request that sends no search option cannot be charged for one, which covers Sol, Terra and Gemini. On or off, a run through OpenRouter stops at the first reply whose usage counts a search |
-=======
 | [`--allow-unverified-fees`](review/__main__.py) | Off: no request goes to a model whose published search fee could apply, since no cap can limit that fee | On sends those requests with a printed warning. Normal runs do not need it, because a request that sends no search option cannot be charged for one, which covers Sol, Terra and Gemini. On or off, a run through OpenRouter stops at the first reply whose usage counts a search |
->>>>>>> openai-search-on-request
 | [`--cap`](review/__main__.py) | $20 | The most the job may spend, counting every call and outstanding reservation |
 | [`--max-minutes`](review/__main__.py) | All footage | Reads at most this many minutes of footage |
 | [`--dataset`](review/__main__.py) | The name of `--data` | The name shown on the board and told to the model |
@@ -299,7 +295,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 
 | Command | Options |
 |---|---|
-| [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |, `--allow-unverified-fees`, `--service-tier`, `--flex-fallback`
+| [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |
 | [`review seam`](label/seam.py) | `--label`, `--footage`, `--out`, `--dry-run`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--timeout`, `--apply` |
 | [`prepare abc130k prepare`](prepare/abc130k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
 | [`prepare abc130k sample`](prepare/abc130k.py) | `--list`, `--per-task`, `--split`, `--seed`, `--jobs` |
@@ -329,7 +325,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`checks.timebase scan`](checks/timebase.py) | `--raw`, `--out`, `--jobs` |
 | [`label`](label/run.py) | `--dataset`, `--episodes`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--note`, `--label`, `--resume`, `--why` |
 | [`label.catalog`](label/catalog.py) | `--label`, `--out`, `--base`, `--cap`, `--model`, `--reasoning`, `--judge-model`, `--check`, `--concurrency`, `--dry-run` |
-| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run` |, `--allow-unverified-fees`, `--service-tier`, `--flex-fallback`
+| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run`, `--allow-unverified-fees`, `--service-tier`, `--flex-fallback` |
 | [`label.issue_groups`](label/issue_groups.py) | `--label`, `--dump`, `--out`, `--takes`, `--seed`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--dry-run` |
 | [`board build`](board/build.py) | `--no-cache` |
 | [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--name-prefix`, `--labels` |
