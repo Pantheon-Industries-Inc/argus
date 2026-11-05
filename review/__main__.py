@@ -326,6 +326,12 @@ def main() -> int:
     ap.add_argument("--dataset", default=None, help="name shown on the board and told to the model")
     ap.add_argument("--free", action="store_true", help="stop after the dry run (no model calls)")
     ap.add_argument("--cap", type=float, default=20.0, help="most the labelling may spend, in USD (default 20)")
+    ap.add_argument("--service-tier", choices=('flex', 'default'), default=None,
+                    help="the provider's service tier: flex is the same request at half the price, slower and rejected "
+                         "at capacity; default, or unset, names none (label/tier.py)")
+    ap.add_argument("--flex-fallback", choices=('off', 'standard'), default='off',
+                    help="after flex stays rejected: off leaves the unit unpaid for a resume; standard sends it once at "
+                         "twice the price, and the cap reserves that rate for every request")
     ap.add_argument("--allow-unverified-fees", action="store_true",
                     help="label with a model whose search fee no cap can limit, with a warning, and stop at the first "
                          "reply that counts a search (default: refuse it; label/pricing.py)")
@@ -461,11 +467,13 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     timeout_args = ["--timeout", str(a.timeout)] if a.timeout is not None else []
     if a.max_tokens is not None:
         timeout_args += ['--max-tokens', str(a.max_tokens)]
+    tier_args = ((['--service-tier', a.service_tier] if a.service_tier else [])
+                 + (['--flex-fallback', a.flex_fallback] if a.flex_fallback != 'off' else []))
     retry_args = (['--force'] if a.force else []) + [value for name in a.retry_received for value in ('--retry-received', name)]
     env = repo_env(**lease_env, RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)),
                    **({"ARGUS_RESOLUTION_ROUTE": a.resolution_route} if a.resolution_route else {}))
     run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
-                              str(job / "dry"), "--concurrency", jobs, "--dry-run", "--force", *timeout_args], env)
+                              str(job / "dry"), "--concurrency", jobs, "--dry-run", "--force", *timeout_args, *tier_args], env)
     unknown = set(a.retry_received) - {p.name for p in (job / 'units').glob('episode_*')}
     if unknown:
         raise SystemExit('--retry-received names unknown units: ' + ', '.join(sorted(unknown)) +
@@ -485,7 +493,8 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     prior_run = json.loads((run_dir / 'run.json').read_text()) if (run_dir / 'run.json').exists() else {}
     info = {**prior_run, "run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
             "code": f"argus@{commit()}", "started_at": prior_run.get('started_at') or now(), "cap_usd": a.cap, "status": "running",
-            "annotation_policy": selected, "inspection": inspection}
+            "annotation_policy": selected, "inspection": inspection,
+            **({'service_tier': a.service_tier, 'flex_fallback': a.flex_fallback} if a.service_tier else {})}
     info.pop('error', None)
     info.pop('finished_at', None)
     if a.retry_received:
@@ -508,7 +517,7 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
             label_rc = run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                                     str(run_dir / "out"), "--concurrency", str(a.concurrency),
                                     "--max-spend", str(remaining), *timeout_args, *retry_args,
-                                    *(['--allow-unverified-fees'] if a.allow_unverified_fees else [])], label_env, ok_codes=(0, 1))
+                                    *(['--allow-unverified-fees'] if a.allow_unverified_fees else []), *tier_args], label_env, ok_codes=(0, 1))
         else:
             label_rc = int(a.force or bool(a.retry_received))
             print('label budget exhausted by prior spending or outstanding reservations', flush=True)
