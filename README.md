@@ -293,7 +293,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 
 | Command | Options |
 |---|---|
-| [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |, `--allow-unverified-fees`
+| [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |
 | [`review seam`](label/seam.py) | `--label`, `--footage`, `--out`, `--dry-run`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--timeout`, `--apply` |
 | [`prepare abc130k prepare`](prepare/abc130k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
 | [`prepare abc130k sample`](prepare/abc130k.py) | `--list`, `--per-task`, `--split`, `--seed`, `--jobs` |
@@ -323,7 +323,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`checks.timebase scan`](checks/timebase.py) | `--raw`, `--out`, `--jobs` |
 | [`label`](label/run.py) | `--dataset`, `--episodes`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--note`, `--label`, `--resume`, `--why` |
 | [`label.catalog`](label/catalog.py) | `--label`, `--out`, `--base`, `--cap`, `--model`, `--reasoning`, `--judge-model`, `--check`, `--concurrency`, `--dry-run` |
-| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run` |, `--allow-unverified-fees`
+| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run`, `--allow-unverified-fees` |
 | [`label.issue_groups`](label/issue_groups.py) | `--label`, `--dump`, `--out`, `--takes`, `--seed`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--dry-run` |
 | [`board build`](board/build.py) | `--no-cache` |
 | [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--name-prefix`, `--labels` |
