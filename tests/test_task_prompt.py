@@ -50,19 +50,23 @@ def main(rig, recorded=True):
 # left and right steps overlapped in time, so when the two grippers did different things at once (the left grasps one
 # object while the right grasps another) usually only one of them was written. Each then gets its own step; one at
 # rest while the other works gets none, an idle moment of both is written as before, and work on one object stays
-# "both", as does the same action done by both at once, each on its own object. It is worded conditionally, because
-# a one-armed rig gets the same text. The test holds its own copy, as for the edits below.
+# "both", as does the same action done by both at once, each on its own object. A "both" step still holds one action:
+# without that sentence, paired runs on 30 real episodes wrote 8% fewer steps and 5% fewer distinct moments per minute,
+# a hand-over or a run of regrasps on one held object going into one step (tests/test_density.py). It is worded
+# conditionally, because a one-armed rig gets the same text. The test holds its own copy, as for the edits below.
 TWO_ACTORS_BEFORE = '- Keep values terse: short action/object strings'
 ACTOR = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}
 TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERENT task-relevant actions on DIFFERENT objects,
   for example the left {actor} grasps one object while the right {actor} places another, write one step for each
   {actor}, with overlapping times. While one {actor} works, another at rest, parked or merely holding still gets no
   step of its own; when none works, the idle step is written as before. Two {actor}s working on one object stay
-  one "both" step, even when each does something different to it: one holds, steadies or braces it while the other
-  works it, or one hands it to the other. For example the left {actor} holds a jar while the right {actor} unscrews
-  its lid. Two {actor}s doing the same action at the same moment, each on its own object (each squeezes a toy, each
-  turns a ball), are also one "both" step, naming both objects. This adds no other steps: the granularity above is
-  unchanged.
+  one "both" step for one action, even when each does something different to it: one holds, steadies or braces it
+  while the other works it. For example the left {actor} holds a jar while the right {actor} unscrews its lid. Two
+  {actor}s doing the same action at the same moment, each on its own object (each squeezes a toy, each turns a ball),
+  are also one "both" step, naming both objects. A "both" step holds one action and never merges what the granularity
+  above keeps apart: each grasp, release, regrasp, withdrawal and return by either {actor}, and each change of which
+  {actor} moves, starts a new step for the {actor} that does it. A hand-over is the giver's carry, the taker's grasp
+  and the giver's release, each its own step.
 """ for rig, actor in ACTOR.items()}
 
 
@@ -443,8 +447,14 @@ def test_each_side_gets_its_own_step_only_while_the_two_act_apart(rig, given):
     assert f'write one step for each {actor}, with overlapping times' in s
     assert 'when none works, the idle step is written as before' in s
     assert f'holds a jar while the right {actor} unscrews its lid' in s
-    # one object held, steadied, braced or handed over by one side while the other works it stays one step
-    assert 'one holds, steadies or braces it while the other works it, or one hands it to the other' in s
+    # one object held, steadied or braced by one side while the other works it stays one step for one action
+    assert 'one holds, steadies or braces it while the other works it.' in s
+    # a both step never merges what the granularity note keeps apart, and a hand-over is three steps: without this the
+    # rule cost density (tests/test_density.py)
+    assert 'never merges what the granularity above keeps apart' in s
+    assert (f'each grasp, release, regrasp, withdrawal and return by either {actor}, and each change of which {actor} '
+            f'moves, starts a new step for the {actor} that does it') in s
+    assert "A hand-over is the giver's carry, the taker's grasp and the giver's release, each its own step." in s
     assert f'DIFFERENT task-relevant actions on DIFFERENT objects' in s
     # the same action by both at once, each on its own object, stays one "both" step: PR 187's A/B wrote 5 such
     # overlapping pairs with one action text on both sides in 40 UMI runs (each gripper squeezing its own duck, each
