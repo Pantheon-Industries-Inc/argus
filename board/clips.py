@@ -1,6 +1,6 @@
 """Per-episode, per-camera clips for the board (board/serve.py).
 
-    python -m board clips --episodes EPISODES --out CLIPS [--name-prefix habit_]
+    python -m board clips --episodes EPISODES --out CLIPS [--name-prefix habit_] [--decode-only]
 
 The board plays each camera as its own synced <video> and expects one mp4 per episode and camera:
   fixed or head camera   CLIPS/<episode>.mp4
@@ -50,6 +50,10 @@ that cannot be cut is left out; either is recorded in the episode's reader_issue
 it.
 A depth file that opens and does not decode, or holds no video stream, is depth_not_decodable. A missing or
 unopenable file is depth_clip_failed, a failure of the cut.
+
+--decode-only reads each camera's frames as a cut would and encodes nothing (decode_one), so a job whose board is never
+watched pays for no viewing copies. A camera that does not decode or comes out short is found and recorded exactly as
+above, so the requests are the ones a cut would have led to. No clip is written, and the board has no video to play.
 """
 from __future__ import annotations
 
@@ -273,6 +277,68 @@ def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0, ctx: dict | None 
     return {c: tc - ref for c, tc in t.items()}
 
 
+def cut_input(packed: str, base_s: float, skip: int, fps: float, source_pts) -> tuple:
+    """How a cut reads one camera (extract_one, decode_one): (ffmpeg's seek arguments, its timing filters, whether the
+    source is dense, the first frame's display index when it is)."""
+    dense, first = False, 0
+    timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
+    seek = ["-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}"]
+    if source_pts is not None and len(source_pts):
+        import av
+        import math
+        with av.open(str(packed)) as source:
+            start = float(int(source_pts[0]) * source.streams.video[0].time_base)
+            tb = source.streams.video[0].time_base
+            dense = (len(source_pts) > 1 and min(int(b) - int(a) for a, b in zip(source_pts, source_pts[1:]))
+                     * tb.numerator * DISPLAY_TICKS_PER_S <= tb.denominator)
+            if dense:
+                # Microsecond packet separation retains tied captures, but an accurate seek can discard the whole
+                # short stream. Select its exact display indices from original PTS instead.
+                packets = presented_pts(source, source.streams.video[0])
+                first = packets.index(int(source_pts[0]))
+        # Truncate the seek to microseconds so decimal rounding cannot put it after the wanted packet.
+        seek = ["-seek_timestamp", "1", "-ss", f"{math.floor(start * 1_000_000) / 1_000_000:.6f}"]
+        if dense:
+            seek = []
+            timing = (f"select=between(n\\,{first + int(skip)}\\,{first + len(source_pts) - 1})",
+                      "setpts=PTS-STARTPTS")
+    return seek, timing, dense, first
+
+
+def cut_lead(packed: str, seek: list, dense: bool, first: int, skip: int, fps: float) -> float:
+    """The frames a cut decodes before its first one: back to the keyframe before the seek, and those select skips."""
+    if dense:
+        return first + int(skip)
+    return decode_lead_s(packed, float(seek[seek.index("-ss") + 1])) * fps + int(skip)
+
+
+def decode_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
+               ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
+               skip: int = 0, times=None, query_s=None, query_map=None, source_pts=None,
+               last_frame_interval_s: float | None = None) -> dict | None:
+    """What extract_one would find out about a camera, with nothing encoded or written: the same frames read the same
+    way, the same counts returned for a camera that comes out short, and the same errors raised for one that does not
+    decode. ffmpeg writes its progress to a temporary file, which is what shows it still moving."""
+    out_mp4.parent.mkdir(parents=True, exist_ok=True)
+    tmp = temporary_path(out_mp4, '.progress')
+    source_size(packed)
+    want = int(n_frames) - int(skip)
+    seek, timing, dense, first = cut_input(packed, base_s, skip, fps, source_pts)
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), *seek,
+           "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
+           "-vf", ",".join(timing), "-progress", str(tmp), "-f", "null", "-"]
+    try:
+        run_while_progressing(cmd, watch=[tmp], lead_s=cut_lead(packed, seek, dense, first, skip, fps) / MIN_DECODE_FPS,
+                              check=True)
+        lines = [x for x in tmp.read_text().splitlines() if x.startswith("frame=")]
+        got = int(lines[-1].split("=", 1)[1]) if lines else 0
+        if not got:
+            raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
+    finally:
+        tmp.unlink(missing_ok=True)
+    return None if got == want else {"clip_frames": got, "episode_frames": want}
+
+
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
                 ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
                 skip: int = 0, times=None, query_s=None, query_map=None, source_pts=None,
@@ -300,28 +366,7 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     tmp = temporary_path(out_mp4, '.mp4')
     w, h, resample = source_size(packed)
     want = int(n_frames) - int(skip)
-    dense = False
-    timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
-    seek = ["-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}"]
-    if source_pts is not None and len(source_pts):
-        import av
-        import math
-        with av.open(str(packed)) as source:
-            start = float(int(source_pts[0]) * source.streams.video[0].time_base)
-            tb = source.streams.video[0].time_base
-            dense = (len(source_pts) > 1 and min(int(b) - int(a) for a, b in zip(source_pts, source_pts[1:]))
-                     * tb.numerator * DISPLAY_TICKS_PER_S <= tb.denominator)
-            if dense:
-                # Microsecond packet separation retains tied captures, but an accurate seek can discard the whole
-                # short stream. Select its exact display indices from original PTS instead.
-                packets = presented_pts(source, source.streams.video[0])
-                first = packets.index(int(source_pts[0]))
-        # Truncate the seek to microseconds so decimal rounding cannot put it after the wanted packet.
-        seek = ["-seek_timestamp", "1", "-ss", f"{math.floor(start * 1_000_000) / 1_000_000:.6f}"]
-        if dense:
-            seek = []
-            timing = (f"select=between(n\\,{first + int(skip)}\\,{first + len(source_pts) - 1})",
-                      "setpts=PTS-STARTPTS")
+    seek, timing, dense, first = cut_input(packed, base_s, skip, fps, source_pts)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), *seek,
            "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
            *video_args(w, h, main, threads, resample, pre=timing),
@@ -331,12 +376,8 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
         # stopped only when the encode makes no progress (the clip file stops growing), never for its length: a long
         # recording takes as long as it takes. Until the first frame is written it may still be decoding the frames
         # before the cut (from the keyframe before the seek, and those select skips), at no less than one a second
-        if dense:
-            lead = first + int(skip)
-        else:
-            seek_s = float(seek[seek.index("-ss") + 1])
-            lead = decode_lead_s(packed, seek_s) * fps + int(skip)
-        run_while_progressing(cmd, watch=[tmp], lead_s=lead / MIN_DECODE_FPS, check=True)
+        run_while_progressing(cmd, watch=[tmp], lead_s=cut_lead(packed, seek, dense, first, skip, fps) / MIN_DECODE_FPS,
+                              check=True)
         # A zero final packet duration hides a readable frame from the count used to slice its capture times.
         frame_lengths(tmp)
         got = clip_frames(tmp)
@@ -1549,6 +1590,9 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=6, help="clips encoded at once")
     ap.add_argument("--clip-threads", type=int, default=2, help="ffmpeg threads per clip")
     ap.add_argument("--force", action="store_true", help="re-cut clips that already exist")
+    ap.add_argument("--decode-only", action="store_true",
+                    help="read each camera as a cut would and write no clip: broken and short cameras are recorded the "
+                         "same, and the board has no video to play")
     ap.add_argument("--name-prefix", default="", help="the dataset's file_prefix in the board manifest, if any")
     ap.add_argument("--labels", type=Path, default=None,
                     help="a labelling run's out folder; an episode with a label there keeps its clock (default: "
@@ -1566,6 +1610,7 @@ def main() -> int:
     else:
         ep_dirs = sorted(d for d in args.episodes.glob("episode_*") if d.is_dir())
 
+    cut_one = decode_one if args.decode_only else extract_one
     jobs = []
     for d in ep_dirs:
         jobs += episode_jobs(d, args.out, args.force, args.name_prefix)
@@ -1586,7 +1631,7 @@ def main() -> int:
         stopped.setdefault(ep, {})[cam] = str(e)[:400]
         sys.stderr.write(f"clip STOPPED {o}{when}, by the machine, not the video: {str(e)[:160]}\n")
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, threads, fps, is_main, off, skip, t, q, km, pts, end):
+        futs = {ex.submit(cut_one, pk, b, du, o, ffmpeg, threads, fps, is_main, off, skip, t, q, km, pts, end):
                 (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, end, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
@@ -1657,8 +1702,8 @@ def main() -> int:
                                                                                     args.name_prefix):
                 try:
                     # cut one at a time, so each has the step's whole budget
-                    counts = extract_one(pk, b, du, o, ffmpeg, clip_threads(1, args.jobs, args.clip_threads), fps,
-                                         is_main, off, skip, t, q, km, pts, end)
+                    counts = cut_one(pk, b, du, o, ffmpeg, clip_threads(1, args.jobs, args.clip_threads), fps,
+                                     is_main, off, skip, t, q, km, pts, end)
                     if cam.startswith(UNSHOWN):
                         u_cut.add(cam)
                         continue
@@ -1687,8 +1732,8 @@ def main() -> int:
     # the depth clips, after the colour clips they are timed against; one that comes out imperfect is kept, and one
     # that cannot be cut is left out (the page then offers no depth for that camera), never costing the episode; either
     # is recorded on the episode as a reader issue (record_depth), which the board shows
-    djobs = [j for d in ep_dirs if d.name not in failed and d.name not in stopped
-             for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
+    djobs = [] if args.decode_only else [j for d in ep_dirs if d.name not in failed and d.name not in stopped
+                                         for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
     if djobs:
         print(f"clips: {len(djobs)} depth clips to cut")
         dok = 0
