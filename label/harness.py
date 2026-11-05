@@ -192,7 +192,8 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         body['provider'] = {'max_price': pricing_quote['provider_max_price']}
     from label import pricing
     if pricing.search_seen:
-        raise ValueError(f'{pricing.search_seen}; no paid request was dispatched')
+        # never sent, so its reservation is released and the unit stays unpaid rather than possibly billed
+        raise DispatchError(f'{pricing.search_seen}; no paid request was dispatched', verified_unpaid=True, stage='not sent')
     response = _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
     if pricing.searches_counted(response):
         pricing.search_seen = f'a reply from {model} counted a web search, a fee no cap limits'

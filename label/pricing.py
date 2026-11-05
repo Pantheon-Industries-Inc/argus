@@ -21,11 +21,21 @@ search_seen = None
 
 
 def searches_counted(response: dict) -> int:
-    """How many web searches a reply's usage reports (https://openrouter.ai/docs/guides/features/server-tools/web-search)."""
+    """How many web searches a reply's usage reports. The chat completions reference names server_tool_use and the
+    web search guide server_tool_use_details, so both are read. A metered server tool cost counts as one search,
+    because no request here asks for a server tool and no cap limits that cost either.
+    https://openrouter.ai/docs/api/reference/overview
+    https://openrouter.ai/docs/guides/features/server-tools/web-search"""
     usage = response.get('usage') if isinstance(response, dict) else None
-    details = usage.get('server_tool_use_details') if isinstance(usage, dict) else None
-    count = details.get('web_search_requests') if isinstance(details, dict) else None
-    return count if type(count) is int and count > 0 else 0
+    if not isinstance(usage, dict):
+        return 0
+    def number(value):
+        return value if type(value) in (int, float) and value > 0 else 0
+    counts = [number(details.get('web_search_requests')) for details in
+              (usage.get('server_tool_use'), usage.get('server_tool_use_details')) if isinstance(details, dict)]
+    count = math.ceil(max(counts, default=0))
+    cost_details = usage.get('cost_details')
+    return count or int(isinstance(cost_details, dict) and number(cost_details.get('server_tool_cost')) > 0)
 
 
 def quote(model: str, timeout: int, *, allow_unverified_fees: bool = False) -> dict:
