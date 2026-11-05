@@ -114,6 +114,26 @@ def test_without_the_fallback_a_lasting_rejection_stays_unpaid_and_goes_to_stand
     assert tier.counts()['fell_back'] == 0 and tier.counts()['rejected'] == len(sent)
 
 
+def test_flex_backs_off_for_about_four_minutes_and_a_standard_request_does_not(monkeypatch):
+    """Flex capacity comes back in minutes, so a flex rejection waits that long before the unit is left for a resume."""
+    slept, sent = [], []
+    monkeypatch.setattr(harness.time, 'sleep', slept.append)
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider_for(SOL, sent, rejections=99))
+    tier.configure('flex', False)
+    with pytest.raises(harness.DispatchError):
+        harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
+    assert len(sent) == harness.FLEX_UNPAID_ATTEMPTS and 200 <= sum(slept) <= 300
+    def rejected(request, timeout):
+        sent.append(json.loads(request.data))
+        reject(request, 429, {'error': {'message': 'rate limited'}})
+    sent.clear()
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', rejected)
+    tier.configure(None, False)
+    with pytest.raises(harness.DispatchError):
+        harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
+    assert len(sent) == harness.UNPAID_ATTEMPTS
+
+
 def test_with_the_fallback_a_lasting_rejection_is_sent_once_at_standard_and_counted(monkeypatch):
     sent = []
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider_for(SOL, sent, rejections=99))
