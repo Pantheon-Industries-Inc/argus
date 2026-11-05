@@ -934,6 +934,11 @@ def main():
             tools.ffmpeg(), tools.ffprobe()
         except tools.Missing as e:
             sys.exit(e.strerror)
+    if a.cmd in ("measure", "media"):       # both encode with video_args
+        try:
+            tools.ffmpeg_for_clips(FFMPEG)
+        except tools.Missing as e:
+            sys.exit(e.strerror)
     from board.public_export import publish_uploader_values
     publish_uploader_values(getattr(a, "publish_uploader_values", False))
     return {"measure": cmd_measure, "media": cmd_media, "site": cmd_site, "status": cmd_status}[a.cmd](a) or 0

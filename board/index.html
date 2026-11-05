@@ -7098,7 +7098,8 @@ function renderEp(d, opts) {
     const kv = (it, name, depth = 0) => `<div class="pub-kv"><span class="pub-k" style="--d:${depth}">${esc(name)}</span><span class="pub-v">`
       + `${esc(it.value)}${it.t != null ? `<button type="button" class="pub-at" data-t="${esc(it.t)}">at `
       + `${esc(fmtT(it.t))}</button>` : ''}</span></div>`;
-    const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${notePathRows(g.items, kv)}</div>`;
+    const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${notePathRows(g.items, kv)}`
+      + `${g.omitted ? `<p class="pub-note">${esc(g.omitted)} more recorded values are not shown. The prepared episode keeps them all.</p>` : ''}</div>`;
     const notes = upl.filter(g => g.kind !== 'row');
     const uplHtml = upl.filter(g => g.kind === 'row').map(grp).join('') + (notes.length
       ? `<div class="pub-fold"><div class="sn-fold"><div class="sn-fold-in">${notes.map(grp).join('')}</div></div>`

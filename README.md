@@ -69,11 +69,11 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Depth, inspected with `--inspection all` | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
 | Proprioception and actions | Joint states, end-effector poses, gripper states and action trajectories provide motion context. Training targets keep their declared semantics and are not assumed to be executed commands. |
 | Other episode fields | Force/torque, numeric channels, event flags, waveform packets and structured metadata reach the prompt as their range over the recording. A channel the sampling rate resolves also gets a reading at each sampled instant, and a channel that tracks another is given only where it departs from it. A channel the sampling rate does not resolve gets its mean over each sampling window within a small share of the request, and otherwise the times of its largest and smallest readings. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
-| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording rather than assuming it is correct. The per-episode statistics, storage offsets and dataset totals that LeRobot writes into its metadata are kept in the episode's context.json and left out of the prompt. |
+| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording rather than assuming it is correct. The per-episode statistics, storage offsets and dataset totals that LeRobot writes into its metadata are kept in the episode's context.json and left out of the prompt. context.json keeps every note, while the board shows at most 2,000 values for an episode, shared so a dataset's large metadata file cannot push out the notes about that episode, and says how many it left out. |
 
 ## Install and review
 
-You need Python 3.11, [uv](https://docs.astral.sh/uv/), and [`ffmpeg`](https://ffmpeg.org/ffmpeg.html)/[`ffprobe`](https://ffmpeg.org/ffprobe.html) 5.1 or newer.
+You need Python 3.11, [uv](https://docs.astral.sh/uv/), and [`ffmpeg`](https://ffmpeg.org/ffmpeg.html)/[`ffprobe`](https://ffmpeg.org/ffprobe.html) 6.1 or newer. Board clips keep each frame's source timestamp with `-enc_time_base demux`, which older ffmpeg refuses, so `python -m review`, `board clips` and `board static` stop at the start with a message that names the version they found.
 
 ```console
 git clone https://github.com/Pantheon-Industries-Inc/argus.git
