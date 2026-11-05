@@ -38,7 +38,7 @@ def searches_counted(response: dict) -> int:
     return count or int(isinstance(cost_details, dict) and number(cost_details.get('server_tool_cost')) > 0)
 
 
-def quote(model: str, timeout: int, *, allow_unverified_fees: bool = False) -> dict:
+def quote(model: str, timeout: int, *, allow_unverified_fees: bool = False, service_tier: str | None = None) -> dict:
     # https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model
     # https://openrouter.ai/docs/guides/routing/provider-selection#max-price
     # https://openrouter.ai/docs/guides/overview/models#pricing-overrides
@@ -55,9 +55,11 @@ def quote(model: str, timeout: int, *, allow_unverified_fees: bool = False) -> d
             raise ValueError('endpoint metadata is invalid')
         # Requests use the standard service tier. The resulting max_price also prevents
         # fallback to a more expensive premium endpoint.
-        endpoints = [endpoint for endpoint in endpoints if endpoint.get('service_tier') in (None, 'standard', 'default')]
+        # A flex run is priced by the flex endpoints only, which also makes max_price refuse any dearer one.
+        tiers = (service_tier,) if service_tier else (None, 'standard', 'default')
+        endpoints = [endpoint for endpoint in endpoints if endpoint.get('service_tier') in tiers]
         if not endpoints:
-            raise ValueError('standard endpoint pricing is missing')
+            raise ValueError(f"{service_tier or 'standard'} endpoint pricing is missing")
         # Claude web search requires an explicitly supplied search tool.
         # https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
         # Model variants such as :online can enable search outside that contract.

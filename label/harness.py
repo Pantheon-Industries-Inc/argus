@@ -59,7 +59,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 
 from board.label_projection import LABEL_SCHEMA, derive_completion
-from label import episode as me, policy
+from label import episode as me, policy, tier
 from label.atomic import write_atomic
 # the idle rule (an idle stretch is a low data issue unless it is other activity), applied in parse_response
 from label.idle import idle_category, idle_issues_low, other_activity, OTHER_ACTIVITY  # noqa: F401
@@ -109,16 +109,16 @@ def is_openrouter_key(key: str) -> bool:
     return key.startswith("sk-or-")
 
 
-def openai_list_cost(model: str, usage: dict) -> float | None:
-    """What a call straight to OpenAI costs at list price, cached input at its own price (None for a model not in
-    OPENAI_PRICES)."""
+def openai_list_cost(model: str, usage: dict, service_tier: str | None = None) -> float | None:
+    """What a call straight to OpenAI costs at list price, cached input at its own price, and half of each on the
+    flex tier (None for a model not in OPENAI_PRICES)."""
     tiers = OPENAI_PRICES.get(model.split("/", 1)[-1])
     if tiers is None or not _complete_token_usage(usage):
         return None
     n_in = usage["prompt_tokens"]
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
     p_in, p_cached, p_out = tiers[n_in >= LONG_PROMPT_TOKENS]
-    return (n_in - cached) * p_in + cached * p_cached + usage["completion_tokens"] * p_out
+    return ((n_in - cached) * p_in + cached * p_cached + usage["completion_tokens"] * p_out) * (.5 if service_tier == 'flex' else 1)
 
 
 def _complete_token_usage(usage: dict) -> bool:
@@ -194,7 +194,7 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
     if pricing.search_seen:
         # never sent, so its reservation is released and the unit stays unpaid rather than possibly billed
         raise DispatchError(f'{pricing.search_seen}; no paid request was dispatched', verified_unpaid=True, stage='not sent')
-    response = _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
+    response = _post_at_tier(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
     if pricing.searches_counted(response):
         pricing.search_seen = f'a reply from {model} counted a web search, a fee no cap limits'
         print(f'STOP {pricing.search_seen}; nothing further is sent', flush=True)
@@ -217,10 +217,10 @@ def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_to
         raise RuntimeError(f"{model} is not an OpenAI model, so it needs an OpenRouter key")
     body = {"model": model.split("/", 1)[1], "messages": [{"role": "user", "content": content}],
             "max_completion_tokens": max_tokens, "reasoning_effort": reasoning, **OPENAI_BODY}
-    resp = _post(OPENAI_URL, body, api_key, timeout, attempts=attempts)
+    resp = _post_at_tier(OPENAI_URL, body, api_key, timeout, attempts=attempts)
     resp.setdefault("provider", "OpenAI")
     if isinstance(resp.get("usage"), dict):
-        resp["usage"]["list_cost"] = openai_list_cost(model, resp["usage"])
+        resp["usage"]["list_cost"] = openai_list_cost(model, resp["usage"], resp.get("service_tier"))
     return resp
 
 
@@ -228,7 +228,25 @@ def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_to
 # nothing was billed, except a gateway timeout, behind which the request may still be running and billed.
 UNKNOWN_OUTCOME_STATUS = frozenset({504, 520, 521, 522, 523, 524})
 TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 529})
+FLEX_UNPAID_ATTEMPTS = 8     # flex capacity comes back in minutes, so its backoff runs to about 4 minutes
 UNPAID_ATTEMPTS = 4          # a provably unpaid failure is retried even on a paid call: retrying it cannot pay twice
+
+
+def _post_at_tier(url: str, body: dict, api_key: str, timeout: int, **options) -> dict:
+    """POST at the run's service tier. Only a rejection proved unpaid goes to the standard tier, and only with
+    --flex-fallback standard: a flex request that timed out may still be billed, so a second one could pay twice."""
+    body = {**body, **tier.body_fields()}
+    try:
+        response = _post(url, body, api_key, timeout, **options)
+    except DispatchError as error:
+        if (isinstance(error, KeyExhausted)
+                or not (tier.falls_back() and error.verified_unpaid and error.http_status in TRANSIENT_STATUS)):
+            raise
+        tier.note_fallback()
+        print(f'flex rejected ({error}); sending once at the standard tier, at twice the price', flush=True)
+        response = _post(url, {k: v for k, v in body.items() if k != 'service_tier'}, api_key, timeout, **options)
+    tier.note_reply(response)
+    return response
 
 
 def _retry_after(headers, attempt: int) -> float:
@@ -370,7 +388,8 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                                           **(OPENROUTER_APP_HEADERS if url == OPENROUTER_URL else {})})
-    unknown_left, unpaid_left = attempts, max(attempts, UNPAID_ATTEMPTS)
+    flex = body.get('service_tier') == 'flex'
+    unknown_left, unpaid_left = attempts, max(attempts, FLEX_UNPAID_ATTEMPTS if flex else UNPAID_ATTEMPTS)
     silence = silent_connection_limit(timeout)
     clean = True          # no earlier attempt of this call may have been billed
     tries = 0
@@ -399,6 +418,8 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
                 # so it is retried like an error status; a billed or unpriced one is kept as received, and only
                 # --retry-received sends it again
                 last = f"provider error in the reply: {failure}"
+                if flex:
+                    tier.note_rejection()
                 unpaid_left -= 1
                 if unpaid_left > 0:
                     time.sleep(min(30.0, 2.0 ** (tries - 1)))
@@ -412,6 +433,8 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             text = raw_error.decode(errors="replace")
             complete_error = len(raw_error) <= 65536
             last = f"HTTP {e.code}: {text[:300]}"
+            if flex and e.code in TRANSIENT_STATUS:
+                tier.note_rejection()
             if is_key_exhausted(e.code, text):
                 quota = None
                 try:
@@ -477,12 +500,14 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     if not dry_run and not is_openrouter_key(api_key) and not model.startswith('openai/'):
         raise ValueError(f'{model} requires an OpenRouter key; no request was dispatched.')
     pricing_quote = None
-    if not dry_run and require_known_pricing and (not model.startswith('openai/')
-            or model.split('/', 1)[-1] not in OPENAI_PRICES):
+    listed = model.startswith('openai/') and model.split('/', 1)[-1] in OPENAI_PRICES
+    # OpenRouter publishes each tier's rates, so a flex run is quoted from them even for a listed model
+    if not dry_run and require_known_pricing and (not listed or (tier.flex() and is_openrouter_key(api_key))):
         if not is_openrouter_key(api_key):
             raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
         from label import pricing
-        pricing_quote = pricing.quote(model, timeout, allow_unverified_fees=allow_unverified_fees)
+        pricing_quote = pricing.quote(model, timeout, allow_unverified_fees=allow_unverified_fees,
+                                      service_tier='flex' if tier.reserves_flex() else None)
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                               cell_w=cell_w, example_dir=example_dir, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
@@ -883,6 +908,8 @@ def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, req
     # Uncapped custom models retain a provisional hold if their provider loses the cost receipt.
     # This fallback is never used to authorize a capped dispatch.
     rates = tiers or OPENAI_PRICES[DEFAULT_MODEL.split('/', 1)[-1]]
+    if tier.reserves_flex():
+        rates = tuple(tuple(price / 2 for price in row) for row in rates)
     import io
     from PIL import Image
     text_bytes = sum(len(c.get('text', '').encode('utf-8')) for c in content if c.get('type') == 'text')
@@ -1948,7 +1975,8 @@ def _served(resp: dict) -> dict:
     """What the response says served the request: the upstream provider, OpenRouter's generation id, the model
     id that answered and the provider's system fingerprint (None when a field is absent)."""
     return {"provider_name": resp.get("provider"), "generation_id": resp.get("id"),
-            "model_served": resp.get("model"), "system_fingerprint": resp.get("system_fingerprint")}
+            "model_served": resp.get("model"), "system_fingerprint": resp.get("system_fingerprint"),
+            **({"service_tier": resp.get("service_tier")} if tier.requested() else {})}
 
 
 def get_keys() -> list[str]:
@@ -2048,9 +2076,14 @@ def execution_lock(folder: Path, *, inherited_fd: int | None = None):
         yield lock.fileno()
 
 
-def run_batch(episodes: list[Path], out_dir: Path, *, execution_lease_fd=None, **kwargs) -> int:
+def run_batch(episodes: list[Path], out_dir: Path, *, execution_lease_fd=None, service_tier=None, flex_fallback='off',
+              **kwargs) -> int:
+    tier.configure(service_tier, flex_fallback == 'standard')
     with execution_lock(out_dir, inherited_fd=execution_lease_fd):
         result = _run_batch(episodes, out_dir, **kwargs)
+        tier.write(out_dir)
+        if tier.requested():
+            print(f'service tier: {tier.counts()}', flush=True)
         # The worker owns its receipts until metadata is settled. A killed wrapper
         # must not leave completed paid work permanently marked as running.
         from label.finalize import finalize_worker
@@ -2603,6 +2636,12 @@ def main() -> int:
                          "instead of routing, so this run sends the same widths and frames (label/route.py)")
     ap.add_argument("--max-spend", type=float, default=0.0,
                     help="remaining USD allowance for this invocation, reserved before every call (0 = no cap)")
+    ap.add_argument("--service-tier", choices=('flex', 'default'), default=None,
+                    help="the provider's service tier: flex is the same request at half the price, slower and rejected "
+                         "at capacity; default, or unset, names none (label/tier.py)")
+    ap.add_argument("--flex-fallback", choices=('off', 'standard'), default='off',
+                    help="after flex stays rejected: off leaves the unit unpaid for a resume; standard sends it once at "
+                         "twice the price, and the cap reserves that rate for every request")
     ap.add_argument("--allow-unverified-fees", action="store_true",
                     help="send requests to a model whose search fee no cap can limit, with a warning, and stop at the first "
                          "reply that counts a search (default: refuse them; label/pricing.py)")
@@ -2622,7 +2661,8 @@ def main() -> int:
         from label import route
         n = route.seed(json.loads(args.route_seeds.read_text()), args.route_seeds.name)
         print(f"routing answers seeded for {n} task texts from {args.route_seeds}", flush=True)
-    label_kw = dict(allow_unverified_fees=args.allow_unverified_fees, model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
+    label_kw = dict(service_tier=args.service_tier, flex_fallback=args.flex_fallback,
+                    allow_unverified_fees=args.allow_unverified_fees, model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run,
                     sample_fps=args.sample_fps, dataset_note=args.dataset_note,
                     inspection=args.inspection)

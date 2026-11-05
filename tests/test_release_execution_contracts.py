@@ -76,6 +76,33 @@ def test_review_hands_the_unverified_fees_flag_to_the_label_step(tmp_path, monke
     assert ('--allow-unverified-fees' in commands['label']) is flag
 
 
+@pytest.mark.parametrize('extra, words', [([], []), (['--service-tier', 'flex', '--flex-fallback', 'standard'],
+                                                       ['--service-tier', 'flex', '--flex-fallback', 'standard'])])
+def test_review_hands_the_service_tier_to_the_dry_run_and_label_steps(tmp_path, monkeypatch, extra, words):
+    """Both steps run the real harness command line, and the dry run must price the cap check at the same rates."""
+    job, run = review_fixture(tmp_path, monkeypatch)
+    funded_provider(monkeypatch, [])
+    real, commands = review.run_step, {}
+    def step(job, kind, command, env, **kwargs):
+        commands[kind] = command
+        return real(job, kind, command, env, **kwargs)
+    monkeypatch.setattr(review, 'run_step', step)
+    run(*extra)
+    for kind in ('dry_run', 'label'):
+        assert all(word in commands[kind] for word in words) and ('--service-tier' in commands[kind]) is bool(words)
+    if words:
+        assert json.loads((job / 'run' / 'run.json').read_text())['service_tier'] == 'flex'
+
+
+def test_a_resume_without_the_tier_is_not_recorded_as_a_flex_run(tmp_path, monkeypatch):
+    job, run = review_fixture(tmp_path, monkeypatch)
+    funded_provider(monkeypatch, [])
+    run('--service-tier', 'flex')
+    assert json.loads((job / 'run' / 'run.json').read_text())['service_tier'] == 'flex'
+    run()
+    assert not {'service_tier', 'flex_fallback'} & json.loads((job / 'run' / 'run.json').read_text()).keys()
+
+
 def test_unpaid_review_can_resume_with_dictionary_and_publish(tmp_path, monkeypatch):
     job, run = review_fixture(tmp_path, monkeypatch)
     calls = []; funded_provider(monkeypatch, calls)
