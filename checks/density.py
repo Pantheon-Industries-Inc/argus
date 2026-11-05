@@ -150,8 +150,9 @@ def compare(before: dict, after: dict, *, n_boot: int = 20000, seed: int = 20261
 
 
 def drops(result: dict) -> list:
-    """The guarded metrics a comparison finds lower."""
-    return [name for name in GUARDED if name in result and result[name]['verdict'] == 'drop']
+    """The guarded metrics a comparison finds lower. A comparison that lacks one of them raises, so a measurement cannot
+    pass by leaving a metric out."""
+    return [name for name in GUARDED if result[name]['verdict'] == 'drop']
 
 
 def record_drops(record: dict, *, n_boot: int = 5000) -> list:

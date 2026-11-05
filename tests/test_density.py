@@ -12,6 +12,11 @@ from label import prompts
 HERE = Path(__file__).parent / 'fixtures'
 COLUMNS = ['start_s', 'end_s', 'arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'progress',
            'notes']
+# The test's own copy of what the guard holds, so that a metric cannot leave the guard unnoticed.
+GUARDED = ['items_per_min', 'moments_per_min', 'left_items_per_min', 'right_items_per_min', 'coverage_left',
+           'coverage_right', 'key_events_per_min', 'objects_per_min', 'issues_nonface_per_min', 'text_chars_per_min',
+           'median_step_s', 'median_active_step_s']
+LOWER_IS_DENSER = ['median_step_s', 'median_active_step_s']
 
 
 def label(steps=60, seconds=120.0):
@@ -83,6 +88,22 @@ def test_a_step_that_hides_two_actions_lengthens_the_median_step():
     assert b['median_step_s'] > a['median_step_s']
 
 
+def steps(*spans):
+    return {'timeline_columns': COLUMNS, 'timeline': [[a, b, 'left', 'act', 'object', None, None, kind, 0.1, None]
+                                                      for a, b, kind in spans]}
+
+
+def test_starts_within_half_a_second_of_a_moments_first_start_are_one_moment():
+    labels = steps((0.0, 0.2, 'advancing'), (0.4, 0.6, 'advancing'), (0.8, 1.0, 'advancing'))
+    assert density.metrics(labels, 60.0)['moments_per_min'] == 2
+
+
+def test_an_idle_step_counts_in_the_median_step_and_not_in_the_median_active_step():
+    labels = steps((0, 1, 'advancing'), (1, 2, 'advancing'), (2, 12, 'idle'), (12, 22, 'idle'), (22, 32, 'idle'))
+    m = density.metrics(labels, 60.0)
+    assert m['median_step_s'] == 10 and m['median_active_step_s'] == 1
+
+
 def episodes(n, plant=None):
     return {f'e{i}': [density.metrics((plant or (lambda x: x))(label(steps=50 + i % 20)), 120.0)] for i in range(n)}
 
@@ -93,7 +114,7 @@ def test_the_comparison_finds_a_planted_drop_and_no_drop_between_identical_sides
     assert {'items_per_min', 'moments_per_min'} <= set(density.drops(planted))
     assert planted['key_events_per_min']['verdict'] == 'holds'
     merged = density.compare(episodes(30), episodes(30, neighbours_merged_into_a_both_step), n_boot=500)
-    assert 'median_step_s' in density.drops(merged)
+    assert {'median_step_s', 'median_active_step_s'} <= set(density.drops(merged))
 
 
 def test_the_comparison_refuses_different_footage_on_the_two_sides():
@@ -103,6 +124,21 @@ def test_the_comparison_refuses_different_footage_on_the_two_sides():
 
 def record(name):
     return json.loads((HERE / name).read_text())
+
+
+@pytest.mark.parametrize('name', GUARDED)
+def test_the_guard_reports_each_guarded_metric_when_it_alone_worsens(name):
+    worse = 1.15 if name in LOWER_IS_DENSER else 0.85
+    rows = [{'before': e['before'], 'after': {**e['before'], name: e['before'][name] * worse}}
+            for e in record('density_current.json')['episodes']]
+    assert density.record_drops({'episodes': rows}, n_boot=500) == [name]
+
+
+def test_a_measurement_that_leaves_out_a_guarded_metric_is_refused():
+    rows = [{side: {k: v for k, v in e[side].items() if k != 'moments_per_min'} for side in ('before', 'after')}
+            for e in record('density_current.json')['episodes']]
+    with pytest.raises(KeyError):
+        density.record_drops({'episodes': rows}, n_boot=10)
 
 
 def test_the_measured_drop_of_pr_187_and_188_fails_the_guard():
@@ -115,4 +151,5 @@ def test_the_timeline_rules_in_use_were_measured_and_density_held():
     """A change to the timeline's rules changes the fingerprint: measure it on paired footage and replace the record."""
     current = record('density_current.json')
     assert current['prompt_sha256'] == density.prompt_fingerprint(prompts)
+    assert len(current['episodes']) >= 30         # a few episodes have an interval too wide to find any drop
     assert density.record_drops(current) == []
