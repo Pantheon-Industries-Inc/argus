@@ -16,7 +16,29 @@ UNSENT_INPUT_CHARGES = ('audio', 'input_audio_cache')
 BOUNDED_PARTS = ('text', 'image_url')
 
 
-def quote(model: str, timeout: int) -> dict:
+# Set by the first reply whose usage counts a web search: the fee applies after all, so call_model sends nothing more.
+search_seen = None
+
+
+def searches_counted(response: dict) -> int:
+    """How many web searches a reply's usage reports. The chat completions reference names server_tool_use and the
+    web search guide server_tool_use_details, so both are read. A metered server tool cost counts as one search,
+    because no request here asks for a server tool and no cap limits that cost either.
+    https://openrouter.ai/docs/api/reference/overview
+    https://openrouter.ai/docs/guides/features/server-tools/web-search"""
+    usage = response.get('usage') if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return 0
+    def number(value):
+        return value if type(value) in (int, float) and value > 0 else 0
+    counts = [number(details.get('web_search_requests')) for details in
+              (usage.get('server_tool_use'), usage.get('server_tool_use_details')) if isinstance(details, dict)]
+    count = math.ceil(max(counts, default=0))
+    cost_details = usage.get('cost_details')
+    return count or int(isinstance(cost_details, dict) and number(cost_details.get('server_tool_cost')) > 0)
+
+
+def quote(model: str, timeout: int, *, allow_unverified_fees: bool = False) -> dict:
     # https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model
     # https://openrouter.ai/docs/guides/routing/provider-selection#max-price
     # https://openrouter.ai/docs/guides/overview/models#pricing-overrides
@@ -43,7 +65,12 @@ def quote(model: str, timeout: int) -> dict:
         # Gemini searches only when a request asks for it as well: on OpenRouter, through the web plugin or an :online
         # variant (https://openrouter.ai/docs/guides/features/web-search). Requests here supply neither, so a published
         # search price cannot apply to them.
-        searches_on_request = claude or (model.startswith('google/gemini-') and ':' not in model)
+        # OpenAI's models work the same way, apart from the ones built to search. OpenRouter publishes a search price on
+        # them all, and every request here leaves search off, so a reply that counts one stops the run (call_model).
+        openai = (model.startswith('openai/') and ':' not in model
+                  and not any(word in model for word in ('search', 'deep-research')))
+        searches_on_request = claude or openai or (model.startswith('google/gemini-') and ':' not in model)
+        search_usd = 0.0
         maxima = dict.fromkeys(('prompt', 'completion', 'request', 'image'), 0.0)
         context = 0
         input_rate = output_rate = 0.0
@@ -75,7 +102,8 @@ def quote(model: str, timeout: int) -> dict:
                                     'internal_reasoning', 'discount', 'web_search', *UNSENT_INPUT_CHARGES) and rate:
                         raise ValueError('unsupported endpoint charge: ' + name)
                     rates[name] = max(rates.get(name, 0), rate)
-            if rates.get('web_search', 0) and not searches_on_request:
+            search_usd = max(search_usd, rates.get('web_search', 0))
+            if rates.get('web_search', 0) and not searches_on_request and not allow_unverified_fees:
                 # max_price has no search dimension, so a snapshot search rate cannot
                 # enforce a native-search ceiling. Do not authorize that capped call.
                 raise ValueError('native search fees have no verified enforceable ceiling')
@@ -89,14 +117,18 @@ def quote(model: str, timeout: int) -> dict:
                              rates.get('input_cache_write', 0), cache_1h)
             # Reserve both if a provider reports a separate reasoning-token charge.
             output_rate = max(output_rate, rates['completion'] + rates.get('internal_reasoning', 0))
-        return {'model': model, 'source': url, 'fetched_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+        if search_usd and not searches_on_request:
+            print(f'WARNING {model}: unverified fee: a web search costs ${search_usd} and no cap limits it '
+                  '(--allow-unverified-fees). The run stops at the first reply that counts one.', flush=True)
+        return {**({'published_search_usd': search_usd} if search_usd else {}), 'model': model, 'source': url, 'fetched_at': dt.datetime.now(dt.timezone.utc).isoformat(),
                 'prompt_token_bound': context, 'input_usd_per_token': input_rate,
                 'output_usd_per_token': output_rate, 'request_usd': maxima['request'],
                 'image_usd': maxima['image'],
                 'bound_basis': ('Prompt bounded by the request text and, per image, the most a published tokenizer charges for its size, at most the published context window; separate image and request fees bounded by provider.max_price. '
                                 + ('Claude search requires an explicit tool; none is supplied. Cache TTL is 5 minutes.'
-                                   if claude else 'Gemini search requires the web plugin or :online; neither is supplied.'
-                                   if searches_on_request else 'No published native search charge.')
+                                   if claude else 'OpenAI or Gemini search requires the web plugin, a tool or :online; none is supplied.'
+                                   if searches_on_request else 'Search fee not bounded: --allow-unverified-fees.' if search_usd
+                                   else 'No published native search charge.')
                                 + ' Audio prices apply only to audio input; requests carry text and images only.'),
                 'provider_max_price': {**maxima, 'prompt': float(Decimal(str(maxima['prompt'])) * 1_000_000),
                                        'completion': float(Decimal(str(maxima['completion'])) * 1_000_000)}}

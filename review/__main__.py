@@ -326,6 +326,9 @@ def main() -> int:
     ap.add_argument("--dataset", default=None, help="name shown on the board and told to the model")
     ap.add_argument("--free", action="store_true", help="stop after the dry run (no model calls)")
     ap.add_argument("--cap", type=float, default=20.0, help="most the labelling may spend, in USD (default 20)")
+    ap.add_argument("--allow-unverified-fees", action="store_true",
+                    help="label with a model whose search fee no cap can limit, with a warning, and stop at the first "
+                         "reply that counts a search (default: refuse it; label/pricing.py)")
     inflight.add_argument(ap, "labelling requests")
     ap.add_argument("--jobs", type=int, default=2, help="decode processes per step (default 2)")
     ap.add_argument("--timeout", type=int, default=None,
@@ -512,7 +515,8 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
             label_env = {**env, 'ARGUS_STAGED_RUN_METADATA': str((run_dir / 'run.json').resolve())}
             label_rc = run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                                     str(run_dir / "out"), "--concurrency", str(a.concurrency),
-                                    "--max-spend", str(remaining), *timeout_args, *retry_args], label_env, ok_codes=(0, 1))
+                                    "--max-spend", str(remaining), *timeout_args, *retry_args,
+                                    *(['--allow-unverified-fees'] if a.allow_unverified_fees else [])], label_env, ok_codes=(0, 1))
         else:
             label_rc = int(a.force or bool(a.retry_received))
             print('label budget exhausted by prior spending or outstanding reservations', flush=True)

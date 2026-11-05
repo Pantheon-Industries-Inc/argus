@@ -190,7 +190,15 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         if pricing_quote.get('model') != model:
             raise ValueError('pricing quote does not match the requested model')
         body['provider'] = {'max_price': pricing_quote['provider_max_price']}
-    return _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
+    from label import pricing
+    if pricing.search_seen:
+        # never sent, so its reservation is released and the unit stays unpaid rather than possibly billed
+        raise DispatchError(f'{pricing.search_seen}; no paid request was dispatched', verified_unpaid=True, stage='not sent')
+    response = _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts, on_generation_id=on_generation_id)
+    if pricing.searches_counted(response):
+        pricing.search_seen = f'a reply from {model} counted a web search, a fee no cap limits'
+        print(f'STOP {pricing.search_seen}; nothing further is sent', flush=True)
+    return response
 
 
 def call_model_once(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
@@ -461,7 +469,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                   reserve_final=None, reserve_selection=None, settle_selection=None, force_refresh=False,
                   settle_final=None,
                   sample_fps=None, task_mode=None, dataset_note=None, require_known_pricing=False,
-                  inspection_refresh_id=None, inspection=None) -> dict:
+                  inspection_refresh_id=None, inspection=None, allow_unverified_fees=False) -> dict:
     context = json.loads((Path(ep_dir) / 'context.json').read_text())
     resolved = policy.resolve(context, model=model, reasoning=reasoning, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
@@ -474,7 +482,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         if not is_openrouter_key(api_key):
             raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
         from label import pricing
-        pricing_quote = pricing.quote(model, timeout)
+        pricing_quote = pricing.quote(model, timeout, allow_unverified_fees=allow_unverified_fees)
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                               cell_w=cell_w, example_dir=example_dir, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
@@ -2595,6 +2603,9 @@ def main() -> int:
                          "instead of routing, so this run sends the same widths and frames (label/route.py)")
     ap.add_argument("--max-spend", type=float, default=0.0,
                     help="remaining USD allowance for this invocation, reserved before every call (0 = no cap)")
+    ap.add_argument("--allow-unverified-fees", action="store_true",
+                    help="send requests to a model whose search fee no cap can limit, with a warning, and stop at the first "
+                         "reply that counts a search (default: refuse them; label/pricing.py)")
     ap.add_argument("--dry-run", action="store_true", help="build and record every request without calling the model")
     args = ap.parse_args()
 
@@ -2611,7 +2622,7 @@ def main() -> int:
         from label import route
         n = route.seed(json.loads(args.route_seeds.read_text()), args.route_seeds.name)
         print(f"routing answers seeded for {n} task texts from {args.route_seeds}", flush=True)
-    label_kw = dict(model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
+    label_kw = dict(allow_unverified_fees=args.allow_unverified_fees, model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run,
                     sample_fps=args.sample_fps, dataset_note=args.dataset_note,
                     inspection=args.inspection)

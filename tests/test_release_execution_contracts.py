@@ -62,6 +62,20 @@ def funded_provider(monkeypatch, calls):
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
 
 
+@pytest.mark.parametrize('flag', [False, True])
+def test_review_hands_the_unverified_fees_flag_to_the_label_step(tmp_path, monkeypatch, flag):
+    """The label step is the real harness command line, so this also fails if the harness does not accept the flag."""
+    job, run = review_fixture(tmp_path, monkeypatch)
+    funded_provider(monkeypatch, [])
+    real, commands = review.run_step, {}
+    def step(job, kind, command, env, **kwargs):
+        commands[kind] = command
+        return real(job, kind, command, env, **kwargs)
+    monkeypatch.setattr(review, 'run_step', step)
+    run(*(['--allow-unverified-fees'] if flag else []))
+    assert ('--allow-unverified-fees' in commands['label']) is flag
+
+
 def test_unpaid_review_can_resume_with_dictionary_and_publish(tmp_path, monkeypatch):
     job, run = review_fixture(tmp_path, monkeypatch)
     calls = []; funded_provider(monkeypatch, calls)

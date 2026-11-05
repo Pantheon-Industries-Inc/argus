@@ -723,6 +723,36 @@ GEMINI_PRICING = {'prompt': '0.000002', 'completion': '0.00001', 'image': '0.000
                   'input_cache_read': '0.0000001', 'input_cache_write': '0.0000001875', 'discount': 0.5}
 
 
+# Endpoint pricing published for openai/gpt-6.1-sol on 2026-11-05 (standard tier): a search price beside the token rates.
+OPENAI_PRICING = {'prompt': '0.000002', 'completion': '0.00001', 'web_search': '0.01', 'input_cache_read': '0.0000001',
+                  'input_cache_write': '0.0000025', 'discount': 0}
+
+
+@pytest.mark.parametrize('model', ['openai/gpt-6.1-terra', 'openai/gpt-6.1-terra-pro'])
+def test_quote_caps_an_openai_request_whose_search_price_cannot_apply(tmp_path, monkeypatch, model):
+    """OpenRouter published a search price on OpenAI's models, and the quote then refused any not in OPENAI_PRICES, Terra
+    among them (Sol and Astra are in it and skip the quote). Requests never
+    ask for search (the web plugin, :online, a tool or web_search_options), so the price cannot apply and the request
+    is capped by its token rates. The asserts on the body fail if a request ever starts asking."""
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    sent = []
+    def provider(request, timeout):
+        sent.append(request.get_method())
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 1_050_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        body = json.loads(request.data)
+        assert not {'plugins', 'tools', 'web_search_options'} & body.keys() and ':' not in body['model']
+        assert 'web_search' not in body['provider']['max_price'] and body['provider']['max_price']['completion'] == 10.
+        selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    assert harness.run_batch([ep], tmp_path / 'out', keys=['sk-or-test'], concurrency=1, force=False, model=model,
+        reasoning='medium', max_tokens=64000, timeout=1, cell_w=128, max_spend=8.) == 0
+    assert sent == ['GET', 'POST', 'POST']
+
+
 def test_quote_caps_a_gemini_request_whose_audio_and_search_prices_cannot_apply(tmp_path, monkeypatch):
     """Gemini lists audio prices and a search price. Requests carry text and images only and never ask for search (the
     web plugin or :online), so the quote accepts both and caps the request by its token and image rates."""
@@ -754,6 +784,9 @@ def test_quote_caps_a_gemini_request_whose_audio_and_search_prices_cannot_apply(
     ('google/gemini-4-argon', {**GEMINI_PRICING, 'video_seconds': '0.001'}, 'unsupported endpoint charge: video_seconds'),
     ('google/gemini-4-argon:online', GEMINI_PRICING, 'native search fees'),
     ('perplexity/sonar-x', {'prompt': '0.000001', 'completion': '0.000001', 'web_search': '0.005'}, 'native search fees'),
+    ('openai/gpt-6.1-sol:online', OPENAI_PRICING, 'native search fees'),
+    ('openai/gpt-4o-search-preview', OPENAI_PRICING, 'native search fees'),
+    ('openai/o4-deep-research', OPENAI_PRICING, 'native search fees'),
 ])
 def test_a_charge_that_could_apply_still_blocks_the_quote(monkeypatch, model, pricing, words):
     """Accepting Gemini's unsent-input and on-request search prices is scoped to exactly those: a charge the quote does
@@ -764,6 +797,144 @@ def test_a_charge_that_could_apply_still_blocks_the_quote(monkeypatch, model, pr
     monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', provider)
     with pytest.raises(ValueError, match=words):
         pricing_module.quote(model, 5)
+
+
+SEARCHES = 'openai/gpt-4o-search-preview'     # always searches, so only the flag lets it through
+
+
+def search_provider(model, sent):
+    def provider(request, timeout):
+        sent.append(request.get_method())
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 100_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
+    return provider
+
+
+@pytest.mark.parametrize('flag', [False, True])
+def test_the_flag_turns_the_search_fee_refusal_into_a_warning(tmp_path, monkeypatch, capsys, flag):
+    """By default no paid request goes out for a model whose search fee could apply. --allow-unverified-fees sends it and
+    says so, because max_price cannot cap that fee."""
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    sent = []
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', search_provider(SEARCHES, sent))
+    rc = harness.run_batch([ep], tmp_path / 'out', keys=['sk-or-test'], concurrency=1, force=False, model=SEARCHES,
+                           reasoning='medium', max_tokens=64000, timeout=1, cell_w=128, max_spend=8.,
+                           **({'allow_unverified_fees': True} if flag else {}))
+    if flag:
+        assert rc == 0 and 'POST' in sent and 'unverified fee' in capsys.readouterr().out
+    else:
+        assert rc != 0 and 'POST' not in sent
+
+
+def test_the_flag_leaves_every_other_refusal_in_place(monkeypatch):
+    from label import pricing as pricing_module
+    pricing = {**OPENAI_PRICING, 'video_seconds': '0.001'}
+    monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', lambda request, timeout: io.BytesIO(json.dumps(
+        {'data': {'id': SEARCHES, 'endpoints': [{'context_length': 100_000, 'pricing': pricing}]}}).encode()))
+    with pytest.raises(ValueError, match='unsupported endpoint charge'):
+        pricing_module.quote(SEARCHES, 5, allow_unverified_fees=True)
+
+
+@pytest.mark.parametrize('model, kw', [('openai/gpt-6.1-terra', {}), (SEARCHES, {'allow_unverified_fees': True})])
+def test_a_reply_that_searched_stops_every_later_request(monkeypatch, model, kw):
+    """The exemption rests on requests never searching, and the flag on someone watching. A reply whose usage counts a
+    search proves the fee applies, so the one already paid for is returned and nothing further is sent."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', search_provider(model, []))
+    quote = pricing_module.quote(model, 5, **kw)
+    posts = []
+    usage = {'usage': {'prompt_tokens': 1, 'server_tool_use_details': {'web_search_requests': 2}}}
+    plain = {'usage': {'prompt_tokens': 1}}
+    replies = [plain, usage]
+    def post(url, body, key, timeout, **options):
+        posts.append(body); return replies[len(posts) - 1]
+    monkeypatch.setattr(harness, '_post', post)
+    call = lambda: harness.call_model([{'type': 'text', 'text': 'x'}], model, 'low', 'sk-or-test', 10, 5, pricing_quote=quote)
+    assert call() == plain and call() == usage and pricing_module.search_seen
+    with pytest.raises(harness.DispatchError, match='counted a web search'):
+        call()
+    assert len(posts) == 2
+
+
+def test_a_model_priced_without_a_quote_stops_at_a_search_too(monkeypatch):
+    """Sol and Astra are priced from OPENAI_PRICES and never reach the quote, so the check cannot live there."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    posts = []
+    monkeypatch.setattr(harness, '_post', lambda *args, **options: posts.append(args) or {
+        'usage': {'server_tool_use_details': {'web_search_requests': 1}}})
+    harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
+    with pytest.raises(harness.DispatchError, match='counted a web search'):
+        harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
+    assert len(posts) == 1
+
+
+@pytest.mark.parametrize('usage, count', [
+    ({'server_tool_use': {'web_search_requests': 2}}, 2),           # the chat completions reference
+    ({'server_tool_use_details': {'web_search_requests': 2}}, 2),   # the web search guide
+    ({'server_tool_use': {'web_search_requests': 1.0}}, 1),
+    ({'cost_details': {'server_tool_cost': .01}}, 1),
+    ({'server_tool_use': {'web_search_requests': 0}, 'cost_details': {'server_tool_cost': 0}}, 0),
+    ({'prompt_tokens': 3, 'cost': .01}, 0),
+    ('not usage', 0),
+])
+def test_every_way_a_reply_reports_a_search_is_counted(usage, count):
+    """OpenRouter's two documents name the search count differently, and the stop is worth nothing if it reads the other."""
+    from label import pricing as pricing_module
+    assert pricing_module.searches_counted({'usage': usage}) == count
+
+
+def test_a_stopped_run_sends_nothing_more_and_leaves_the_rest_unpaid(tmp_path, monkeypatch):
+    """Through the whole batch: after the reply that searched no request leaves, and the unit it stopped keeps no
+    reservation, so it is not recorded as possibly billed and a resume can send it."""
+    import shutil
+    from label import pricing as pricing_module
+    from test_camera_timing import recording
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    model, posts = 'openai/gpt-6.1-terra', []
+    def provider(request, timeout):
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 1_050_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        posts.append(json.loads(request.data))
+        selection = 'FIELD INVENTORY' in json.dumps(posts[-1]['messages'])
+        reply = json.loads(answer({'requests': []} if selection else complete_reply.labels('The hand reaches.')).read())
+        reply['usage'] = {**reply.get('usage', {}), 'server_tool_use': {'web_search_requests': 1}}
+        return io.BytesIO(json.dumps(reply).encode())
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    (tmp_path / 'made').mkdir()
+    made = recording(tmp_path / 'made', np.arange(12) / 30)
+    episodes = [tmp_path / 'episode_000001', tmp_path / 'episode_000002']
+    for ep in episodes:
+        shutil.copytree(made, ep)
+    out = tmp_path / 'out'
+    assert harness.run_batch(episodes, out, keys=['sk-or-test'], concurrency=1, force=False, model=model, reasoning='medium',
+                             max_tokens=64000, timeout=1, cell_w=128, max_spend=8.) != 0
+    assert len(posts) == 1 and pricing_module.search_seen
+    records = {p.name: json.loads(p.read_text()) for p in out.glob('*.json')}
+    stopped = {name: r for name, r in records.items() if name.endswith('episode_000002.json')}
+    assert stopped and all(r.get('final_dispatch_outcome') in (None, 'not dispatched') and not r.get('final_reserved_usd')
+                           for r in stopped.values()), stopped
+
+
+@pytest.mark.parametrize('key', ['sk-or-test', 'sk-proj-test'])
+def test_no_request_path_asks_for_a_search(monkeypatch, key):
+    """The exemption rests on this, straight to OpenAI as well as through OpenRouter."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    sent = []
+    def provider(request, timeout):
+        sent.append(json.loads(request.data))
+        return answer({})
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', key, 10, 5)
+    assert len(sent) == 1 and not {'plugins', 'tools', 'tool_choice', 'web_search_options'} & sent[0].keys()
+    assert ':online' not in sent[0]['model']
 
 
 def test_a_request_part_with_no_verified_bound_is_refused():
