@@ -95,6 +95,11 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
 #current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
 #current-ep-reader:empty { display: none; }
+#current-ep-why { font: 500 12px/1.5 var(--sans); color: var(--fg-2); max-width: 720px; }
+#current-ep-why:empty { display: none; }
+.review-why b { color: var(--fg); font-weight: 600; margin-right: 4px; }
+.review-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.review-tag { font: 500 10px/1.4 var(--sans); color: var(--fg-2); border: 1px solid var(--border-strong); padding: 0 4px; }
 #current-ep-dictionary { font: 500 12px/1.5 var(--sans); max-width: 640px; }
 #current-ep-dictionary:empty { display: none; }
 #current-ep-dictionary summary { cursor: pointer; color: var(--fg-2); }
@@ -2346,7 +2351,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <aside class="left" id="left-pane">
     <div class="ep-head">
       <div class="ep-head-name"><span class="ep-head-k">Episode</span><span id="current-ep"></span><span
-        id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div><div id="current-ep-dictionary"></div></div>
+        id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div><div id="current-ep-why"></div><div id="current-ep-dictionary"></div></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
           <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
@@ -2580,6 +2585,7 @@ function endRender() {
   document.getElementById('current-ep-raw').textContent = '';
   document.getElementById('current-ep-src').innerHTML = '';
   document.getElementById('current-ep-reader').innerHTML = '';
+  document.getElementById('current-ep-why').innerHTML = '';
   document.getElementById('current-ep-dictionary').replaceChildren();
   for (const id of ['dl-json', 'kp-dl']) {
     const a = document.getElementById(id);
@@ -3656,8 +3662,25 @@ const famsOf = e => INCLUDE_MINOR ? [...new Set([...(e.families || []), ...(e.mi
 // "any data issue" and "any operator mistake": the episode has a family of that list that counts
 const hasDataIssue = e => famsOf(e).some(f => famList(f) === 'data');
 const hasMistake = e => famsOf(e).some(f => famList(f) === 'mistake');
+// why an episode is on this board (manifest review_tags): a filter of its own, on its card, and with each reason on
+// the open episode
+const TAG_FILTER = 'tag:';
+function reviewTagCounts(eps) {
+  const counts = new Map();
+  for (const e of eps) for (const t of e.review_tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+  return counts;
+}
+function reviewChipsHtml(e) {
+  return (e.review_tags || []).length ? `<div class="review-tags">${e.review_tags.map(t =>
+    `<span class="review-tag">${esc(t)}</span>`).join('')}</div>` : '';
+}
+function reviewWhyHtml(d) {
+  return (d.review_tags || []).map(r => `<div class="review-why"><b>${esc(r.tag)}</b>${r.why
+    ? ` ${esc(r.why)}` : ''}</div>`).join('');
+}
 function matchesIssueFilter(e) {
   if (!ISSUE_FILTER) return true;
+  if (ISSUE_FILTER.startsWith(TAG_FILTER)) return (e.review_tags || []).includes(ISSUE_FILTER.slice(TAG_FILTER.length));
   if (ISSUE_FILTER === '__any__') return hasDataIssue(e);
   if (ISSUE_FILTER === '__anymistake__') return hasMistake(e);
   if (ISSUE_FILTER === '__hands__') return (e.hands_hidden_s || 0) > 0;
@@ -3673,8 +3696,9 @@ function buildIssueFilter(ds) {
     for (const f of famsOf(e)) counts.set(f, (counts.get(f) || 0) + 1);
   }
   issueFilterEl.innerHTML = '';
+  const tagCounts = reviewTagCounts(eps);
   // nothing to filter
-  if (!counts.size && !eps.some(e => (e.minor_families || []).length)) return;
+  if (!counts.size && !tagCounts.size && !eps.some(e => (e.minor_families || []).length)) return;
   // one row per problem, in two groups, each with its own header and colour
   const groups = [];
   const overview = [['All episodes', null, eps.length, ''], ['Any data issue', '__any__', withAny, 'data']];
@@ -3688,6 +3712,9 @@ function buildIssueFilter(ds) {
       : p.toFixed(1)}% of recorded hours`]);
   }
   groups.push({key: 'overview', title: 'Overview', items: overview});
+  if (tagCounts.size) groups.push({key: 'review', title: 'Why on this board',
+    items: Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([t, n]) => [t, TAG_FILTER + t, n])});
   const rows = lst => Array.from(counts.entries()).filter(([f]) => famList(f) === lst)
     .map(([f, n]) => [famName(f), f, n]).sort((a, b) => b[2] - a[2]);
   const dataItems = rows('data'), mistakeItems = rows('mistake');
@@ -3709,7 +3736,8 @@ function buildIssueFilter(ds) {
   btn.setAttribute('aria-label', filtered ? `Filter by issue: ${cur[0]}` : 'Filter by issue');
   btn.innerHTML = '<svg class="if-ico" width="16" height="16" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4V13l-2.8 '
     + '1.2V8.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>'
-    + (filtered ? `<span class="if-lab">${esc(cur[0])}</span>` : '<span class="if-lab if-ph">Filter by issue</span>')
+    + (filtered ? `<span class="if-lab">${esc(cur[0])}</span>`
+       : `<span class="if-lab if-ph">${tagCounts.size ? 'Filter by tag or issue' : 'Filter by issue'}</span>`)
       + (filtered ? `<span class="if-n">${cur[2]}</span>` : '')
     + (filtered ? '<span class="if-clear" title="Clear filter">&times;</span>'
                 : '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" '
@@ -4144,7 +4172,8 @@ function renderRail(ds, keepFile, fromSearch, nav) {
         ${minorHtml}
         ${unratedHtml}
       </div>
-      ${noteHtml}`;
+      ${noteHtml}
+      ${reviewChipsHtml(ep)}`;
     card.addEventListener('click', () => selectEp(ep.file));
     if (ep.file === _activeFile) card.classList.add('active');
     return card;
@@ -6695,6 +6724,7 @@ function renderEp(d, opts) {
   currentEp.textContent = epName(eid);
   document.getElementById('current-ep-raw').textContent = epName(eid) !== eid ? eid : '';
   document.getElementById('current-ep-src').innerHTML = datasetSourceHtml(d.dataset_source);
+  document.getElementById('current-ep-why').innerHTML = reviewWhyHtml(d);
   document.getElementById('current-ep-reader').innerHTML = readerNotesHtml(d.reader_notes);
   loadDictionary(d, _activeFile);
   document.getElementById('dl-json').href = episodeDownloadUrl(_activeFile);

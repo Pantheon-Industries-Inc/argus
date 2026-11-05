@@ -1261,6 +1261,19 @@ def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: 
     return episode_file(entry, manifest, fname, name, not_shown(r, err), info, eps, ctx, unread, addition)
 
 
+def review_tags(manifest: dict, here: Path) -> dict:
+    """{board file stem: [{"tag", "why"}]} from the file the manifest's review_tags names, or {} when it names none:
+    why each episode is on the board, in the words of whoever chose it. A tag with no name stops the build."""
+    if not manifest.get("review_tags"):
+        return {}
+    tags = json.loads(_path(manifest["review_tags"], here).read_text())
+    for name, rows in tags.items():
+        if not isinstance(rows, list) or not rows or not all(
+                isinstance(r, dict) and isinstance(r.get("tag"), str) and r["tag"].strip() for r in rows):
+            raise ValueError(f"review_tags: {name} needs a list of tags, each with a name")
+    return tags
+
+
 def add_scores(qa: Path, files: list[str]) -> None:
     """Each episode's quality scores (board/scores.py), written into its record. They compare an episode with the
     board's other demonstrations of the same task, so they are computed once every record is written, holding only
@@ -1394,6 +1407,7 @@ def build(board: Path, cache: bool = True) -> dict:
         remove_tree(new)
     new.mkdir(parents=True)
     counts, built_entries, written = {}, [], []
+    tags = review_tags(manifest, here)
     board_src = {}      # board file -> the run output its label came from
     episodes = {}       # board file -> its prepared episode folder
     additions = read_additions(board)     # board file -> its addition, taken as each file is built
@@ -1417,6 +1431,10 @@ def build(board: Path, cache: bool = True) -> dict:
                         {"field": None, "why": f"the addition {ADDITIONS}/{fname} is not applied: {unusable}"})
             else:
                 reused += 1
+            # after the cache, so a changed tag file needs no rebuild of the label
+            d.pop("review_tags", None)
+            if Path(fname).stem in tags:
+                d["review_tags"] = tags[Path(fname).stem]
             if d.get("_additions"):
                 added["episodes"] += 1
             for c in d.get("addition_conflicts") or []:
@@ -1437,6 +1455,9 @@ def build(board: Path, cache: bool = True) -> dict:
         # BUILT.json names the run that was used, so the board's inputs stay traceable
         built_entries.append(dict(entry, run=os.path.relpath(run, here)) if run != _path(entry["run"], here)
                              else entry)
+    unknown = sorted(set(tags) - {Path(f).stem for f in written})
+    if unknown:
+        raise ValueError(f"review_tags names episodes not on this board: {unknown[:5]}")
     add_scores(new, written)
     if reused:
         print(f"board: {reused} of {len(written)} episodes unchanged since the last build, reused", file=sys.stderr)

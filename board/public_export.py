@@ -816,12 +816,31 @@ def _dictionary_values(value: dict) -> dict:
     return result
 
 
+_SENSOR_BLOCKS = frozenset(('values', 'activity', 'strength', 'map', 'intensity', 'active', 'focus', 'row', 'col'))
+_BASE64 = re.compile(r'[A-Za-z0-9+/]*={0,2}')
+
+
+def _number_or_numbers(value) -> bool:
+    return isinstance(value, (int, float)) or (isinstance(value, list) and all(isinstance(x, (int, float)) for x in value))
+
+
+def _quantized_block(value: dict) -> bool:
+    """A sensors file's block of samples (board/sensors.py quantize): exactly lo, step and Base64 data. Its data is
+    numbers, and random Base64 can hold what reads as a key or a path (a run of no-reading codes is ////), so
+    neither filter reads it. On one real board this had emptied the signals of 60 of 127 episodes."""
+    data = value.get('data')
+    return (set(value) == {'lo', 'step', 'data'} and _number_or_numbers(value['lo']) and _number_or_numbers(value['step'])
+            and isinstance(data, str) and len(data) % 4 == 0 and _BASE64.fullmatch(data) is not None)
+
+
 def _project(value, field: str = '', attribute_owner: str = '', native_fields: bool = False,
              note_owner: str = '', machine_checks: bool = False):
     native_fields = native_fields or field in ('fields', 'publisherlabels')
     note_owner = field if field in _NOTE_SOURCE_MAPS | _NOTE_CLAIMS else note_owner
     machine_checks = (machine_checks or field in ('datasetchecks', 'setasidechecks')) and field != 'readerissues' and not native_fields
     if isinstance(value, dict):
+        if field in _SENSOR_BLOCKS and _quantized_block(value):
+            return dict(value)
         if not native_fields:
             value = _dictionary_values(value)
             if field == 'evidenceinspection':

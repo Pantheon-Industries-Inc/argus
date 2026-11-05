@@ -52,6 +52,7 @@ import gzip
 import hashlib
 import html
 import http.server
+import collections
 import json
 import logging
 import math
@@ -1724,6 +1725,31 @@ def _duration_s(ts):
 SEV_RANK = {"high": 3, "medium": 2, "low": 1}
 
 
+_VIEW_CACHE: collections.OrderedDict = collections.OrderedDict()     # (file, stat) -> the page's JSON for it
+_VIEW_CACHE_MAX = 256
+_VIEW_CACHE_LOCK = threading.Lock()
+
+
+def _episode_body(p: Path) -> str:
+    """The page's JSON for one episode file. Filtering a long stitched label for the page takes seconds, so it is kept
+    until the file changes; a board editing its dictionary changes what a label shows with no change to the file, so
+    it always filters anew."""
+    st = p.stat()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if not DICTIONARY_JOB:
+        with _VIEW_CACHE_LOCK:
+            if key in _VIEW_CACHE:
+                _VIEW_CACHE.move_to_end(key)
+                return _VIEW_CACHE[key]
+    body = dumps(episode_view(current_label(_read_label(p), DICTIONARY_JOB, p.name)))
+    if not DICTIONARY_JOB:
+        with _VIEW_CACHE_LOCK:
+            _VIEW_CACHE[key] = body
+            while len(_VIEW_CACHE) > _VIEW_CACHE_MAX:
+                _VIEW_CACHE.popitem(last=False)
+    return body
+
+
 def rail_records(here: Path | None = None) -> list:
     """One rail record per episode file in `here` (default: the served data dir), with what the rail's cards, the
     issue filter, the dataset tabs and the search read. board/static.py calls this too, so the static build's lists
@@ -1774,6 +1800,8 @@ def _rail_record(p: Path, d: dict) -> dict:
         "n_mistakes": len(mistakes),
         "n_minor_mistakes": len(all_mistakes) - len(mistakes) - unrated_mistakes,
         "n_unrated_mistakes": unrated_mistakes,
+        # why the episode is on this board (manifest review_tags, board/build.py): the rail's filter and cards
+        **({"review_tags": [r["tag"] for r in d["review_tags"]]} if d.get("review_tags") else {}),
         "n_tasks": len(tasks),
         **({"verdict_first": True} if tasks_format(d) and verdict is not None else {}),
         "n_task_success": sum(1 for t in tasks if (t.get("outcome") or "").lower() == "success"),
@@ -2268,7 +2296,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            self._send(200, dumps(episode_view(current_label(_read_label(p), DICTIONARY_JOB, p.name))), "application/json")
+            self._send(200, _episode_body(p), "application/json")
             return
         if parsed.path.startswith("/api/compare/"):
             # other models' labels (board/build.py compare/): kept beside the board's own and never in its lists
