@@ -5,11 +5,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-455468" alt="Apache-2.0"></a>
 </p>
 
-<table align="center">
-  <tr>
-    <td><strong><a href="https://pantheon.inc/research/argus">Blog</a> | <a href="https://pantheon.inc/data-board">Dashboard</a> | <a href="https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100">DiverseUMI-sample100</a></strong></td>
-  </tr>
-</table>
+<p align="center">
+  <a href="https://pantheon.inc/research/argus"><img src="https://img.shields.io/badge/blog-455468" alt="Blog"></a>
+  <a href="https://pantheon.inc/data-board"><img src="https://img.shields.io/badge/dashboard-455468" alt="Dashboard"></a>
+  <a href="https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100"><img src="https://img.shields.io/badge/DiverseUMI--sample100-455468" alt="DiverseUMI-sample100"></a>
+</p>
 
 > [!IMPORTANT]
 > Argus has many tunable command-line options. Please read [Settings](#settings) in full.
