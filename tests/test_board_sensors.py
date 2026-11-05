@@ -903,3 +903,30 @@ def test_a_quantized_block_that_looks_like_a_key_keeps_its_samples():
     assert project({"other": {"data": key}})["other"].get("data") != key
     plain = project({"activity": {"lo": [0.0], "step": [0.5], "data": f"token: {key}"}})["activity"]
     assert plain.get("data") != f"token: {key}"
+
+
+def test_only_a_whole_block_of_samples_passes_the_filters_unread():
+    """Every block the writer makes passes whole, and anything else that could carry text is still read: another field of
+    the same shape, a block with one more key, a lo or step of text, data of a length Base64 cannot have."""
+    import numpy as np
+    from board.public_export import project
+    from board.sensors import quantize
+    key = "AK" + "IA" + "1234567890ABCDEF"
+    data = f"AA+{key}/AAA="
+    real = quantize(np.arange(12.0).reshape(4, 3))
+    assert project({"values": real})["values"] == real
+    for name in ("values", "activity", "strength", "map", "intensity", "active", "focus", "row", "col"):
+        block = {"lo": 0.0, "step": 0.5, "data": data}
+        assert project({"tactile": {name: block}})["tactile"][name] == block, name
+    shown = project({"other": {"lo": [0.0], "step": [0.5], "data": data}})["other"]
+    assert shown.get("data") != data, "the same shape in another field"
+    shown = project({"values": {"lo": [0.0], "step": [0.5], "data": "AAAA", "note": key}})["values"]
+    assert shown.get("note") != key, "one more key"
+    for bad in (key, [key], [0.0, key]):
+        for side in ("lo", "step"):
+            block = {"lo": [0.0], "step": [0.5], "data": "AAAA", side: bad}
+            assert key not in str(project({"values": block})), f"{side} of text"
+    assert key not in str(project({"values": {"lo": [0.0], "step": [0.5], "data": key + "/"}})), "a length Base64 cannot have"
+    assert key not in str(project({"values": {"lo": [0.0], "step": [0.5], "data": [key]}})), "data that is not text"
+    assert key not in str(project({"values": {"lo": [0.0], "step": [0.5], "data": f"{key} AAA"}})), "a space in it"
+    assert key not in str(project({"values": {"lo": [0.0], "step": [0.5], "data": f"{key}..AA"}})), "other punctuation"
