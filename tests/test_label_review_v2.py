@@ -728,9 +728,10 @@ OPENAI_PRICING = {'prompt': '0.000002', 'completion': '0.00001', 'web_search': '
                   'input_cache_write': '0.0000025', 'discount': 0}
 
 
-@pytest.mark.parametrize('model', ['openai/gpt-6.1-sol', 'openai/gpt-6.1-terra', 'openai/gpt-6-astra'])
+@pytest.mark.parametrize('model', ['openai/gpt-6.1-terra', 'openai/gpt-6.1-terra-pro'])
 def test_quote_caps_an_openai_request_whose_search_price_cannot_apply(tmp_path, monkeypatch, model):
-    """OpenRouter published a search price on these models, and the quote then refused every one of them. Requests never
+    """OpenRouter published a search price on OpenAI's models, and the quote then refused any not in OPENAI_PRICES, Terra
+    among them (Sol and Astra are in it and skip the quote). Requests never
     ask for search (the web plugin, :online, a tool or web_search_options), so the price cannot apply and the request
     is capped by its token rates. The asserts on the body fail if a request ever starts asking."""
     from test_camera_timing import recording
@@ -831,7 +832,6 @@ def test_the_flag_turns_the_search_fee_refusal_into_a_warning(tmp_path, monkeypa
 
 def test_the_flag_leaves_every_other_refusal_in_place(monkeypatch):
     from label import pricing as pricing_module
-    sent = []
     pricing = {**OPENAI_PRICING, 'video_seconds': '0.001'}
     monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', lambda request, timeout: io.BytesIO(json.dumps(
         {'data': {'id': SEARCHES, 'endpoints': [{'context_length': 100_000, 'pricing': pricing}]}}).encode()))
@@ -859,6 +859,19 @@ def test_a_reply_that_searched_stops_every_later_request(monkeypatch, model, kw)
     with pytest.raises(ValueError, match='counted a web search'):
         call()
     assert len(posts) == 2
+
+
+def test_a_model_priced_without_a_quote_stops_at_a_search_too(monkeypatch):
+    """Sol and Astra are priced from OPENAI_PRICES and never reach the quote, so the check cannot live there."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    posts = []
+    monkeypatch.setattr(harness, '_post', lambda *args, **options: posts.append(args) or {
+        'usage': {'server_tool_use_details': {'web_search_requests': 1}}})
+    harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
+    with pytest.raises(ValueError, match='counted a web search'):
+        harness.call_model([{'type': 'text', 'text': 'x'}], 'openai/gpt-6.1-sol', 'high', 'sk-or-test', 10, 5)
+    assert len(posts) == 1
 
 
 def test_a_request_part_with_no_verified_bound_is_refused():
