@@ -798,6 +798,69 @@ def test_a_charge_that_could_apply_still_blocks_the_quote(monkeypatch, model, pr
         pricing_module.quote(model, 5)
 
 
+SEARCHES = 'openai/gpt-4o-search-preview'     # always searches, so only the flag lets it through
+
+
+def search_provider(model, sent):
+    def provider(request, timeout):
+        sent.append(request.get_method())
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps({'data': {'id': model, 'endpoints': [{
+                'context_length': 100_000, 'pricing': OPENAI_PRICING}]}}).encode())
+        selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
+    return provider
+
+
+@pytest.mark.parametrize('flag', [False, True])
+def test_the_flag_turns_the_search_fee_refusal_into_a_warning(tmp_path, monkeypatch, capsys, flag):
+    """By default no paid request goes out for a model whose search fee could apply. --allow-unverified-fees sends it and
+    says so, because max_price cannot cap that fee."""
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    sent = []
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', search_provider(SEARCHES, sent))
+    rc = harness.run_batch([ep], tmp_path / 'out', keys=['sk-or-test'], concurrency=1, force=False, model=SEARCHES,
+                           reasoning='medium', max_tokens=64000, timeout=1, cell_w=128, max_spend=8.,
+                           **({'allow_unverified_fees': True} if flag else {}))
+    if flag:
+        assert rc == 0 and 'POST' in sent and 'unverified fee' in capsys.readouterr().out
+    else:
+        assert rc != 0 and 'POST' not in sent
+
+
+def test_the_flag_leaves_every_other_refusal_in_place(monkeypatch):
+    from label import pricing as pricing_module
+    sent = []
+    pricing = {**OPENAI_PRICING, 'video_seconds': '0.001'}
+    monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', lambda request, timeout: io.BytesIO(json.dumps(
+        {'data': {'id': SEARCHES, 'endpoints': [{'context_length': 100_000, 'pricing': pricing}]}}).encode()))
+    with pytest.raises(ValueError, match='unsupported endpoint charge'):
+        pricing_module.quote(SEARCHES, 5, allow_unverified_fees=True)
+
+
+@pytest.mark.parametrize('model, kw', [('openai/gpt-6.1-terra', {}), (SEARCHES, {'allow_unverified_fees': True})])
+def test_a_reply_that_searched_stops_every_later_request(monkeypatch, model, kw):
+    """The exemption rests on requests never searching, and the flag on someone watching. A reply whose usage counts a
+    search proves the fee applies, so the one already paid for is returned and nothing further is sent."""
+    from label import pricing as pricing_module
+    monkeypatch.setattr(pricing_module, 'search_seen', None)
+    monkeypatch.setattr(pricing_module.urllib.request, 'urlopen', search_provider(model, []))
+    quote = pricing_module.quote(model, 5, **kw)
+    posts = []
+    usage = {'usage': {'prompt_tokens': 1, 'server_tool_use_details': {'web_search_requests': 2}}}
+    plain = {'usage': {'prompt_tokens': 1}}
+    replies = [plain, usage]
+    def post(url, body, key, timeout, **options):
+        posts.append(body); return replies[len(posts) - 1]
+    monkeypatch.setattr(harness, '_post', post)
+    call = lambda: harness.call_model([{'type': 'text', 'text': 'x'}], model, 'low', 'sk-or-test', 10, 5, pricing_quote=quote)
+    assert call() == plain and call() == usage and pricing_module.search_seen
+    with pytest.raises(ValueError, match='counted a web search'):
+        call()
+    assert len(posts) == 2
+
+
 def test_a_request_part_with_no_verified_bound_is_refused():
     """The quote accepts audio prices only because requests carry no audio; a part that is not text or an image would
     break that, so the bound refuses it rather than leave it out."""
