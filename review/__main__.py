@@ -364,6 +364,14 @@ def main() -> int:
     if not a.data.startswith(('http://', 'https://')) and not Path(a.data).exists():
         # checked before the job folder exists, so a mistyped path leaves nothing behind
         raise SystemExit(f'--data {a.data} does not exist')
+    from prepare import tools
+    try:
+        # the clips step cuts with this ffmpeg: found out here, before the dictionary or the checks run
+        tools.ffmpeg_for_clips(tools.ffmpeg_or_none())
+    except tools.TooOld as e:
+        raise SystemExit(e.strerror) from e
+    except tools.Missing:
+        pass                # the steps that need a tool say so themselves, as a missing tool always has
     from label.harness import execution_lock
     job = a.out.resolve()
     job.mkdir(parents=True, exist_ok=True)

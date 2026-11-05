@@ -73,7 +73,7 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 
 ## Install and review
 
-You need Python 3.11, [uv](https://docs.astral.sh/uv/), and [`ffmpeg`](https://ffmpeg.org/ffmpeg.html)/[`ffprobe`](https://ffmpeg.org/ffprobe.html) 5.1 or newer.
+You need Python 3.11, [uv](https://docs.astral.sh/uv/), and [`ffmpeg`](https://ffmpeg.org/ffmpeg.html)/[`ffprobe`](https://ffmpeg.org/ffprobe.html) 6.1 or newer. Board clips keep each frame's source timestamp with `-enc_time_base demux`, which older ffmpeg refuses, so `python -m review`, `board clips` and `board static` stop at the start with a message that names the version they found.
 
 ```console
 git clone https://github.com/Pantheon-Industries-Inc/argus.git
