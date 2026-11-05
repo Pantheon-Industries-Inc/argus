@@ -548,6 +548,29 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
 
 
 UPLOADER_LIST_MAX = 24       # a list of more numbers than this (a calibration matrix is 16) is summarised by its length
+UPLOADER_VALUE_MAX = 20000   # a longer value is summarised by its length, whole, so no part of a secret is ever shown
+UPLOADER_CHARS_MAX = 2_000_000  # the most text one episode's notes keep, with UPLOADER_ITEMS_MAX (board/public_export.py)
+
+
+def _note_shares(sizes: list, budget: int) -> list:
+    """How many of budget each subtree of these sizes keeps: a small one all of its values, and the large ones the
+    same share of what is left, the first few taking any remainder. So a dataset's huge metadata file never pushes out
+    the few notes written about this episode, wherever they sit among its neighbours."""
+    if sum(sizes) <= budget:
+        return list(sizes)
+    level, left = 0, budget
+    for i, size in enumerate(ordered := sorted(sizes)):
+        level = left // (len(ordered) - i)
+        if size > level:
+            break
+        left -= size
+    shares = [min(size, level) for size in sizes]
+    spare = budget - sum(shares)
+    for i, size in enumerate(sizes):
+        if spare and shares[i] < size:
+            shares[i] += 1
+            spare -= 1
+    return shares
 
 
 def uploader_groups(notes, start_s, dur_s) -> list[dict]:
@@ -556,8 +579,13 @@ def uploader_groups(notes, start_s, dur_s) -> list[dict]:
     name. A number that is a time on the recorder's clock (seconds, ms, us or ns from its size, landing within the
     episode once its first frame's time clock_start_s is taken off) also carries that moment in the episode, so the
     board can jump to it. Only a recorder clock far from zero is read this way, so a count or an index is never taken
-    for a time."""
-    from board.public_export import location_list_receipt
+    for a time.
+
+    The board keeps at most UPLOADER_ITEMS_MAX values and UPLOADER_CHARS_MAX characters an episode, and a group that
+    lost values says how many in "omitted". A LeRobot root's metadata otherwise reaches every episode whole, and one
+    real folder made 282,215 values and an 89 MB board file. Only the board's copy is bounded: context.json and the
+    prompt, which a saved label's identity is proved from, still hold every note."""
+    from board.public_export import UPLOADER_ITEMS_MAX, location_list_receipt
     if notes in (None, "", {}, []):
         return []
     near = start_s is not None and dur_s and abs(float(start_s)) > 100 * float(dur_s)
@@ -575,41 +603,86 @@ def uploader_groups(notes, start_s, dur_s) -> list[dict]:
                 return round(max(0.0, min(t, float(dur_s))), 3)
         return None
 
-    def flat(x, path, out):
+    def rows_of(x):
+        return isinstance(x, list) and x and any(isinstance(i, dict) for i in x)
+
+    counted = {}
+
+    def count(x):
+        """How many values flat would write for x, each container counted once."""
+        if not isinstance(x, dict) and not rows_of(x):
+            return 1
+        if id(x) not in counted:
+            counted[id(x)] = sum(map(count, x.values() if isinstance(x, dict) else x))
+        return counted[id(x)]
+
+    chars = 0
+
+    def flat(x, path, out, allowed):
+        nonlocal chars
         if isinstance(x, dict):
-            for k, v in x.items():
-                flat(v, path + [str(k)], out)
-        elif isinstance(x, list) and x and any(isinstance(i, dict) for i in x):
-            for i, v in enumerate(x):
-                flat(v, path + [str(i + 1)] if len(x) > 1 else path, out)
+            for (k, v), share in zip(x.items(), _note_shares([count(v) for v in x.values()], allowed)):
+                if share:
+                    flat(v, path + [str(k)], out, share)
+        elif rows_of(x):
+            for i, v in enumerate(x):       # a list's first rows whole, since half of each row says little
+                share = min(count(v), allowed)
+                if not share:
+                    break
+                flat(v, path + [str(i + 1)] if len(x) > 1 else path, out, share)
+                allowed -= share
         else:
             if isinstance(x, list):
                 v = (", ".join(str(i) for i in x) if len(x) <= UPLOADER_LIST_MAX
                      else f"{len(x)} values, {', '.join(str(i) for i in x[:4])}, ...")
             else:
                 v = str(x)
-            item = {"name": " / ".join(path) or "note", "value": v,
-                    "_uploader_field_path": list(path)}
-            if locations := location_list_receipt(path, x, UPLOADER_LIST_MAX):
+            long = len(v) > UPLOADER_VALUE_MAX
+            if long:
+                v = f"{len(v)} characters, not shown here"
+            name = " / ".join(path) or "note"
+            locations = None if long else location_list_receipt(path, x, UPLOADER_LIST_MAX)
+            # whole or not at all, and the name counts twice: an item also keeps its path
+            size = len(v) + 2 * len(name) + (len(v) if locations else 0)
+            if chars + size > UPLOADER_CHARS_MAX:
+                return
+            chars += size
+            item = {"name": name, "value": v, "_uploader_field_path": list(path)}
+            if locations:
                 item['_uploader_location_values'] = locations
             t = when(x)
             if t is not None:
                 item["t"] = t
             out.append(item)
 
-    groups = []
+    def group(title, kind, x, allowed):
+        out = []
+        flat(x, [], out, allowed)
+        kept = {"title": title, "kind": kind, "items": out}
+        if len(out) < count(x):
+            kept["omitted"] = count(x) - len(out)
+        return kept
+
+    rows, rest = [], notes
     if isinstance(notes, dict) and isinstance(notes.get("table rows"), list):
         for r in notes["table rows"]:
             r = dict(r) if isinstance(r, dict) else {"row": r}
-            table = r.pop("table", None)
-            out = []
-            flat(r, [], out)
-            groups.append({"title": f"Row of {table}" if table else "Table row", "kind": "row", "items": out})
-        notes = notes.get("notes")
-    if notes not in (None, "", {}, []):
-        out = []
-        flat(notes, [], out)
-        groups.append({"title": "Notes in the files", "kind": "notes", "items": out})
+            rows.append((r.pop("table", None), r))
+        rest = notes.get("notes")
+    has_rest = rest not in (None, "", {}, [])
+    for_rows, for_rest = _note_shares([sum(count(r) for _, r in rows), count(rest) if has_rest else 0], UPLOADER_ITEMS_MAX)
+    groups, dropped = [], 0
+    for table, r in rows:
+        share = min(count(r), for_rows)
+        if not share and count(r):
+            dropped += count(r)     # no room for this row at all: the last row kept says so
+            continue
+        groups.append(group(f"Row of {table}" if table else "Table row", "row", r, share))
+        for_rows -= share
+    if dropped and groups:
+        groups[-1]["omitted"] = groups[-1].get("omitted", 0) + dropped
+    if has_rest:
+        groups.append(group("Notes in the files", "notes", rest, for_rest))
     return groups
 
 
