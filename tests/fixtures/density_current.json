@@ -1,0 +1,914 @@
+{
+"model": "openai/gpt-6.1-sol",
+"reasoning": "high",
+"sample_fps": 1,
+"rig": "handheld_gripper",
+"footage": "30 episodes of a shipped bimanual UMI dataset, 17 of them in one request and 13 cut and stitched, drawn at random across its parts and weighted toward the grippers acting apart",
+"before": "aec66f6",
+"after": "bcfb148",
+"note": "The timeline rules in use, against the commit before PR 187.",
+"prompt_sha256": "2b66cf906fcbabc6e10ee226931f5f64e233cff9e2c8af0adb29d909fc0a7e61",
+"episodes": [
+{
+"before": {
+"items_per_min": 77.8294,
+"moments_per_min": 53.6681,
+"left_items_per_min": 43.1911,
+"right_items_per_min": 39.1285,
+"coverage_left": 0.6346,
+"coverage_right": 0.4627,
+"key_events_per_min": 13.6843,
+"objects_per_min": 2.5658,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 10571.7588,
+"median_step_s": 0.54,
+"median_active_step_s": 0.54
+},
+"after": {
+"items_per_min": 71.6287,
+"moments_per_min": 56.4477,
+"left_items_per_min": 39.9838,
+"right_items_per_min": 35.066,
+"coverage_left": 0.6592,
+"coverage_right": 0.4748,
+"key_events_per_min": 13.4705,
+"objects_per_min": 1.4967,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 10213.4013,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 30.2494,
+"moments_per_min": 29.9371,
+"left_items_per_min": 19.9927,
+"right_items_per_min": 14.526,
+"coverage_left": 0.7329,
+"coverage_right": 0.4517,
+"key_events_per_min": 4.2693,
+"objects_per_min": 1.614,
+"issues_nonface_per_min": 0.3124,
+"text_chars_per_min": 5407.9339,
+"median_step_s": 1.01,
+"median_active_step_s": 1.01
+},
+"after": {
+"items_per_min": 30.4577,
+"moments_per_min": 29.7809,
+"left_items_per_min": 20.8258,
+"right_items_per_min": 14.578,
+"coverage_left": 0.7572,
+"coverage_right": 0.4968,
+"key_events_per_min": 4.1652,
+"objects_per_min": 2.0305,
+"issues_nonface_per_min": 0.2083,
+"text_chars_per_min": 5784.7763,
+"median_step_s": 1.01,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 30.2685,
+"moments_per_min": 30.0738,
+"left_items_per_min": 18.3947,
+"right_items_per_min": 20.5359,
+"coverage_left": 0.7106,
+"coverage_right": 0.7856,
+"key_events_per_min": 2.2385,
+"objects_per_min": 1.7519,
+"issues_nonface_per_min": 0.0973,
+"text_chars_per_min": 4883.7393,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 35.4268,
+"moments_per_min": 34.4535,
+"left_items_per_min": 21.4118,
+"right_items_per_min": 24.1369,
+"coverage_left": 0.7345,
+"coverage_right": 0.7881,
+"key_events_per_min": 1.4599,
+"objects_per_min": 2.1412,
+"issues_nonface_per_min": 0.0973,
+"text_chars_per_min": 5059.2188,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 76.5868,
+"moments_per_min": 52.5918,
+"left_items_per_min": 44.4839,
+"right_items_per_min": 40.2108,
+"coverage_left": 0.5751,
+"coverage_right": 0.524,
+"key_events_per_min": 7.9983,
+"objects_per_min": 1.9722,
+"issues_nonface_per_min": 0.1096,
+"text_chars_per_min": 9097.8361,
+"median_step_s": 0.66,
+"median_active_step_s": 0.66
+},
+"after": {
+"items_per_min": 86.2287,
+"moments_per_min": 52.1535,
+"left_items_per_min": 45.9083,
+"right_items_per_min": 43.0595,
+"coverage_left": 0.572,
+"coverage_right": 0.526,
+"key_events_per_min": 14.2436,
+"objects_per_min": 2.9583,
+"issues_nonface_per_min": 0.1096,
+"text_chars_per_min": 9518.3515,
+"median_step_s": 0.69,
+"median_active_step_s": 0.69
+}
+},
+{
+"before": {
+"items_per_min": 50.1751,
+"moments_per_min": 40.9361,
+"left_items_per_min": 22.0316,
+"right_items_per_min": 33.4027,
+"coverage_left": 0.5674,
+"coverage_right": 0.7163,
+"key_events_per_min": 5.8277,
+"objects_per_min": 1.7057,
+"issues_nonface_per_min": 0.1421,
+"text_chars_per_min": 6400.2396,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 44.916,
+"moments_per_min": 44.916,
+"left_items_per_min": 20.1838,
+"right_items_per_min": 30.4178,
+"coverage_left": 0.5003,
+"coverage_right": 0.7368,
+"key_events_per_min": 6.9648,
+"objects_per_min": 1.5635,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 7493.1471,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 72.8181,
+"moments_per_min": 50.3301,
+"left_items_per_min": 37.8368,
+"right_items_per_min": 38.0748,
+"coverage_left": 0.4026,
+"coverage_right": 0.6698,
+"key_events_per_min": 6.9011,
+"objects_per_min": 1.7848,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 9202.4432,
+"median_step_s": 0.67,
+"median_active_step_s": 0.67
+},
+"after": {
+"items_per_min": 80.671,
+"moments_per_min": 48.4264,
+"left_items_per_min": 50.2112,
+"right_items_per_min": 33.5534,
+"coverage_left": 0.4713,
+"coverage_right": 0.6747,
+"key_events_per_min": 8.4478,
+"objects_per_min": 1.6658,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 9176.9806,
+"median_step_s": 0.62,
+"median_active_step_s": 0.62
+}
+},
+{
+"before": {
+"items_per_min": 40.4775,
+"moments_per_min": 36.179,
+"left_items_per_min": 27.582,
+"right_items_per_min": 27.2238,
+"coverage_left": 0.7847,
+"coverage_right": 0.7943,
+"key_events_per_min": 4.2985,
+"objects_per_min": 3.2239,
+"issues_nonface_per_min": 0.3582,
+"text_chars_per_min": 8461.22,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 36.5372,
+"moments_per_min": 34.0297,
+"left_items_per_min": 26.5074,
+"right_items_per_min": 25.0745,
+"coverage_left": 0.8386,
+"coverage_right": 0.8117,
+"key_events_per_min": 8.2388,
+"objects_per_min": 3.9403,
+"issues_nonface_per_min": 1.0746,
+"text_chars_per_min": 8405.6979,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 22.1239,
+"moments_per_min": 18.6473,
+"left_items_per_min": 12.6422,
+"right_items_per_min": 15.1707,
+"coverage_left": 0.9036,
+"coverage_right": 0.9273,
+"key_events_per_min": 1.7383,
+"objects_per_min": 1.8963,
+"issues_nonface_per_min": 0.158,
+"text_chars_per_min": 3899.6595,
+"median_step_s": 1.005,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 24.3363,
+"moments_per_min": 22.1239,
+"left_items_per_min": 16.2769,
+"right_items_per_min": 19.1214,
+"coverage_left": 0.8653,
+"coverage_right": 0.909,
+"key_events_per_min": 2.0544,
+"objects_per_min": 1.8963,
+"issues_nonface_per_min": 0.158,
+"text_chars_per_min": 3507.2757,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 52.2166,
+"moments_per_min": 43.0265,
+"left_items_per_min": 24.7855,
+"right_items_per_min": 38.2922,
+"coverage_left": 0.6132,
+"coverage_right": 0.7289,
+"key_events_per_min": 1.9494,
+"objects_per_min": 1.6709,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5921.7846,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 57.0902,
+"moments_per_min": 49.4318,
+"left_items_per_min": 28.9628,
+"right_items_per_min": 34.8111,
+"coverage_left": 0.5721,
+"coverage_right": 0.6706,
+"key_events_per_min": 1.5317,
+"objects_per_min": 1.5317,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5626.865,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 35.1459,
+"moments_per_min": 32.8412,
+"left_items_per_min": 9.2186,
+"right_items_per_min": 28.8081,
+"coverage_left": 0.1445,
+"coverage_right": 0.9327,
+"key_events_per_min": 3.457,
+"objects_per_min": 5.7616,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 9489.3891,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 51.8546,
+"moments_per_min": 43.7883,
+"left_items_per_min": 33.4174,
+"right_items_per_min": 40.9075,
+"coverage_left": 0.7501,
+"coverage_right": 0.9423,
+"key_events_per_min": 4.0331,
+"objects_per_min": 5.7616,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 11240.3456,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 29.018,
+"moments_per_min": 28.288,
+"left_items_per_min": 4.3801,
+"right_items_per_min": 27.1929,
+"coverage_left": 0.1506,
+"coverage_right": 0.9604,
+"key_events_per_min": 7.1176,
+"objects_per_min": 1.46,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 4550.7116,
+"median_step_s": 1.01,
+"median_active_step_s": 1.01
+},
+"after": {
+"items_per_min": 33.7631,
+"moments_per_min": 33.033,
+"left_items_per_min": 16.6078,
+"right_items_per_min": 30.113,
+"coverage_left": 0.6345,
+"coverage_right": 0.9452,
+"key_events_per_min": 7.4826,
+"objects_per_min": 1.6425,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5930.6166,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 49.3217,
+"moments_per_min": 48.0608,
+"left_items_per_min": 24.4754,
+"right_items_per_min": 29.5188,
+"coverage_left": 0.4773,
+"coverage_right": 0.6498,
+"key_events_per_min": 9.6418,
+"objects_per_min": 1.8542,
+"issues_nonface_per_min": 0.0742,
+"text_chars_per_min": 7067.4634,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 53.6234,
+"moments_per_min": 47.3191,
+"left_items_per_min": 26.9971,
+"right_items_per_min": 29.6672,
+"coverage_left": 0.4932,
+"coverage_right": 0.6474,
+"key_events_per_min": 6.9718,
+"objects_per_min": 1.78,
+"issues_nonface_per_min": 0.1483,
+"text_chars_per_min": 6932.8486,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 21.0993,
+"moments_per_min": 19.3943,
+"left_items_per_min": 10.7983,
+"right_items_per_min": 12.9295,
+"coverage_left": 0.5435,
+"coverage_right": 0.856,
+"key_events_per_min": 0.7815,
+"objects_per_min": 1.2787,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 3237.1469,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 20.602,
+"moments_per_min": 19.1102,
+"left_items_per_min": 11.6508,
+"right_items_per_min": 14.0662,
+"coverage_left": 0.8704,
+"coverage_right": 0.8645,
+"key_events_per_min": 0.9235,
+"objects_per_min": 1.2787,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 3157.9356,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 41.6161,
+"moments_per_min": 39.0352,
+"left_items_per_min": 22.5824,
+"right_items_per_min": 26.131,
+"coverage_left": 0.6781,
+"coverage_right": 0.731,
+"key_events_per_min": 6.1295,
+"objects_per_min": 4.5165,
+"issues_nonface_per_min": 0.3226,
+"text_chars_per_min": 10141.0968,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 50.3264,
+"moments_per_min": 40.0031,
+"left_items_per_min": 24.518,
+"right_items_per_min": 33.2283,
+"coverage_left": 0.667,
+"coverage_right": 0.7331,
+"key_events_per_min": 5.4843,
+"objects_per_min": 4.5165,
+"issues_nonface_per_min": 0.6452,
+"text_chars_per_min": 10015.2807,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 61.9997,
+"moments_per_min": 51.9457,
+"left_items_per_min": 32.885,
+"right_items_per_min": 35.8174,
+"coverage_left": 0.5312,
+"coverage_right": 0.6611,
+"key_events_per_min": 9.2162,
+"objects_per_min": 3.3513,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 7590.569,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 72.6821,
+"moments_per_min": 51.5268,
+"left_items_per_min": 35.3985,
+"right_items_per_min": 38.5404,
+"coverage_left": 0.4988,
+"coverage_right": 0.6567,
+"key_events_per_min": 10.054,
+"objects_per_min": 3.3513,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 8644.9834,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 46.4362,
+"moments_per_min": 38.1097,
+"left_items_per_min": 37.4692,
+"right_items_per_min": 20.496,
+"coverage_left": 0.8923,
+"coverage_right": 0.6419,
+"key_events_per_min": 7.0455,
+"objects_per_min": 1.6012,
+"issues_nonface_per_min": 1.9215,
+"text_chars_per_min": 9642.3968,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 57.0044,
+"moments_per_min": 43.554,
+"left_items_per_min": 43.554,
+"right_items_per_min": 24.9795,
+"coverage_left": 0.9032,
+"coverage_right": 0.6045,
+"key_events_per_min": 8.3265,
+"objects_per_min": 1.9215,
+"issues_nonface_per_min": 2.562,
+"text_chars_per_min": 9756.7259,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 99.934,
+"moments_per_min": 58.2821,
+"left_items_per_min": 57.977,
+"right_items_per_min": 51.7216,
+"coverage_left": 0.5439,
+"coverage_right": 0.5607,
+"key_events_per_min": 2.8988,
+"objects_per_min": 1.3731,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 8199.1655,
+"median_step_s": 0.52,
+"median_active_step_s": 0.51
+},
+"after": {
+"items_per_min": 109.8511,
+"moments_per_min": 61.0284,
+"left_items_per_min": 56.6038,
+"right_items_per_min": 54.3153,
+"coverage_left": 0.5285,
+"coverage_right": 0.5278,
+"key_events_per_min": 3.0514,
+"objects_per_min": 1.5257,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 7552.5696,
+"median_step_s": 0.48,
+"median_active_step_s": 0.48
+}
+},
+{
+"before": {
+"items_per_min": 30.0256,
+"moments_per_min": 29.7587,
+"left_items_per_min": 17.4816,
+"right_items_per_min": 16.9478,
+"coverage_left": 0.5866,
+"coverage_right": 0.5848,
+"key_events_per_min": 2.4021,
+"objects_per_min": 1.201,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 4835.8617,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 30.0256,
+"moments_per_min": 29.8922,
+"left_items_per_min": 17.3481,
+"right_items_per_min": 17.7485,
+"coverage_left": 0.619,
+"coverage_right": 0.5858,
+"key_events_per_min": 4.0034,
+"objects_per_min": 1.0676,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5794.1465,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 34.6262,
+"moments_per_min": 34.6262,
+"left_items_per_min": 19.5683,
+"right_items_per_min": 29.6994,
+"coverage_left": 0.6884,
+"coverage_right": 0.9097,
+"key_events_per_min": 4.2329,
+"objects_per_min": 0.9021,
+"issues_nonface_per_min": 0.2776,
+"text_chars_per_min": 4107.6081,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 38.7203,
+"moments_per_min": 38.3733,
+"left_items_per_min": 30.8097,
+"right_items_per_min": 31.5036,
+"coverage_left": 0.8689,
+"coverage_right": 0.875,
+"key_events_per_min": 2.3593,
+"objects_per_min": 0.9715,
+"issues_nonface_per_min": 0.2776,
+"text_chars_per_min": 4206.0741,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 26.7488,
+"moments_per_min": 26.6614,
+"left_items_per_min": 16.5213,
+"right_items_per_min": 16.5213,
+"coverage_left": 0.7091,
+"coverage_right": 0.7255,
+"key_events_per_min": 3.4966,
+"objects_per_min": 2.1854,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5233.4132,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 28.5845,
+"moments_per_min": 28.3223,
+"left_items_per_min": 17.0458,
+"right_items_per_min": 18.4444,
+"coverage_left": 0.7032,
+"coverage_right": 0.7255,
+"key_events_per_min": 3.6714,
+"objects_per_min": 2.1854,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 5250.3716,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 24.5906,
+"moments_per_min": 23.9043,
+"left_items_per_min": 14.9831,
+"right_items_per_min": 15.8981,
+"coverage_left": 0.7977,
+"coverage_right": 0.7452,
+"key_events_per_min": 1.9444,
+"objects_per_min": 1.83,
+"issues_nonface_per_min": 0.4575,
+"text_chars_per_min": 5186.5575,
+"median_step_s": 1.536,
+"median_active_step_s": 1.01
+},
+"after": {
+"items_per_min": 28.2506,
+"moments_per_min": 27.5643,
+"left_items_per_min": 19.9012,
+"right_items_per_min": 17.4994,
+"coverage_left": 0.8054,
+"coverage_right": 0.7381,
+"key_events_per_min": 2.1731,
+"objects_per_min": 1.83,
+"issues_nonface_per_min": 0.3431,
+"text_chars_per_min": 5805.8975,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 25.6796,
+"moments_per_min": 25.6796,
+"left_items_per_min": 15.6583,
+"right_items_per_min": 16.5978,
+"coverage_left": 0.7544,
+"coverage_right": 0.6322,
+"key_events_per_min": 5.9502,
+"objects_per_min": 2.5053,
+"issues_nonface_per_min": 0.3132,
+"text_chars_per_min": 5173.1967,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 34.4483,
+"moments_per_min": 32.5693,
+"left_items_per_min": 24.1138,
+"right_items_per_min": 24.427,
+"coverage_left": 0.8198,
+"coverage_right": 0.6635,
+"key_events_per_min": 2.1922,
+"objects_per_min": 2.8185,
+"issues_nonface_per_min": 0.3132,
+"text_chars_per_min": 6274.6031,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 36.4804,
+"moments_per_min": 35.3243,
+"left_items_per_min": 9.5055,
+"right_items_per_min": 30.7001,
+"coverage_left": 0.3032,
+"coverage_right": 0.8586,
+"key_events_per_min": 2.569,
+"objects_per_min": 1.413,
+"issues_nonface_per_min": 0.1285,
+"text_chars_per_min": 6462.5567,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 44.8298,
+"moments_per_min": 38.6641,
+"left_items_per_min": 20.8093,
+"right_items_per_min": 37.508,
+"coverage_left": 0.6313,
+"coverage_right": 0.8736,
+"key_events_per_min": 3.3398,
+"objects_per_min": 1.6699,
+"issues_nonface_per_min": 0.1285,
+"text_chars_per_min": 7523.443,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 51.3332,
+"moments_per_min": 47.7399,
+"left_items_per_min": 23.6133,
+"right_items_per_min": 39.5266,
+"coverage_left": 0.5425,
+"coverage_right": 0.8244,
+"key_events_per_min": 5.6467,
+"objects_per_min": 5.6467,
+"issues_nonface_per_min": 0.5133,
+"text_chars_per_min": 10508.9316,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 61.0865,
+"moments_per_min": 47.2265,
+"left_items_per_min": 32.3399,
+"right_items_per_min": 43.1199,
+"coverage_left": 0.5738,
+"coverage_right": 0.8158,
+"key_events_per_min": 4.62,
+"objects_per_min": 5.6467,
+"issues_nonface_per_min": 0.5133,
+"text_chars_per_min": 11214.2497,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 39.7715,
+"moments_per_min": 34.2072,
+"left_items_per_min": 19.5209,
+"right_items_per_min": 21.8926,
+"coverage_left": 0.5998,
+"coverage_right": 0.5529,
+"key_events_per_min": 4.6522,
+"objects_per_min": 1.1858,
+"issues_nonface_per_min": 0.0912,
+"text_chars_per_min": 5197.7546,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 37.9471,
+"moments_per_min": 32.7477,
+"left_items_per_min": 18.0614,
+"right_items_per_min": 22.1662,
+"coverage_left": 0.6206,
+"coverage_right": 0.5567,
+"key_events_per_min": 4.3785,
+"objects_per_min": 1.0946,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 4616.4154,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 42.2272,
+"moments_per_min": 32.9309,
+"left_items_per_min": 28.6767,
+"right_items_per_min": 21.2712,
+"coverage_left": 0.7657,
+"coverage_right": 0.6714,
+"key_events_per_min": 5.7511,
+"objects_per_min": 1.6544,
+"issues_nonface_per_min": 0.0788,
+"text_chars_per_min": 6348.4993,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 46.7178,
+"moments_per_min": 40.5728,
+"left_items_per_min": 33.4824,
+"right_items_per_min": 20.8773,
+"coverage_left": 0.7705,
+"coverage_right": 0.5872,
+"key_events_per_min": 5.7511,
+"objects_per_min": 1.6544,
+"issues_nonface_per_min": 0.0788,
+"text_chars_per_min": 6184.4749,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 44.9795,
+"moments_per_min": 40.0904,
+"left_items_per_min": 13.6894,
+"right_items_per_min": 36.1792,
+"coverage_left": 0.4291,
+"coverage_right": 0.9343,
+"key_events_per_min": 11.7338,
+"objects_per_min": 8.8003,
+"issues_nonface_per_min": 0.9778,
+"text_chars_per_min": 13641.4972,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 36.1792,
+"moments_per_min": 30.3123,
+"left_items_per_min": 14.6672,
+"right_items_per_min": 26.401,
+"coverage_left": 0.4617,
+"coverage_right": 0.8805,
+"key_events_per_min": 9.7782,
+"objects_per_min": 9.7782,
+"issues_nonface_per_min": 0.9778,
+"text_chars_per_min": 12361.5373,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 35.3121,
+"moments_per_min": 35.3121,
+"left_items_per_min": 17.0968,
+"right_items_per_min": 25.2458,
+"coverage_left": 0.4989,
+"coverage_right": 0.7334,
+"key_events_per_min": 12.9425,
+"objects_per_min": 0.9587,
+"issues_nonface_per_min": 0.3196,
+"text_chars_per_min": 6937.6332,
+"median_step_s": 1.01,
+"median_active_step_s": 1.01
+},
+"after": {
+"items_per_min": 44.8991,
+"moments_per_min": 44.8991,
+"left_items_per_min": 19.6534,
+"right_items_per_min": 32.9154,
+"coverage_left": 0.4695,
+"coverage_right": 0.744,
+"key_events_per_min": 14.7001,
+"objects_per_min": 0.9587,
+"issues_nonface_per_min": 0.1598,
+"text_chars_per_min": 6263.667,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 37.045,
+"moments_per_min": 36.0071,
+"left_items_per_min": 23.3927,
+"right_items_per_min": 21.5564,
+"coverage_left": 0.6948,
+"coverage_right": 0.6656,
+"key_events_per_min": 4.3911,
+"objects_per_min": 1.5169,
+"issues_nonface_per_min": 0.5589,
+"text_chars_per_min": 5957.7061,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 37.2846,
+"moments_per_min": 36.4862,
+"left_items_per_min": 22.1951,
+"right_items_per_min": 22.8338,
+"coverage_left": 0.6671,
+"coverage_right": 0.6767,
+"key_events_per_min": 2.7943,
+"objects_per_min": 1.0379,
+"issues_nonface_per_min": 0.479,
+"text_chars_per_min": 5732.1624,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+},
+{
+"before": {
+"items_per_min": 32.967,
+"moments_per_min": 32.301,
+"left_items_per_min": 17.982,
+"right_items_per_min": 21.312,
+"coverage_left": 0.5056,
+"coverage_right": 0.7056,
+"key_events_per_min": 10.989,
+"objects_per_min": 2.664,
+"issues_nonface_per_min": 0.999,
+"text_chars_per_min": 7775.5578,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+},
+"after": {
+"items_per_min": 38.628,
+"moments_per_min": 36.963,
+"left_items_per_min": 18.315,
+"right_items_per_min": 29.304,
+"coverage_left": 0.475,
+"coverage_right": 0.7278,
+"key_events_per_min": 11.988,
+"objects_per_min": 2.664,
+"issues_nonface_per_min": 0.0,
+"text_chars_per_min": 9048.618,
+"median_step_s": 1.0,
+"median_active_step_s": 1.0
+}
+}
+],
+"footage_min": 228.8
+}
