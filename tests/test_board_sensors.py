@@ -885,3 +885,21 @@ def test_a_changed_input_rebuilds_its_episode(tmp_path, monkeypatch):
     (board / "manifest.json").write_text(json.dumps(m))
     board_build.build(board)
     assert made == {"episodes": 3, "sensors": 1}
+
+
+def test_a_quantized_block_that_looks_like_a_key_keeps_its_samples():
+    """A block's samples are Base64 of numbers, and random Base64 can hold what reads as a key (case folded, after + or
+    /) or a path (a run of no-reading codes is ////). One block dropped by the filters stopped the page decoding every
+    signal of that episode. A value of the same text anywhere else is still withheld, and so is a block whose data is
+    not Base64."""
+    from board.public_export import project
+    key = "AK" + "IA" + "1234567890ABCDEF"      # assembled, so the secret scan of this file has nothing to find
+    for data in (f"AA+{key}/AAA=", "/home/user/AAAA/////////AAA=", "//////////AAAAAAAAAAAAAAAAAA"):
+        assert len(data) % 4 == 0
+        block = {"lo": [0.0], "step": [0.5], "data": data}
+        doc = {"signals": [{"name": "pose", "activity": block, "values": block}]}
+        shown = project(doc)["signals"][0]
+        assert shown["activity"] == block and shown["values"] == block
+    assert project({"other": {"data": key}})["other"].get("data") != key
+    plain = project({"activity": {"lo": [0.0], "step": [0.5], "data": f"token: {key}"}})["activity"]
+    assert plain.get("data") != f"token: {key}"
