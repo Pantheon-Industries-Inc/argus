@@ -3,9 +3,7 @@
 <p align="center">
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11-455468" alt="Python 3.11"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-455468" alt="Apache-2.0"></a>
-</p>
-
-<p align="center">
+  <br>
   <a href="https://pantheon.inc/research/argus"><img src="https://img.shields.io/badge/blog-455468" alt="Blog"></a>
   <a href="https://pantheon.inc/data-board"><img src="https://img.shields.io/badge/dashboard-455468" alt="Dashboard"></a>
   <a href="https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100"><img src="https://img.shields.io/badge/DiverseUMI--sample100-455468" alt="DiverseUMI-sample100"></a>
