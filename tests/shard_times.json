@@ -221,6 +221,7 @@
  "tests/test_unknown_signal_placement.py": 0.0,
  "tests/test_unpaired_depth_viewer.py": 0.2,
  "tests/test_upload_sources.py": 1.6,
+ "tests/test_uploader_notes_bound.py": 5.0,
  "tests/test_value_names.py": 1.0,
  "tests/test_video_damage.py": 0.1,
  "tests/test_whole_body_prompt.py": 2.0,

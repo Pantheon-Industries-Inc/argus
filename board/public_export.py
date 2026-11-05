@@ -59,6 +59,7 @@ _URL_QUERY_SECRETS = _SECRETS | {'key', 'signature', 'sig', 'session', 'sessioni
 _ACCESS_URI_PREFIXES = ('file:', 's3:', 'gs:', 'az:', 'abfs:', 'ssh:', 'sftp:', 'ftp:')
 _DROP = object()
 UPLOADER_VALUE_WITHHELD = 'not published (uploader metadata)'
+UPLOADER_ITEMS_MAX = 2000    # the most recorded note values one episode's board shows (board/build.py uploader_groups)
 # The keys of a metadata inspection receipt (label/evidence_access.py) that describe the request, not the value read
 _WITHHELD_RECEIPT_KEYS = frozenset({'field_id', 'mode', 'reason', 'descriptor', 'limitations', 'pointer', 'operation', 'id',
                                     'presentation_clock'})
@@ -594,25 +595,23 @@ def _uploader_item(item: dict) -> dict:
         # Historical boards used this exact separator but retained no path array.
         parts = str(item.get('name') or '').split(' / ')
     shown = list(parts)
-    for i, part in enumerate(parts):
-        if any(_name(parent) == 'fields' for parent in parts[:i]):
-            break
-        if i and _name(parts[i - 1]) in _NOTE_SOURCE_MAPS and _private_location(part):
+    names = [_name(part) for part in parts]
+    # A part below a 'fields' part is the publisher's own schema, so it is read once here and never per part.
+    native_from = names.index('fields') if 'fields' in names else len(parts)
+    for i, part in enumerate(parts[:native_from + 1]):
+        if i and names[i - 1] in _NOTE_SOURCE_MAPS and _private_location(part):
             shown[i] = _source_name(part) or 'source file'
     result['name'] = ' / '.join(shown) if shown else (item.get('name') or 'note')
-    attributes = [_name(attribute) for i, part in enumerate(parts)
-                  if not any(_name(parent) == 'fields' for parent in parts[:i])
-                  and (attribute := _reader_attribute(part)) is not None]
-    native = False
+    attributes = [_name(attribute) for part in parts[:native_from + 1]
+                  if (attribute := _reader_attribute(part)) is not None]
     for index, part in enumerate(parts):
-        native = native or _name(part) == 'fields'
         parent = parts[index - 1] if index else ''
-        if _credential_key(_reader_attribute(part) or part, native=native,
+        if _credential_key(_reader_attribute(part) or part, native=index >= native_from,
                            owner=_reader_attribute(parent) or parent):
             result['value'] = 'withheld'
             return result
     value = item.get('value')
-    terminal = _name(parts[-1]) if parts else ''
+    terminal = names[-1] if parts else ''
     locations = item.get('_uploader_location_values')
     if not isinstance(locations, dict) and isinstance(value, str):
         summary = re.fullmatch(r'([0-9]+) values, (.+), \.\.\.', value)
@@ -636,16 +635,14 @@ def _uploader_item(item: dict) -> dict:
         return result
     # A reader source record owns its immediate source property. The fields
     # below that record are the publisher's native schema, not access metadata.
-    native_fields = any(_name(part) == 'fields' for part in parts[:-1])
-    names = [_name(part) for part in parts]
+    native_fields = native_from < len(parts) - 1
     reader_claim = any(name in _NOTE_CLAIMS for name in names)
     reader_issue = any(name in _NOTE_SOURCE_MAPS for name in names) and 'issues' in names
     if not native_fields and (reader_claim or reader_issue) and terminal == 'why':
         result['value'] = value = _table_error(value)
     owner_property = (len(parts) >= 3 and _name(parts[-3]) in _NOTE_SOURCE_MAPS
                       and terminal == 'source')
-    table_claim = (terminal == 'source' and 'recordedannotationtables' in [_name(p) for p in parts]
-                   and 'claims' in [_name(p) for p in parts[:-1]])
+    table_claim = (terminal == 'source' and 'recordedannotationtables' in names and 'claims' in names[:-1])
     source_value = not native_fields and (owner_property or table_claim or terminal in _NOTE_SOURCE_VALUES
                                          or (terminal == 'source' and (reader_claim or reader_issue))
                                          or any(a in _ATTRIBUTE_LOCATIONS for a in attributes)
@@ -664,7 +661,11 @@ def _uploader_group(value: dict) -> dict:
     if not isinstance(value.get('items'), list) or value.get('kind') not in ('notes', 'row'):
         return value if _publishing() else {k: v for k, v in value.items() if k in ('title', 'kind')}
     result = dict(value)
-    result['items'] = [_uploader_item(item) if isinstance(item, dict) else item for item in value['items']]
+    # A board built before uploader_groups kept this bound still opens quickly, without a rebuild.
+    if (extra := len(value['items']) - UPLOADER_ITEMS_MAX) > 0:
+        result['omitted'] = (value['omitted'] if type(value.get('omitted')) is int else 0) + extra
+    result['items'] = [_uploader_item(item) if isinstance(item, dict) else item
+                       for item in value['items'][:UPLOADER_ITEMS_MAX]]
     if not _publishing():
         result['items'] = [{key: item[key] for key in ('name',) if key in item} | {'value': UPLOADER_VALUE_WITHHELD}
                            if isinstance(item, dict) else UPLOADER_VALUE_WITHHELD for item in result['items']]

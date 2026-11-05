@@ -74,7 +74,7 @@ from prepare.frame_rate import declared_fps, episode_fps, episode_seconds
 CAMS = ("exo", "left", "right")
 
 
-find_ffmpeg = tools.ffmpeg       # the one ffmpeg every caller runs (prepare/tools.py)
+find_ffmpeg = tools.ffmpeg_for_clips   # the one ffmpeg every caller runs, new enough to cut clips (prepare/tools.py)
 
 
 def clip_path(mp4_dir: Path, eid: str, cam: str) -> Path:

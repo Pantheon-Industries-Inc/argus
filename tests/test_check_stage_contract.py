@@ -93,6 +93,8 @@ def test_review_continues_recorded_pairing_and_capture_failures(tmp_path, monkey
     monkeypatch.setattr(dictionary_stage, 'prepare', lambda *a, **k: None)
     monkeypatch.setattr(timebase, 'measure_folder', lambda *a: None)
     monkeypatch.setattr(review.subprocess, 'run', child)
+    # subprocess.run is every module's here, and this test counts the steps' children, not the version check before them
+    monkeypatch.setattr('prepare.tools.ffmpeg_version', lambda path: None)
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(source), '--out', str(tmp_path / 'job'),
                                       '--rig', 'ego_head', '--free'])
     with pytest.raises(ReachedClips):
