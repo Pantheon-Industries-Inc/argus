@@ -60,7 +60,8 @@ def is_capacity_rejection(response: dict) -> bool:
     """A 200 with no choices and no usage that says the provider has no flex capacity, which is how OpenRouter sent one."""
     error = response.get('error') if isinstance(response.get('error'), dict) else response
     metadata = error.get('metadata') if isinstance(error.get('metadata'), dict) else {}
-    return error.get('code') == 502 and metadata.get('error_type') == 'provider_unavailable' and not response.get('usage')
+    return (error.get('code') == 502 and metadata.get('error_type') == 'provider_unavailable' and not response.get('usage')
+            and 'flex' in str(error.get('message') or '').lower())
 
 
 def note_rejection() -> None:

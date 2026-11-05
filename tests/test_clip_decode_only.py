@@ -73,12 +73,17 @@ def test_an_episode_with_no_camera_that_decodes_is_left_out_the_same(tmp_path):
     assert out["cut"] == out["decode"] and out["decode"]
 
 
-def test_a_review_without_board_clips_builds_the_same_requests(tmp_path):
+@pytest.mark.parametrize("damaged", [None, "wrist_left"])
+def test_a_review_without_board_clips_builds_the_same_requests(tmp_path, damaged):
+    """With a dead camera too: off still probes every camera, or the request would keep that camera as placeholders."""
     jobs = {}
     up = tmp_path / "up"
     up.mkdir()
     for stem in ("top", "wrist_left", "wrist_right"):
-        _video(up / f"{stem}.mp4", 60)
+        if stem == damaged:
+            _damaged(up / f"{stem}.mp4", 60, range(60))
+        else:
+            _video(up / f"{stem}.mp4", 60)
     for name, extra in (("on", ()), ("off", ("--board-clips", "off"))):
         job = tmp_path / name
         r = subprocess.run([sys.executable, "-m", "review", "--data", str(up), "--rig", "teleop_arms", "--dataset", "mine",
@@ -93,3 +98,16 @@ def test_a_review_without_board_clips_builds_the_same_requests(tmp_path):
         sent[name] = ([i["sha256"] for i in record["config"]["request_images"]["images"]], record["prompt_text"],
                       record["config"]["views"])
     assert sent["on"] == sent["off"] and sent["off"][0]
+    if damaged:
+        assert "left" not in sent["off"][2]
+
+
+def test_a_camera_that_ends_with_no_frame_read_is_an_error_not_a_short_camera(tmp_path, monkeypatch):
+    """ffmpeg can exit 0 having decoded nothing, and only the count then shows the camera is dead."""
+    _video(tmp_path / "a.mp4", 10)
+
+    def nothing(cmd, watch, lead_s, check):
+        watch[0].write_text("frame=0\nprogress=end\n")
+    monkeypatch.setattr(clips, "run_while_progressing", nothing)
+    with pytest.raises(RuntimeError, match="no frame"):
+        clips.decode_one(str(tmp_path / "a.mp4"), 0.0, 10, tmp_path / "out" / "a.mp4", "ffmpeg", 1)

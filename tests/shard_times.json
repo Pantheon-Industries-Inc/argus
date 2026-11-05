@@ -38,6 +38,7 @@
  "tests/test_check_stage_contract.py": 2.4,
  "tests/test_checks.py": 8.8,
  "tests/test_clip_cameras.py": 23.5,
+ "tests/test_clip_decode_only.py": 45.0,
  "tests/test_clip_final_edit.py": 0.2,
  "tests/test_clip_frame_duration_order.py": 0.4,
  "tests/test_clip_threads.py": 0.1,

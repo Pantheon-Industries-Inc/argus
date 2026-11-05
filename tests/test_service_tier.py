@@ -332,10 +332,17 @@ def test_the_fallback_takes_it_too(monkeypatch):
     assert 'service_tier' not in sent[-1] and tier.counts()['fell_back'] == 1
 
 
-@pytest.mark.parametrize('service_tier, body', [('flex', {'message': 'something else', 'code': 500}), (None, FLEX_BUSY)])
+@pytest.mark.parametrize('service_tier, body', [('flex', {'message': 'something else', 'code': 500}), (None, FLEX_BUSY),
+                                                ('flex', {**FLEX_BUSY, 'message': 'The provider dropped the connection'}),
+                                                ('flex', {**FLEX_BUSY, 'code': 500}), ('flex', {**FLEX_BUSY, 'metadata': {}}),
+                                                ('flex', {**FLEX_BUSY, 'usage': {'cost': .5}})])
 def test_any_other_empty_200_stays_a_possibly_billed_call(monkeypatch, service_tier, body):
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout: io.BytesIO(json.dumps(body).encode()))
     tier.configure(service_tier, False)
     with pytest.raises(harness.DispatchError) as caught:
         harness.call_model_once(TEXT, SOL, 'high', 'sk-or-test', 10, 5)
     assert not caught.value.verified_unpaid
+
+
+def test_the_rejection_is_read_inside_an_error_field_too():
+    assert tier.is_capacity_rejection({'error': FLEX_BUSY}) and tier.is_capacity_rejection(FLEX_BUSY)
