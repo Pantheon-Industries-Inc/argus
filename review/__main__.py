@@ -17,6 +17,7 @@ in the job and each prepared episode:
               (checks.timebase measure_folder), the capture checks (checks.capture_qc), and the checks on the
               other signals and depth streams where the data has them (checks.sensors)
   4. clips    browser-playable copies of each camera for the board (python -m board clips)
+              (--board-clips off only decodes the cameras, which finds the same broken ones)
   5. dry run  every request built exactly as it would be sent, free. A recording longer than its part limit
               (label/pieces.py piece_max) is labelled in parts cut at still moments
   6. label    the model labels every episode or part, stopping at --cap dollars (skipped with --free)
@@ -324,6 +325,10 @@ def main() -> int:
     ap.add_argument("--rig", required=True, choices=["teleop_arms", "handheld_gripper", "ego_head"])
     ap.add_argument("--out", type=Path, required=True, metavar="JOB", help="where everything is written")
     ap.add_argument("--dataset", default=None, help="name shown on the board and told to the model")
+    ap.add_argument("--board-clips", choices=("on", "off"), default="on",
+                    help="on cuts the board's viewing copy of each camera. off only decodes the cameras, which finds the "
+                         "same broken ones and leads to the same requests for far less CPU and disk, and the board has no "
+                         "video to play (default on)")
     ap.add_argument("--free", action="store_true", help="stop after the dry run (no model calls)")
     ap.add_argument("--cap", type=float, default=20.0, help="most the labelling may spend, in USD (default 20)")
     ap.add_argument("--service-tier", choices=('flex', 'default'), default=None,
@@ -458,7 +463,8 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
     # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
     # what was wrong with its other cameras goes into the report's notes
     rc = run_step(job, "clips", [PY, "-m", "board", "clips", "--episodes", str(eps), "--out", str(job / "clips"),
-                                 "--jobs", jobs, "--clip-threads", "1"], env, ok_codes=(0, 1))
+                                 "--jobs", jobs, "--clip-threads", "1",
+                                 *(["--decode-only"] if a.board_clips == "off" else [])], env, ok_codes=(0, 1))
     left_out = board_clips.set_aside_failed(eps, job / "clips")
     if left_out:
         board_clips.drop_from_report(rep, left_out)
