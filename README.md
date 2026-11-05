@@ -116,6 +116,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--jobs`](review/__main__.py) | 2 | Decode processes per preparation step |
 | [`--grouping`](review/__main__.py) | Inferred from file names | JSON such as `{"cam_folder": "cameras"}` or `{"take_folder": "takes"}`, for folders whose file names cannot tell separate takes from cameras of one take |
 | [`--free`](review/__main__.py) | Off | Builds the base requests and stops before any model call |
+| [`--board-clips`](review/__main__.py) | `on` | `off` decodes each camera and writes no viewing copy, so the board has no video to play |
 | [`--force`](review/__main__.py) | Off | Relabels every selected episode with new paid calls, keeping earlier replies and charges |
 | [`--retry-received EPISODE`](review/__main__.py) | None | Sends that episode's request again after an unusable reply the model wrote, or after a provider failure that has used its two automatic resends; repeat for each episode |
 
@@ -244,7 +245,7 @@ The site is written to [`data/review/mine/static/<build_id>/`](board/static.py),
 
 A resumed review keeps its settings, refuses changed ones and reuses its verified preparation. To change source data, prepared inputs or annotation settings, or to apply newer reader fixes, use a fresh `--out`. After a code change, Argus verifies a recording labelled in one request offline against its saved receipt, including the exact prompt and image order, and rebinds the retained reply without another call. When that proof is missing or has changed, [`--force`](label/harness.py) relabels the episode with new paid calls. Unresolved charges stay reserved, and inspection the cap blocked resumes when the allowance increases, before final annotation is dispatched.
 
-A free review stops after the prepared [`episodes/`](review/__main__.py) and base requests in [`dry/`](review/__main__.py). Paid annotation adds model inputs and receipts in [`run/`](review/__main__.py), rejoined labels in [`run_final/`](review/__main__.py), and the board. `review` exits 1 when any unit failed, and still builds the board.
+A free review stops after the prepared [`episodes/`](review/__main__.py) and base requests in [`dry/`](review/__main__.py). Paid annotation adds model inputs and receipts in [`run/`](review/__main__.py), rejoined labels in [`run_final/`](review/__main__.py), and the board. `review` exits 1 when any unit failed, and still builds the board. Encoding the board's viewing copies is the most CPU a review spends. A job whose board nobody will watch can pass `--board-clips off`, which decodes each camera the way a cut would and writes no clip. A camera that does not decode is still taken out and a short one still flagged, so the requests are the same, and the board has no video to play.
 
 After annotation, one text-only call to the same model picks which sensor findings to overlay on the video, at most two at a time, and rewrites every finding in plain English. Every finding stays in the list and the JSON export, and if the call fails, the video overlays every finding.
 
@@ -328,7 +329,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--resolution-route`, `--route-seeds`, `--max-spend`, `--dry-run`, `--allow-unverified-fees`, `--service-tier`, `--flex-fallback` |
 | [`label.issue_groups`](label/issue_groups.py) | `--label`, `--dump`, `--out`, `--takes`, `--seed`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--dry-run` |
 | [`board build`](board/build.py) | `--no-cache` |
-| [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--name-prefix`, `--labels` |
+| [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--decode-only`, `--name-prefix`, `--labels` |
 | [`board export-lerobot`](board/lerobot_export.py) | `--dataset`, `--labels`, `--out`, `--report` |
 | [`board grids`](board/grids.py) | `--jobs`, `--dataset`, `--file` |
 | [`board hands`](board/hands.py) | `--src`, `--qa`, `--clips`, `--episodes`, `--out`, `--jobs` |
