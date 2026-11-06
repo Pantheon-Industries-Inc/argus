@@ -22,7 +22,7 @@ REASONING_TOKENS = {'none': 0, 'minimal': 1000, 'low': 2000, 'medium': 4000, 'hi
 # cannot show, or with recorded fields the prompt does not carry is inspected; depth, whose pictures already ride in the
 # request, is inspected only with all, which inspects any recording with recorded fields beyond its cameras, and off
 # buys no selection. The field dictionary asks once per upload what uncertain fields mean
-# (label/dictionary_stage.py), on by default, and is written into the policy only when off.
+# (label/dictionary_stage.py), off by default, and is written into the policy only when off.
 # A policy saved before inspection could be set inspected every recording with recorded fields, so a saved policy
 # without the setting keeps that (LEGACY_INSPECTION, never written) and a job labelled then resumes as it was paid
 # for; a new policy writes its mode, auto unless asked otherwise.
@@ -127,9 +127,9 @@ def add_arguments(parser) -> None:
                         help='optional sampling override; GPT-6.1 Sol defaults to at least 1 FPS')
     parser.add_argument('--dataset-note', default=None, help='dataset description supplied as recording context')
     parser.add_argument('--inspection', choices=INSPECTION_MODES, default=None,
-                        help='paid evidence selection before each annotation: auto (default) for a recording with depth '
-                             'or a touch sensor (not a force/torque sensor alone), all for any recording with recorded '
-                             'fields beyond its cameras, off for none')
+                        help='paid evidence selection before each annotation: auto (default) for a recording with a '
+                             'touch sensor (not a force/torque sensor alone) or fields the prompt does not carry, all '
+                             'for any recording with recorded fields beyond its cameras, depth included, off for none')
 
 
 def persist(episodes, **overrides) -> dict:
