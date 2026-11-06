@@ -60,8 +60,11 @@ def finalize(run: Path, info: dict, slice_dir: Path, rc: int) -> None:
     m = dict(re.findall(r"(\w+)=\$?([\d.]+)", last))
     done_eps = sorted(p.stem for p in (run / "out").glob("episode_*.json")) if (run / "out").exists() else []
     hours = footage_hours(slice_dir, done_eps) if done_eps else 0.0
-    reserved = billed_cost(run, info)
-    complete = output_spend_complete(harness_out(run, info))
+    # the calls that merged data issues in the stitch spend under their own limit, outside the harness's replies
+    from label import issue_groups
+    grouping = issue_groups.spend(run / "issue_groups.json")
+    reserved = billed_cost(run, info) + grouping["cost_usd"]
+    complete = output_spend_complete(harness_out(run, info)) and grouping["complete"]
     cost = reserved if complete else None
     info.update({"status": "done" if rc == 0 else f"exit {rc}",
                  "finished_at": dt.datetime.now().isoformat(timespec="seconds"),

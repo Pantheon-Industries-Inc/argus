@@ -534,6 +534,21 @@ def cap_usd() -> float:
     return value if math.isfinite(value) and value >= 0 else CAP_USD
 
 
+def spend(cache_path: Path) -> dict:
+    """What the calls whose answers are kept in cache_path cost, {"cost_usd", "complete"}. Every call that was or may
+    have been billed is kept there once, by fingerprint, however many stitches read its answer. complete is false while
+    a cost is an estimate or the file cannot be read."""
+    path = Path(cache_path)
+    if not path.is_file():
+        return {"cost_usd": 0.0, "complete": True}
+    try:
+        requests = [answer.get("request") or {} for answer in json.loads(path.read_text())["answers"].values()]
+        cost = math.fsum(float(request.get("cost_usd") or 0) for request in requests)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"cost_usd": 0.0, "complete": False}
+    return {"cost_usd": cost, "complete": not any(request.get("cost_is_conservative_estimate") for request in requests)}
+
+
 def recording_seconds(result: dict) -> float | None:
     ends = [_num(p.get("t1_s")) for p in (result.get("config") or {}).get("pieces") or [] if isinstance(p, dict)]
     ends = [e for e in ends if e is not None]

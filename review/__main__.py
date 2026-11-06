@@ -309,6 +309,16 @@ def build_review_board(job: Path, eps: Path, long_eps, info: dict, dataset: str,
     return result
 
 
+def add_grouping_cost(info: dict, job: Path, total: float, reserved: float, complete: bool) -> None:
+    """run.json's cost with the calls that merged data issues in the stitch (label/issue_groups.py), which spend under
+    their own limit and so are not in the labelling's receipts."""
+    from label import issue_groups
+    grouping = issue_groups.spend(job / 'issue_groups.json')
+    complete = complete and grouping['complete']
+    info.update(issue_groups=grouping, cost_usd=total + grouping['cost_usd'] if complete else None,
+                reserved_cost_usd=reserved + grouping['cost_usd'], cost_complete=complete)
+
+
 # python -m review COMMAND: a command of its own, picked by the first argument before the review's options are read.
 # seam asks, once per candidate cut of recordings stitched without a shared window, whether one task continues
 # across it (label/seam.py)
@@ -519,6 +529,7 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
                                                        'max_tokens': a.max_tokens, 'cap_usd': a.cap})
     write_atomic(run_dir / "run.json", info, indent=1)
     label_rc = 0
+    costs = None
     try:
         remaining = dictionary_stage.remaining_label_budget(job, a.cap)
         smallest = smallest_unit_reserve(job, run_dir / 'out')
@@ -552,12 +563,16 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
                     reserved_cost_usd=label_cost + spend['reserved_usd'],
                     cost_complete=complete)
         write_atomic(run_dir / "run.json", info, indent=1)
+        costs = (total, label_cost + spend['reserved_usd'], complete)
         st = build_review_board(job, eps, long_eps, info, dataset, a.rig, rep.get('packaging'))
+        add_grouping_cost(info, job, *costs)
         label_rc = label_rc or bool(st['incomplete'] or st['unlabelled'])
         info.update(status='failed' if label_rc else 'done', finished_at=now())
         write_atomic(run_dir / 'run.json', info, indent=1)
         write_atomic(job / 'run_final/run.json', info, indent=1)
     except BaseException as error:
+        if costs:
+            add_grouping_cost(info, job, *costs)
         info.update(status='interrupted' if isinstance(error, KeyboardInterrupt) else 'failed', finished_at=now(),
                     error=f'{type(error).__name__}: {error}'[:500])
         write_atomic(run_dir / 'run.json', info, indent=1)

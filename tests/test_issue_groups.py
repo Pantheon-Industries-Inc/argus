@@ -263,3 +263,57 @@ def test_the_board_lists_every_report_of_a_grouped_issue():
     r = subprocess.run([shutil.which("node"), str(repo / "tests" / "issue_groups.js"),
                         str(repo / "board" / "index.html")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def _kept_answer(path, cost, *, estimate=False):
+    ig.Cache(path).put("fingerprint", {"text": "{}", "request": {"cost_usd": cost, "cost_is_conservative_estimate": estimate}})
+
+
+@pytest.mark.parametrize("estimate", [False, True])
+def test_a_reviews_run_json_counts_the_grouping_calls(tmp_path, monkeypatch, estimate):
+    import h5py
+    import numpy as np
+    from label import dictionary_stage
+    from review import __main__ as rv
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    with h5py.File(upload / "recording.h5", "w") as source:
+        source.attrs["fps"] = 10
+        source.create_dataset("images/top", data=np.full((12, 36, 64, 3), 60, np.uint8))
+    job = tmp_path / "job"
+
+    def board(job, *args, **kwargs):
+        _kept_answer(job / "issue_groups.json", 0.25, estimate=estimate)
+        (job / "run_final").mkdir(exist_ok=True)
+        return {"incomplete": [], "unlabelled": []}
+    monkeypatch.setattr(dictionary_stage, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(rv, "run_step", lambda *a, **k: 0)
+    monkeypatch.setattr(rv, "build_review_board", board)
+    monkeypatch.setattr("sys.argv", ["review", "--data", str(upload), "--rig", "ego_head", "--out", str(job)])
+    assert rv.main() == 0
+    for path in (job / "run" / "run.json", job / "run_final" / "run.json"):
+        info = json.loads(path.read_text())
+        assert info["reserved_cost_usd"] == pytest.approx(0.25)
+        assert info["cost_usd"] == (None if estimate else pytest.approx(0.25))
+        assert info["cost_complete"] is (not estimate)
+
+
+def test_a_staged_runs_cost_counts_the_grouping_calls(tmp_path):
+    from label.finalize import finalize
+    run = tmp_path / "run"
+    (run / "parts").mkdir(parents=True)
+    (run / "log.txt").write_text("done=0\n")
+    _kept_answer(run / "issue_groups.json", 0.25)
+    info = {"kind": "full", "pieces": {"episode_0": ["episode_0_part1"]}}
+    finalize(run, info, tmp_path, 0)
+    assert json.loads((run / "run.json").read_text())["cost_usd"] == pytest.approx(0.25)
+
+
+def test_a_call_is_counted_once_however_many_answers_read_it_and_unreadable_is_incomplete(tmp_path):
+    path = tmp_path / "issue_groups.json"
+    assert ig.spend(path) == {"cost_usd": 0.0, "complete": True}
+    _kept_answer(path, 0.25)
+    _kept_answer(path, 0.25)
+    assert ig.spend(path) == {"cost_usd": pytest.approx(0.25), "complete": True}
+    path.write_text("not json")
+    assert ig.spend(path) == {"cost_usd": 0.0, "complete": False}
