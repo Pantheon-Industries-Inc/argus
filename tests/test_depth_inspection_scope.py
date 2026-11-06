@@ -1,12 +1,13 @@
 """Depth alone does not buy an evidence selection call under --inspection auto (label/evidence_access.py
 inspection_reason); its pictures still ride in the request, and --inspection all still inspects it. The dry run
 records why each unit will or will not be inspected, and review counts it before spending."""
+import argparse
 import json
 
 import h5py
 import numpy as np
 
-from label import episode, evidence_access as ea
+from label import episode, evidence_access as ea, policy
 from prepare import formats
 
 
@@ -32,6 +33,15 @@ def test_a_depth_recording_is_not_inspected_by_default_and_is_with_all(tmp_path)
     assert auto['depth_s'] and 'depth' in auto['blocks']    # its pictures still ride in the request
     every = episode.build_request(home, inspect_evidence=True, inspection='all')
     assert every['evidence_access'] is not None and every['inspection_reason'] == 'all'
+
+
+def test_the_help_text_says_what_each_mode_inspects():
+    parser = argparse.ArgumentParser()
+    policy.add_arguments(parser)
+    text = next(a.help for a in parser._actions if '--inspection' in a.option_strings)
+    auto, _, every = text.partition(', all ')
+    assert 'touch sensor' in auto and 'fields the prompt does not carry' in auto
+    assert 'depth' not in auto and 'depth' in every
 
 
 def test_the_dry_run_plan_counts_units_by_reason(tmp_path):
