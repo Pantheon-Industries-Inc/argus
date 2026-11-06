@@ -34,9 +34,9 @@ Recently, [Midcentury AI](https://www.midcentury.xyz/blog/optimizing-argus) push
 
 <details><summary><b>Argus now labels depth, tactile and other modalities and grades how well each episode was executed</b> (October 2026)</summary>
 
-Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. Before it labels a recording, the model can make an inspection call that picks recorded fields to read at full rate, and by default it does so only when the frames and the prompt's readings cannot carry what matters, as with a touch sensor or a field the prompt does not carry, such as EgoDex hand poses.
+Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. Before labelling, the model can make an inspection call that selects recorded fields to read at full rate. By default Argus makes this call only for a recording with a touch sensor or a field the prompt omits, such as EgoDex hand poses.
 
-Depth is not inspected by default, because its pictures already go into the request, and inspecting it on the Unitree Go2 datasets cost about $0.11 an episode on top of a $0.15 label. Force/torque and other numeric channels reach the prompt as sampled readings and the times of their extremes. Choose [`--inspection all`](#settings) when a finding depends on exact depth, force or joint values. Before it spends, review prints how many requests carry an inspection and why, and run.json keeps the same counts.
+Depth is not inspected by default, because its pictures already go into the request, and inspecting it on the Unitree Go2 datasets cost about $0.11 an episode on top of a $0.15 label. The prompt carries force/torque and other numeric channels as sampled readings and the times of their extremes. Choose [`--inspection all`](#settings) when a finding depends on exact depth, force or joint values. Before it spends, review prints how many requests carry an inspection and why, and run.json keeps the same counts.
 
 Argus also scores each episode out of 10 for execution and outcome, and each subgoal for execution, deterministically from the annotations. Outcome measures whether the goal was reached and how far progress got, and execution weights cleanliness 75%, steadiness 15% and speed 10% ([`board/scores.py`](board/scores.py) calls them cleanliness, fluency and efficiency). A subgoal is a lasting state change the goal depends on, such as a block placed in the row, never a pick or a grasp.
 
@@ -47,6 +47,8 @@ Argus also scores each episode out of 10 for execution and outcome, and each sub
 To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).
 
 It is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode, with execution scores for each subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For tactile data, and for depth with `--inspection all`, the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
+
+Each request covers one recording, or one part of a long one. Argus samples a frame every 1.5s on teleop, 1s on UMI and 0.5s on human ego, plus the edges of still spans and the first and last frames, and tiles them into JPEG grids with one row per camera and one timestamped column per instant, four instants to a grid (six with one camera). Cells are 224 px wide on teleop, 320 px on UMI and 256 px on human ego. The first and last instants follow the grids at larger size, and the text adds the instruction as a claim to check, the recorded motion between instants and the sensor readings. A fixed prompt comes first, with rules for what counts as a data issue on each rig and variants for an instruction, timed subtasks and recorded state; human ego has its own output schema.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Pantheon-Industries-Inc/argus/refs/heads/main/media/architecture.svg?v=a088e8f800e6">
@@ -68,8 +70,8 @@ It is the only harness that combines native multi-format ingestion ([LeRobot's a
 | Tactile, inspected by default | Pressure, normal/shear force, contact arrays and optical tactile images support analysis of grip, contact distribution and surface motion. The model compares whole arrays, single cells and regions with video and gripper state, and reads optical tactile images at the moments they change most. Array shape alone does not establish anatomy or force, and response changes alone do not establish slip. |
 | Depth, inspected with `--inspection all` | Metric depth supports camera-relative distance and separation when units, calibration and temporal alignment are known. Relative depth remains relative. |
 | Proprioception and actions | Joint states, end-effector poses, gripper states and action trajectories provide motion context. Training targets keep their declared semantics and are not assumed to be executed commands. |
-| Other episode fields | Force/torque, numeric channels, event flags, waveform packets and structured metadata reach the prompt as their range over the recording, with a reading at each sampled instant when the sampling rate resolves the channel, and otherwise its window means or extremes. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
-| Task context | Instructions, annotations, calibration and the uploader's own metadata fields reach the prompt as claims, and the VLM checks each one against the recording. The statistics, storage offsets and dataset totals LeRobot writes into its metadata stay in the episode's context.json and out of the prompt. |
+| Other episode fields | The prompt gives each force/torque, numeric, event flag, waveform or structured metadata channel as its range over the recording, plus a reading at each sampled instant when the sampling rate resolves the channel, and otherwise its window means or extremes. [`--inspection all`](label/policy.py) also inspects a recording whose only extra fields are these. |
+| Task context | The prompt presents instructions, annotations, calibration and the uploader's own metadata fields as claims, and the VLM checks each one against the recording. The statistics, storage offsets and dataset totals LeRobot writes into its metadata stay in the episode's context.json and out of the prompt. |
 
 ## Install and review
 
@@ -81,7 +83,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. OpenRouter requests carry an app attribution header ([`OPENROUTER_APP_HEADERS`](label/harness.py)), so their usage counts toward Argus in OpenRouter's app rankings. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. OpenRouter requests carry an app attribution header ([`OPENROUTER_APP_HEADERS`](label/harness.py)). Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py).
 
 Annotate a dataset under a spending cap, then open its board. Add [`--free`](review/__main__.py) to build the base requests without model calls.
 
@@ -95,10 +97,6 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 
 **We strongly recommend defisheyeing fisheye footage before labelling it.** The model sees each sampled frame downscaled to one cell of a frame grid, a few hundred pixels wide, and a raw fisheye frame spends much of that cell on its black border and compressed edges.
 
-Some data issue severities are set by what may ship rather than by training impact. On [`handheld_gripper`](label/prompts.py), the operator using their own phone, a gripper set down or taken off while the work goes on, and visible bare-hand work are each filed as at least medium. There, any face in any camera is filed as medium under `face_visible`, as one timed issue per stretch, so the footage can be blurred over those stretches.
-
-On every rig, an idle stretch is a low data issue, enforced by the parser ([`idle_issues_low`](label/idle.py)), with the model's own rating kept in `severity_as_labelled`. An idle item that describes other activity, such as phone use, another person handling the objects, bare-hand work or a parked gripper, keeps the model's severity, as does a frozen or black camera.
-
 ### Settings
 
 | Setting | Default | Options |
@@ -106,25 +104,54 @@ On every rig, an idle stretch is a low data issue, enforced by the parser ([`idl
 | [`--field-dictionary`](review/__main__.py) | `off` | <img src="https://img.shields.io/badge/most_important_setting-b42318" alt="Most important setting"><br>**Turn on for recordings with unusual sensors.** `on` sends one text request per upload (at most $3, no frames) that asks a model what each recorded field beyond the cameras means, such as which signal is a touch sensor. Turn it on for tactile, audio, force or other custom streams whose names do not say what they are. Ordinary teleop, UMI and human ego recordings label well with it off, and fields are then labelled as recorded |
 | [`--model`](label/policy.py) | `openai/gpt-6-astra` | `openai/gpt-6.1-sol` (Sol 6.1), or `google/gemini-4-argon` (Gemini 4 Argon) with an OpenRouter key, priced from OpenRouter's published rates ([`label/pricing.py`](label/pricing.py)) |
 | [`--reasoning`](label/policy.py) | Medium for Astra, high for every other model | `none`, `minimal`, `low`, `medium`, `high` or `xhigh` |
-| [`--sample-fps`](label/policy.py) | A frame every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus the edges of still spans and the first and last frames; Sol 6.1 samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
+| [`--sample-fps`](label/policy.py) | The rig's period in the [Overview](#overview); Sol 6.1 samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
 | [`--inspection`](label/policy.py) | `auto`, for recordings with a touch sensor or with fields the prompt does not carry | `all` also inspects depth, force/torque, arm signals, actions and source metadata, for runs whose findings need exact values; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
 | [`--resolution-route`](label/harness.py) | `off`, every teleop episode at the narrow cells (224 px) with contact detail views and no routing call | `on` asks a small model, from the episode's task text alone, whether judging it needs fine detail such as lettering or which side of an object is up, and sends those episodes at 448 px |
-| [`--service-tier`](review/__main__.py) | Unset, the provider's default tier | `flex` sends the same request at half the price with lower priority, so a reply can take longer and a request can be rejected when the provider has no capacity. It is independent of `--model` and `--reasoning`, the cap reserves flex rates, and each label records the tier that served it, with counts in `.service_tier/counts.json` in the labels folder |
-| [`--flex-fallback`](review/__main__.py) | `off`: after about 4 minutes of retries a rejected unit stays unlabelled and unpaid, and a resume sends it again | `standard` sends it once at the standard tier, at twice the price, and the cap reserves that rate for every request. A flex request that timed out is never sent again at standard, since it may still be billed |
-| [`--allow-unverified-fees`](review/__main__.py) | Off: no request goes to a model whose published search fee could apply, since no cap can limit that fee | On sends those requests with a printed warning. Normal runs do not need it, because a request that sends no search option cannot be charged for one, which covers OpenAI, Claude and Gemini models. On or off, a run through OpenRouter stops at the first reply whose usage counts a search |
+| [`--service-tier`](review/__main__.py) | Unset, the provider's default tier | `flex` sends the same request at half the price with lower priority, and the provider can reject it when it has no capacity. It is independent of `--model` and `--reasoning`, the cap reserves flex rates, and each label records the tier that served it, with counts in `.service_tier/counts.json` in the labels folder |
+| [`--flex-fallback`](review/__main__.py) | `off`, and after about 4 minutes of retries a rejected unit stays unlabelled and unpaid, and a resume sends it again | `standard` sends it once at the standard tier, at twice the price, and the cap reserves that rate for every request. A flex request that timed out is never sent again at standard, since it may still be billed |
+| [`--allow-unverified-fees`](review/__main__.py) | Off, and no request goes to a model whose published search fee could apply, since no cap can limit that fee | On sends those requests with a printed warning. Normal runs do not need it, because a request that sends no search option cannot be charged for one, which covers OpenAI, Claude and Gemini models. On or off, a run through OpenRouter stops at the first reply whose usage counts a search |
 | [`--cap`](review/__main__.py) | $20 | The most labelling may spend, counting every call and outstanding reservation |
 | [`--max-minutes`](review/__main__.py) | All footage | Reads at most this many minutes of footage |
 | [`--dataset`](review/__main__.py) | The name of `--data` | The name shown on the board and told to the model |
 | [`--dataset-note`](label/policy.py) | The source's own collection note, if any | A description of the recordings given to the model as context |
 | [`--max-tokens`](review/__main__.py) | 64,000 | The output limit of each labelling request; a smaller limit reserves less against the cap |
 | [`--timeout`](review/__main__.py) | 6060s | Idle limit for a labelling request's connection, at least 6060s (Cloudflare's 6000s idle limit plus a minute) |
-| [`--concurrency`](review/__main__.py) | All of them | The most labelling requests in flight at once. Argus sends every request at once ([`label/inflight.py`](label/inflight.py)), except that the first episode of each prompt variant goes alone, so the others find the shared instructions in the provider's prompt cache ([`cache_warmup`](label/harness.py)). A request holds its encoded frames until the reply arrives, at most about 70 MB, so set a number only on a machine short of memory. [`compare label`](compare/__main__.py) keeps 8, the number its published runs used |
+| [`--concurrency`](review/__main__.py) | All of them | The most labelling requests in flight at once. Argus sends every request at once ([`label/inflight.py`](label/inflight.py)), except that the first episode of each prompt variant goes alone, so the others find the shared instructions in the provider's prompt cache ([`cache_warmup`](label/harness.py)). A request holds its encoded frames until the reply arrives, at most about 70 MB, so set a number only on a machine short of memory. |
 | [`--jobs`](review/__main__.py) | 2 | Decode processes per preparation step |
 | [`--grouping`](review/__main__.py) | Inferred from file names | JSON such as `{"cam_folder": "cameras"}` or `{"take_folder": "takes"}`, for folders whose file names cannot tell separate takes from cameras of one take |
 | [`--free`](review/__main__.py) | Off | Builds the base requests and stops before any model call |
-| [`--board-clips`](review/__main__.py) | `on` | `off` decodes each camera and writes no viewing copy, so the board has no video to play |
+| [`--board-clips`](review/__main__.py) | `on` | `off` decodes each camera and writes no viewing copy |
 | [`--force`](review/__main__.py) | Off | Relabels every selected episode with new paid calls, keeping earlier replies and charges |
 | [`--retry-received EPISODE`](review/__main__.py) | None | Sends that episode's request again after an unusable reply the model wrote, or after a provider failure that has used its two automatic resends; repeat for each episode |
+
+Rerunning a review with the same [`--out`](review/__main__.py) folder resumes it and reuses every output whose inputs are unchanged, matched by content hash ([`label/content_identity.py`](label/content_identity.py)). [`--free`](review/__main__.py) previews only the base requests, without field interpretation, routing, inspection or sensor cards.
+
+> [!NOTE]
+> `python -m review` does all post-processing itself once the labelling requests return, and nothing else needs to be run. It stitches long recordings, merges data issues that several parts reported, and builds the review board. Before publishing a result, it removes the phrases the model writes about the labelling itself, such as "in this supplied window" ([`label/wording.py`](label/wording.py)), and drops a sentence only when every word in it is about the labelling.
+
+## Labels
+
+Below is part of the label of MolmoAct2 episode 017777 ([`configs/examples/example_teleop_arms.json`](configs/examples/example_teleop_arms.json)), two of its 62 timeline steps and two of its 7 key events. The instruction asks for the scanned items to end in the basket, and the operator leaves them on the table. A subgoal is a key event of kind `subgoal_complete`.
+
+```json
+{
+  "completion": {
+    "task_completed": "failure",
+    "success_predicate": "Each of the four packaged items has been picked up and scanned, and all four scanned items are in the basket.",
+    "reason": "The four items are scanned, but the demonstration deliberately empties the basket and leaves the scanned items on the right-hand tabletop instead."
+  },
+  "timeline": [
+    {"start_s": 31.5, "end_s": 34.5, "arm": "right", "action": "rotate and present packet to scanner", "object": "green Kleenex tissue packet", "destination": "barcode scanner", "spatial_relation": "over scanning window", "contribution": "advancing", "progress": 0.3},
+    {"start_s": 35.5, "end_s": 36.5, "arm": "right", "action": "set down and release", "object": "green Kleenex tissue packet", "destination": "far-right table", "spatial_relation": "beside orange packet", "contribution": "advancing", "progress": 0.3, "notes": "Release inferred between 36 and 37.5 s; scanner window glows cyan."}
+  ],
+  "key_events": [
+    {"t_s": 22.5, "label": "All four items staged outside the now-empty basket", "kind": "subgoal_complete", "outcome": "success"},
+    {"t_s": 72.0, "label": "All scanned items left on the right-hand table, not in the basket", "kind": "terminal_state", "outcome": "success"}
+  ]
+}
+```
+
+### Task verdicts
 
 Argus annotates every recording as the list of tasks it observes, and judges each task against what the dataset claims about it. Instructions and timed subtasks come from the dataset's task fields, and a LeRobot text column counts only when its name marks it as the task, such as `language_instruction`. A task text that spans the whole recording is never a subtask, and becomes the recording's instruction when it has none.
 
@@ -132,62 +159,31 @@ A teleop or UMI recording with an instruction is judged as a whole against it, a
 
 A human ego clip of one task takes that task's outcome unless the dataset provides timed subtasks, and a clip of several tasks gets no overall verdict. When the annotation gives a goal, the verdict is whether the clip fully reached it. Without a goal, a task cut off by the end of the clip is named after the work the clip shows.
 
-Argus cuts a recording too long for one request (450s at default sampling) at still moments, labels each part and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s, and a task or step sharing at least half of its seconds in the overlap with one from the other side is joined into one, however differently the two requests worded them. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)).
+### Long recordings
+
+Argus cuts a recording too long for one request (450s at default sampling) at still moments, labels each part and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s, and the stitch joins a task or step to its counterpart from the other side when the two share at least half of the shorter one's seconds in the overlap, however differently the requests worded them. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)).
 
 A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed teleop or UMI recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. A small text-only request, with its own $5 limit outside `--cap`, merges data issues that several parts report ([`label/issue_groups.py`](label/issue_groups.py)).
 
-> [!NOTE]
-> `python -m review` does all post-processing itself once the labelling requests return. It stitches a long recording's parts onto one timeline, merges data issues that several parts reported, and builds the review board. Before a result is published, it also removes the phrases the model writes about the labelling itself, such as "in this supplied window" ([`label/wording.py`](label/wording.py)), and it drops a sentence only when every word in it is about the labelling. Nothing else needs to be run.
+### Data issue severity
 
-Rerunning a review with the same [`--out`](review/__main__.py) folder resumes it and reuses every output whose inputs are unchanged, matched by content hash ([`label/content_identity.py`](label/content_identity.py)). [`--free`](review/__main__.py) previews only the base requests, without field interpretation, routing, inspection or sensor cards.
+Some severities are fixed minimums, independent of training impact. On [`handheld_gripper`](label/prompts.py), the prompt rates the operator using their own phone, a gripper set down or taken off while the work goes on, and visible bare-hand work at least medium. It rates any face in any camera medium under `face_visible`, with one timed issue per stretch.
+
+On every rig, the parser ([`idle_issues_low`](label/idle.py)) rates an idle stretch low and keeps the model's own rating in `severity_as_labelled`. An idle item that describes other activity, such as phone use, another person handling the objects, bare-hand work or a gripper set down, keeps the model's severity, as does a frozen or black camera.
 
 ## Results and further use
 
 > [!IMPORTANT]
-> The board is the canonical dashboard for Argus annotations, QC results and robot-data episodes. When a person or a
-> coding agent is asked for a dashboard, visualizer or HTML page of such data, it serves the data with
-> [`board serve`](board/serve.py) or [`board static site`](board/static.py) and extends the
-> [viewer](board/index.html) where a view is missing. A new page is written from scratch only when someone explicitly
-> asks for one.
+> The board is the canonical dashboard for Argus annotations, QC results and robot-data episodes. Serve the data with [`board serve`](board/serve.py) or [`board static site`](board/static.py), and extend the [viewer](board/index.html) where a view is missing rather than writing a new page.
 
-Live and static boards share one [viewer](board/index.html), which overlays behavioral and sensor annotations on the footage with the supporting measurements beside it. The caption over the video names the step under way, with one line per side when the arms, grippers or hands do different things at once ([`label/prompts.py`](label/prompts.py)). Each step holds one action, so a hand-over stays several steps, and [`tests/test_density.py`](tests/test_density.py) fails when a change to these rules comes without a paired measurement ([`checks/density.py`](checks/density.py)) showing the steps per minute held.
+Live and static boards share one [viewer](board/index.html), which overlays behavioral and sensor annotations on the footage with the supporting measurements beside it. The caption over the video names the step under way, with one line per side when the arms, grippers or hands do different things at once ([`label/prompts.py`](label/prompts.py)). Each step holds one action, and a hand-over spans several steps.
 
 The banner over the dense timeline gives the model's reading of the episode under the recording's instruction. On an inference rollout it also shows the policy's instruction, whether the rollout succeeded, and how long the policy held the robot still while it computed its action chunks. Below the footage, an episode page lists the outcome and scores, the problems, one table of subgoals and key events, the sensors and scene, then every check that ran. The same findings export as episode JSON, filtered JSON Lines and static sites.
 
 For a run in progress, give a dataset's manifest entry a [`target`](board/build.py) such as `{"episodes": 2682, "hours": 101.9}`, and the board shows the episodes and hours labelled so far against it, even before its first episode is labelled. A page open on `board serve` checks for a rebuild every 30s and updates its list and totals in place, keeping the open episode.
 
 > [!TIP]
-> To find out which tasks are in your labelled data and how many hours you have of each, run [`python -m label.catalog`](label/catalog.py) `--label L --out OUT`. It places every labelled task in a task family, a coarse task and a specific task. A specific task is one action on one kind of object, so picking up a rubber duck and picking up a stuffed animal are counted separately. Each row lists its hours, the hours in which the task succeeded, and how many recordings it appears in. When you label more data, [`--base`](label/catalog.py) adds it to your last catalog under the same task names.
-
-Below is an excerpt from a pressure glove episode's downloadable JSON. In the list and on the video, the viewer shows a finding's `video_card` text when it has one, otherwise its `list_copy`, otherwise its own headline and detail. Evidence IDs resolve to recorded streams and samples in the full export.
-
-```json
-{
-  "sensor_evidence": {
-    "findings": [
-      {
-        "start_s": 2.63,
-        "end_s": 3.03,
-        "headline": "Thumb loading likely eases more than index finger loading",
-        "detail": "As the cup moves away, the thumb response weakens substantially while the index finger response remains elevated.",
-        "confidence": "medium",
-        "video_card": {
-          "version": 1,
-          "headline": "The thumb likely presses less.",
-          "detail": "The index finger keeps pressing as the cup moves away."
-        },
-        "evidence": [
-          {
-            "sensor_id": "mechanics:signal:right_pressure",
-            "series_id": "mechanics:signal:right_pressure:derivation:regional_response:0",
-            "time_s": [2.63, 2.83, 2.93]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+> To count the tasks in your labelled data and the hours of each, run [`python -m label.catalog`](label/catalog.py) `--label L --out OUT`. It places every labelled task in a task family, a coarse task and a specific task. A specific task is one action on one kind of object, so picking up a rubber duck and picking up a stuffed animal are counted separately. Each row lists its hours, the hours in which the task succeeded, and how many recordings it appears in. When you label more data, [`--base`](label/catalog.py) adds it to your last catalog under the same task names.
 
 Public exports (the static site, downloads and [`/api/export`](board/serve.py)) name the uploader's own metadata (file attributes, sidecar fields, publisher fields) but leave out its values, because no filter can recognize every secret a person writes there. Add [`--publish-uploader-values`](board/serve.py) to `board serve` or `board static site` to publish them. In every field, exports also redact access attributes, recognizable credential values and private access locations.
 
@@ -253,7 +249,7 @@ uv run python -m board static site --board data/review/mine --clips data/review/
 
 **Review output and resuming**
 
-A free review stops after the prepared [`episodes/`](review/__main__.py) and base requests in [`dry/`](review/__main__.py). Paid annotation adds model inputs and receipts in [`run/`](review/__main__.py), rejoined labels in [`run_final/`](review/__main__.py), and the board. `review` exits 1 when any unit failed, and still builds the board. The viewing copies `--board-clips off` skips are the most CPU a review spends. After annotation, one text-only call picks at most two sensor findings to overlay at a time and rewrites every finding in plain English.
+A free review stops after the prepared [`episodes/`](review/__main__.py) and base requests in [`dry/`](review/__main__.py). Paid annotation adds model inputs and receipts in [`run/`](review/__main__.py), rejoined labels in [`run_final/`](review/__main__.py), and the board. `review` exits 1 when any unit failed, and still builds the board. The viewing copies `--board-clips off` skips are the most CPU a review spends, and without them the board has no video. After annotation, one text-only call picks at most two sensor findings to overlay at a time and rewrites every finding in plain English.
 
 A resumed review refuses changed source data, inputs, or preparation and annotation settings, which need a fresh `--out`. After a code change, Argus verifies a recording labelled in one request against its saved receipt and rebinds the reply without another call.
 
@@ -285,11 +281,9 @@ uv run python -m gate prepare
 uv run python -m gate label --kind full --cap 20
 ```
 
-Comparison caps apply per model run and gate caps per recording setup. Because sampling can differ by model, compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py) supplies a reference annotation, and [`--routes`](compare/__main__.py) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases, and [`gate score`](gate/score.py) evaluates the supplied runs. Its text checks count a word only where its own sentence asserts it and do not test meaning. Ambiguous object claims count as unmet and are flagged for review.
+Comparison caps apply per model run and gate caps per recording setup. Because sampling can differ by model, compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py) supplies a reference annotation, and [`--routes`](compare/__main__.py) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases, and [`gate score`](gate/score.py) evaluates the supplied runs.
 
-Comparisons distinguish missing responses from replies that failed to parse. Cost reports separate verified charges from unresolved reservations, and report a gate cost rate only when every invoice is verified. Cold-cost estimates require the default model and a single paid attempt per unit.
-
-[`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs the offline tests; viewer tests also require Node.js. [`tests/test_layout_fits.py`](tests/test_layout_fits.py) checks in headless Chrome at 390, 1200, 1440 and 1920px that no text overflows its box, and skips without Chrome. [`tests/test_setup_matrix.py`](tests/test_setup_matrix.py) runs a generated recording of every supported setup through `review` and the export against an offline model, and fails on any recording, camera, signal, field or finding dropped without a recorded reason. CI splits the same command into eight parallel shards ([`tests/shard_times.json`](tests/shard_times.json)), and [`ARGUS_TEST_SHARD=1/8`](tests/sharding.py) runs CI's first shard locally. Secret scans cover the committed tree and reachable history.
+[`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs the offline tests; viewer tests also require Node.js. [`tests/test_setup_matrix.py`](tests/test_setup_matrix.py) runs a generated recording of every supported setup through `review` and the export against an offline model, and fails on any recording, camera, signal, field or finding dropped without a recorded reason.
 
 </details>
 
