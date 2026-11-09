@@ -62,6 +62,7 @@
  "tests/test_dictionary_roles.py": 0.1,
  "tests/test_dictionary_transport.py": 0.0,
  "tests/test_dispatch_integrity_v5.py": 3.0,
+ "tests/test_dispatch_receipts.py": 3.0,
  "tests/test_display.py": 2.0,
  "tests/test_edit_list.py": 1.1,
  "tests/test_encrypted_video.py": 0.1,

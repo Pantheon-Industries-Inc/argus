@@ -24,6 +24,7 @@ prices them from the labels' own camera layout.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import gzip
 import json
@@ -311,14 +312,15 @@ def read_answer(text: str) -> dict:
                 "reply": str(text)[:1000]}
 
 
-def ask(content: list, chosen: dict, key: str, timeout: int) -> tuple[dict, dict]:
+def ask(content: list, chosen: dict, key: str, timeout: int, on_generation_id=None) -> tuple[dict, dict]:
     """(verdict, the call's record) for one request, sent once (label/harness.py call_model_once: a call that may have
-    been billed is never sent again; one that provably cost nothing is retried there)."""
+    been billed is never sent again; one that provably cost nothing is retried there). on_generation_id gets the
+    provider's generation id as soon as the response headers name it."""
     from label import harness
     from label.errors import DispatchError
     try:
         resp = harness.call_model_once(content, chosen["model"], chosen["reasoning"], key, chosen["max_tokens"],
-                                       timeout)
+                                       timeout, **({"on_generation_id": on_generation_id} if on_generation_id else {}))
     except DispatchError as error:
         return ({"same_task": "unclear", "evidence": "", "reply_problem": f"the request failed: {error}"[:300]},
                 {"dispatch": "failed", "verified_unpaid": bool(getattr(error, "verified_unpaid", False))})
@@ -403,9 +405,7 @@ def rejoin(result: dict, seams: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from label import harness
-    from label.pieces import at_cut
-    ap = argparse.ArgumentParser(prog="python -m review seam", description=__doc__,
+    ap =argparse.ArgumentParser(prog="python -m review seam", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--label", type=Path, required=True, help="a stitched result, a folder of them, or export rows")
     ap.add_argument("--footage", type=Path, default=None,
@@ -423,6 +423,57 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if not math.isfinite(a.cap) or a.cap <= 0:
         ap.error("--cap must be finite and positive")
+    with contextlib.ExitStack() as held:
+        if not a.dry_run:
+            # one seam check writes a seams file at a time, so two never send the same request
+            held.enter_context(_exclusive(a.out))
+        return _run(a, ap)
+
+
+@contextlib.contextmanager
+def _exclusive(out: Path):
+    import fcntl
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out.with_name(f".{out.name}.lock"), "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(f"another seam check is writing {out}; nothing was sent") from None
+        yield
+
+
+# what a cut whose request was sent before but whose reply was never kept holds: the call may have been billed, so the
+# cut is never asked again and stays apart; its receipt keeps the call's full bound until OpenRouter says what it
+# billed (reconcile)
+PENDING_PROBLEM = ("the request was sent and its reply was not kept; it may have been billed, so it is not sent "
+                   "again")
+
+
+def reconcile(seams: dict, keys, *, lookup=None) -> float:
+    """Settle each pending seam receipt that names its generation at what OpenRouter billed for it; returns the hold
+    released. A receipt with no id, or one OpenRouter has no finished record of yet, keeps its full hold."""
+    from label import harness
+    lookup, released = lookup or harness.openrouter_generation, 0.0
+    for cuts in seams.values():
+        for verdict in cuts.values():
+            request = verdict.get("request") or {}
+            if (not verdict.get("pending") or not request.get("generation_id")
+                    or request.get("cost_source") == "generation lookup"):
+                continue
+            data = lookup(request["generation_id"], keys)
+            cost = harness._settled_generation_cost(data)
+            if cost is None:
+                continue
+            released += float(request.get("reserved_usd") or 0.0) - cost
+            request.update(cost_usd=cost, cost_source="generation lookup",
+                           generation_lookup={k: data.get(k) for k in (
+                               "total_cost", "cancelled", "finish_reason", "tokens_completion")})
+    return released
+
+
+def _run(a, ap) -> int:
+    from label import harness
+    from label.pieces import at_cut
     saved = json.loads(a.out.read_text()) if a.out.is_file() else {}
     seams = saved.get("seams") or {}
     work, recordings, totals = [], 0, {"low_usd": 0.0, "high_usd": 0.0, "images": 0, "input_tokens": 0}
@@ -465,8 +516,16 @@ def main(argv: list[str] | None = None) -> int:
     lock, spent = threading.Lock(), {"usd": float(saved.get("cost_usd") or 0.0)}
 
     def save():
-        write_atomic(a.out, {"version": SEAMS_VERSION, "seams": seams, "cost_usd": spent["usd"],
-                             "window_s": WINDOW_S, "fps": FPS, "cell_w": CELL_W})
+        # durable (flushed to disk), since a pending receipt must outlive a kill right after it is written
+        harness.persist_final_claim(a.out, {"version": SEAMS_VERSION, "seams": seams, "cost_usd": spent["usd"],
+                                            "window_s": WINDOW_S, "fps": FPS, "cell_w": CELL_W})
+
+    if keys and any(v.get("pending") for cuts in seams.values() for v in cuts.values()):
+        released = reconcile(seams, keys)
+        if released:
+            spent["usd"] -= released
+            save()
+            print(f"${released:.4f} of holds on unanswered seam checks released at OpenRouter's billed cost", flush=True)
 
     def one(job):
         name, result, sync, candidate, chosen = job
@@ -477,23 +536,38 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name} at {candidate['cut_s']:g}s: no request, {type(error).__name__}: {error}"[:400], flush=True)
             return None
         bound = harness.final_cost_bound(content, chosen["max_tokens"], model=chosen["model"])
+        cut = str(round(candidate["cut_s"], 3))
+        request = {"model": chosen["model"], "reasoning": chosen["reasoning"], "max_tokens": chosen["max_tokens"],
+                   "reserved_usd": bound, **holds}
         with lock:
             if spent["usd"] + bound > a.cap:
                 return False
             spent["usd"] += bound        # held until the reply says what it cost
-        verdict, call = ask(content, chosen, keys[0], a.timeout)
+            # the receipt is durable before the request leaves: a kill after the provider took it keeps the cut's
+            # hold and never asks it again
+            seams.setdefault(name, {})[cut] = {"same_task": "unclear", "evidence": "", "pending": True,
+                                               "reply_problem": PENDING_PROBLEM,
+                                               "request": {**request, "dispatch": "claimed", "cost_usd": None}}
+            save()
+
+        def note(generation_id):
+            with lock:
+                seams[name][cut]["request"]["generation_id"] = generation_id
+                save()
+        verdict, call = ask(content, chosen, keys[0], a.timeout, on_generation_id=note)
         cost = call.get("cost_usd")
         with lock:
             # a call whose cost is not known stays held at its bound, as the labelling harness keeps a reservation
             spent["usd"] += (float(cost) - bound) if cost is not None else (
                 -bound if call.get("verified_unpaid") else 0.0)
             if call.get("verified_unpaid"):
+                del seams[name][cut]
+                if not seams[name]:
+                    del seams[name]
                 save()
                 return None         # it cost nothing, so a later run asks again
             # a verdict is kept once paid for (or possibly paid for), so a later run never sends it again
-            seams.setdefault(name, {})[str(round(candidate["cut_s"], 3))] = {
-                **verdict, "request": {"model": chosen["model"], "reasoning": chosen["reasoning"],
-                                       "max_tokens": chosen["max_tokens"], "reserved_usd": bound, **holds, **call}}
+            seams[name][cut] = {**verdict, "request": {**request, **call}}
             save()
         return True
 
