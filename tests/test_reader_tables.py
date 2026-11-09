@@ -4,6 +4,7 @@ delimiter or a stray text cell, its placement on the frames says when it is assu
 its rate, and a bad cell is flagged where it is. Small synthetic files only."""
 from __future__ import annotations
 
+import time
 import io
 import json
 import tarfile
@@ -210,6 +211,7 @@ def test_a_sensor_file_copied_over_at_the_same_size_and_time_is_read_again(tmp_p
     st = os.stat(p)
     assert st.st_size == os.stat(later).st_size
     assert f.sensor_times(p)[0] - T0 == pytest.approx(0.0, abs=0.01)
+    time.sleep(0.05)  # a fast runner can write twice inside one kernel clock tick, leaving the stat unchanged
     shutil.copyfile(later, p)
     os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
     assert f.sensor_times(p)[0] - T0 == pytest.approx(100.0, abs=0.01)

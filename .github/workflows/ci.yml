@@ -24,7 +24,7 @@ jobs:
   # (tests/sharding.py); "tests" passes only when every shard does.
   shard:
     name: tests ${{ matrix.shard }}/8
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -95,7 +95,7 @@ jobs:
   tests:
     needs: shard
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Every shard passed
@@ -104,7 +104,7 @@ jobs:
         run: test "$RESULT" = success
 
   secrets:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

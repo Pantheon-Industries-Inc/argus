@@ -5,6 +5,7 @@ with another."""
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -97,6 +98,7 @@ def test_clip_cutting_refuses_an_ffmpeg_too_old_for_demux_time_base(tmp_path, li
 def test_an_ffmpeg_upgraded_in_place_is_read_again(tmp_path):
     path = _ffmpeg_saying(tmp_path, "ffmpeg version 5.1.6 Copyright")
     assert tools.ffmpeg_version(path) == (5, 1)
+    time.sleep(0.05)  # a fast runner can write twice inside one clock tick, leaving mtime unchanged
     _ffmpeg_saying(tmp_path, "ffmpeg version 7.1.1 Copyright")
     assert tools.ffmpeg_version(path) == (7, 1)
 

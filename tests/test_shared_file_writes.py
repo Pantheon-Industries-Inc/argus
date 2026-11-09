@@ -74,6 +74,7 @@ def test_a_memo_keeps_a_result_only_for_the_version_it_read(tmp_path):
     first = version()
     assert read(str(path), first) == 'one' and read(str(path), first) == 'one'
     assert len(calls) == 1
+    time.sleep(0.05)  # a fast runner can write twice inside one kernel clock tick, leaving the stat unchanged
     path.write_text('two')
     assert read(str(path), version()) == 'two'
 

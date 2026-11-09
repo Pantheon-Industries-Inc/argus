@@ -1,3 +1,4 @@
+import time
 import io
 import json
 import os
@@ -16,6 +17,7 @@ def test_replaced_media_has_new_identity_and_cached_digest(tmp_path):
     clip.write_bytes(b'aaaa')
     before = clip.stat()
     first = static.src_sig(clip)
+    time.sleep(0.05)  # a fast runner can write twice inside one kernel clock tick, leaving the stat unchanged
     clip.write_bytes(b'bbbb')
     os.utime(clip, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert static.src_sig(clip) != first
