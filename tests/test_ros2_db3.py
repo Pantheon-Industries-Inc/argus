@@ -122,3 +122,51 @@ def test_db3_in_subfolder_named_by_bag_and_metadata_consumed(tmp_path):
     assert len(report['episodes']) == 1, report
     assert 'walk' in report['episodes'][0]['episode_id']
     assert any('ROS 2 bag walk' in line for line in report['used']), report['used']
+
+
+def _digests(root: Path) -> dict:
+    import hashlib
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob('*')) if p.is_file()}
+
+
+@pytest.mark.parametrize('mcap_name', ['session.mcap', 'Session.MCAP'])
+def test_db3_bag_beside_an_mcap_of_its_name_keeps_both_recordings(tmp_path, mcap_name):
+    """A bag whose MCAP name is already taken by an uploaded MCAP gets another name: the conversion once wrote through
+    the staged link to that MCAP, overwrote the upload's own file and lost one recording without a word."""
+    from prepare import ros2_bag
+    other = tmp_path / 'other'
+    other.mkdir()
+    _write_db3(other / 'later_0.db3', 5 * ROWS)
+    root = tmp_path / 'upload'
+    root.mkdir()
+    _write_db3(root / 'session_0.db3', 0)
+    ros2_bag.write_mcap({'files': [other / 'later_0.db3']}, root / mcap_name)
+    before = _digests(root)
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'bag', 900)
+    assert _digests(root) == before
+    assert not report['failed'], report
+    assert len(report['episodes']) == 2, report
+    import hashlib
+    videos = set()
+    for e in report['episodes']:
+        sources = json.loads((tmp_path / 'episodes' / e['episode_id'] / 'sources.json').read_text())
+        assert [s['n_frames'] for s in sources.values()] == [ROWS], sources
+        videos.add(hashlib.sha256(Path(next(iter(sources.values()))['packed']).read_bytes()).hexdigest())
+    # two recordings of different frames, not one recording read twice
+    assert len(videos) == 2
+    assert any('ROS 2 bag session (session_0.db3)' in line for line in report['used']), report['used']
+
+
+def test_staged_bag_never_writes_through_an_existing_path(tmp_path):
+    """The converter opens its MCAP exclusively, so a file or link already at the target is refused, never written."""
+    from prepare import ros2_bag
+    root = tmp_path / 'upload'
+    root.mkdir()
+    _write_db3(root / 'walk_0.db3', 0)
+    victim = tmp_path / 'victim.mcap'
+    victim.write_bytes(b'keep me')
+    (tmp_path / 'link.mcap').symlink_to(victim)
+    with pytest.raises(FileExistsError):
+        ros2_bag.write_mcap({'files': [root / 'walk_0.db3']}, tmp_path / 'link.mcap')
+    assert victim.read_bytes() == b'keep me'
