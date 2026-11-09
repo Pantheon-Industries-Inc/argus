@@ -700,7 +700,8 @@ def _carry_part_billing(result: dict, parts: list) -> None:
         route['cost_is_conservative_estimate'] = True
 
 
-def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None = None) -> dict:
+def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None = None, *,
+               allowance: float | None = None) -> dict:
     """out/: the short episodes' replies from src (job/run/out for a review, run/parts for python -m label) as they
     came, and one stitched result per long recording.
 
@@ -712,7 +713,9 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None
     --out JOB/seams.json) decide the joins at cuts without a shared window (join_across_cuts). The issues of each
     stitched recording that report one condition or one event several times (each part reporting a whole-take
     condition, or both parts reporting an event at a cut) are then grouped into one issue that keeps every report
-    (label/issue_groups.py), with the answers kept in job/issue_groups.json; ARGUS_ISSUE_GROUPS=0 turns that off."""
+    (label/issue_groups.py), with the answers kept in job/issue_groups.json; ARGUS_ISSUE_GROUPS=0 turns that off.
+    allowance is what the run's --cap leaves for those calls after every earlier charge and open reservation; a call
+    it cannot cover is not asked, its issues stay as they came, and res["grouping_skipped"] counts such calls."""
     src = Path(src) if src is not None else Path(job) / "run" / "out"
     seams = None
     if (Path(job) / "seams.json").is_file():
@@ -750,7 +753,7 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None
     out.mkdir(parents=True, exist_ok=True)
     res = {"stitched": 0, "incomplete": [], "unlabelled": []}
     from label import issue_groups
-    grouping_budget = issue_groups.Budget(issue_groups.cap_usd())
+    grouping_budget = issue_groups.Budget(issue_groups.cap_usd(), allowance)
     # A short episode's files are published as the run holds them: each is copied, and one the run no longer holds
     # is removed, so a copy left from an earlier run never stands beside the label that replaced it. Readers choose
     # the active record from the same files in either folder (annotation_record), and a newer receipt beside an
@@ -824,6 +827,10 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None
             continue
         write_atomic(out / f"{ep}.json", unlabelled(Path(eps) / ep, failed, missing), indent=None)
         res["unlabelled"].append(ep)
+    if grouping_budget.refused:
+        res["grouping_skipped"] = {"calls": grouping_budget.refused, "why": grouping_budget.refusal()}
+        print(f"issue grouping skipped for {grouping_budget.refused} candidates: {grouping_budget.refusal()}",
+              flush=True)
     return res
 
 

@@ -244,7 +244,7 @@ def test_review_records_label_failure_atomically(tmp_path, monkeypatch, failure)
     monkeypatch.setattr(clips, 'set_aside_failed', lambda *args: [])
     monkeypatch.setattr(clips, 'note_camera_problems', lambda *args: None)
     monkeypatch.setattr(pieces, 'write_units', lambda *args, **kwargs: [])
-    def stitch(*args):
+    def stitch(*args, allowance=None):
         assert json.loads((job / 'run/run.json').read_text())['status'] == 'running'
         if failure == 'stitch':
             raise RuntimeError('stitch failed')
