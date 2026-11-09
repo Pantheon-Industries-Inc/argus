@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import copy
 import hashlib
 import json
@@ -448,7 +449,14 @@ class Budget:
 
 
 class Cache:
-    """The answers by fingerprint, in memory and, given a path, in a JSON file written after every new answer."""
+    """The answers by fingerprint, in memory and, given a path, in a JSON file made durable (flushed to disk) after
+    every change.
+
+    The file is also the calls' receipt book: before a request is sent, claim() writes a pending receipt holding the
+    call's full bound, so a process killed after the provider took the request still has a record that the call may be
+    billed, and a later run never buys it again (PENDING_PROBLEM). Every change re-reads the file under an exclusive
+    lock (FILE.lock) first, so two processes sharing one file never send the same request twice or drop each other's
+    answers."""
 
     def __init__(self, path: Path | None = None):
         self.path, self.lock = (Path(path) if path else None), threading.Lock()
@@ -456,17 +464,88 @@ class Cache:
         if self.path and self.path.is_file():
             self.answers = (json.loads(self.path.read_text()) or {}).get("answers") or {}
 
+    @contextlib.contextmanager
+    def _held(self):
+        with self.lock:
+            if not self.path:
+                yield
+                return
+            import fcntl
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path.with_name(self.path.name + ".lock"), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if self.path.is_file():
+                    self.answers = (json.loads(self.path.read_text()) or {}).get("answers") or {}
+                yield
+
+    def _write(self) -> None:
+        if self.path:
+            from label.harness import persist_final_claim
+            persist_final_claim(self.path, {"version": VERSION, "answers": self.answers})
+
     def get(self, key: str):
         with self.lock:
             return copy.deepcopy(self.answers.get(key))
 
     def put(self, key: str, value: dict) -> None:
-        from label.atomic import write_atomic
-        with self.lock:
+        with self._held():
             self.answers[key] = copy.deepcopy(value)
-            if self.path:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                write_atomic(self.path, {"version": VERSION, "answers": self.answers}, indent=None)
+            self._write()
+
+    def claim(self, key: str, value: dict):
+        """Write value (a pending receipt) under key unless the key already holds an answer or a claim; returns that
+        answer or claim, or None when this caller now holds the key and may send the request."""
+        with self._held():
+            if key in self.answers:
+                return copy.deepcopy(self.answers[key])
+            self.answers[key] = copy.deepcopy(value)
+            self._write()
+            return None
+
+    def note_generation(self, key: str, generation_id: str) -> None:
+        """Record on a pending receipt the provider's generation id, as soon as the response headers name it."""
+        with self._held():
+            saved = self.answers.get(key)
+            if isinstance(saved, dict) and saved.get("pending"):
+                saved.setdefault("request", {})["generation_id"] = generation_id
+                self._write()
+
+    def drop(self, key: str) -> None:
+        """Remove a pending receipt whose request provably cost nothing, so a later run asks again."""
+        with self._held():
+            if (self.answers.get(key) or {}).get("pending"):
+                del self.answers[key]
+                self._write()
+
+
+# what an issue whose request was sent before but whose reply was never kept gets: the call may have been billed, so it
+# is never sent again; its receipt keeps the call's full bound until OpenRouter says what it billed (reconcile)
+PENDING_PROBLEM = ("a request for these issues was sent before and its reply was not kept; it may have been billed, so "
+                   "it is not sent again")
+
+
+def reconcile(cache_path: Path, keys, *, lookup=None) -> dict:
+    """Replace the hold of each pending receipt in cache_path that names its generation with what OpenRouter billed for
+    it (label/harness.py resolve_unanswered_charges does the same for the labelling's own calls). A receipt with no
+    generation id, or one OpenRouter has no finished record of yet, keeps its full hold. Nothing is sent again."""
+    from label import harness
+    lookup = lookup or harness.openrouter_generation
+    cache = Cache(cache_path)
+    pending = {k: v for k, v in cache.answers.items() if isinstance(v, dict) and v.get("pending")
+               and (v.get("request") or {}).get("generation_id")
+               and (v.get("request") or {}).get("cost_source") != "generation lookup"}
+    resolved = 0
+    for key, saved in pending.items():
+        data = lookup(saved["request"]["generation_id"], keys)
+        cost = harness._settled_generation_cost(data)
+        if cost is None:
+            continue
+        saved["request"].update(cost_usd=cost, cost_source="generation lookup", cost_is_conservative_estimate=False,
+                                generation_lookup={k: data.get(k) for k in (
+                                    "total_cost", "cancelled", "finish_reason", "tokens_completion")})
+        cache.put(key, saved)
+        resolved += 1
+    return {"pending": len(pending), "resolved": resolved}
 
 
 def settings(result: dict | None = None, model: str | None = None, reasoning: str | None = None) -> dict:
@@ -503,16 +582,26 @@ def model_asker(chosen: dict, key: str | None, cache: Cache, budget: Budget, *, 
             return {"problem": budget.refusal()}, None
         request = {"model": chosen["model"], "reasoning": chosen["reasoning"], "max_tokens": chosen["max_tokens"],
                    "reserved_usd": bound}
+        # the receipt is durable before the request leaves: a kill after the provider took it still holds its bound
+        held = cache.claim(fp, {"pending": True, "text": None, "request": {
+            **request, "dispatch": "claimed", "cost_usd": bound, "cost_is_conservative_estimate": True}})
+        if held is not None:
+            # another process answered or is asking about these issues: never sent twice
+            budget.settle(bound, 0.0)
+            return _answer(held, len(members), fp), {**(held.get("request") or {}), "cached": True}
         try:
             resp = harness.call_model_once(content, chosen["model"], chosen["reasoning"], key,
-                                           chosen["max_tokens"], timeout)
+                                           chosen["max_tokens"], timeout,
+                                           on_generation_id=lambda gid: cache.note_generation(fp, gid))
         except DispatchError as error:
             unpaid = bool(getattr(error, "verified_unpaid", False))
             budget.settle(bound, 0.0 if unpaid else bound)
             request.update(dispatch="failed", cost_usd=0.0 if unpaid else bound,
                            cost_is_conservative_estimate=not unpaid)
             saved = {"text": None, "problem": f"the request failed: {error}"[:300], "request": request}
-            if not unpaid:
+            if unpaid:
+                cache.drop(fp)
+            else:
                 cache.put(fp, saved)
             return _answer(saved, len(members), fp), request
         usage = resp.get("usage") or {}
@@ -530,6 +619,8 @@ def model_asker(chosen: dict, key: str | None, cache: Cache, budget: Budget, *, 
 
 
 def _answer(saved: dict, n: int, fp: str) -> dict:
+    if saved.get("pending"):
+        return {"problem": PENDING_PROBLEM}
     if saved.get("problem"):
         return {"problem": saved["problem"]}
     if (saved.get("request") or {}).get("finish_reason") == "length":
@@ -622,6 +713,7 @@ def apply_in_stitch(result: dict, cache_path: Path, budget: Budget) -> dict:
     keys = harness.get_keys()
     if not keys:
         return {}
+    reconcile(cache_path, keys)
     ask = model_asker(settings(result), keys[0], Cache(cache_path), budget)
     return apply(result, ask)
 
@@ -709,6 +801,8 @@ def main(argv: list[str] | None = None) -> int:
     keys = harness.get_keys()
     if not keys and not a.dry_run:
         raise SystemExit("no model key: set OPENROUTER_API_KEYS or OPENAI_API_KEY")
+    if keys and not a.dry_run:
+        reconcile(a.out / "cache.json", keys)
     cache, budget = Cache(a.out / "cache.json"), Budget(a.cap)
     lock, rows = threading.Lock(), {}
 
