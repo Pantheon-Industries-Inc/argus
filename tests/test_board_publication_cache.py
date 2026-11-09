@@ -1,4 +1,5 @@
 """Publication recovery, filesystem ABI, and footage admission regressions."""
+import time
 import concurrent.futures
 import errno
 import json
@@ -585,6 +586,7 @@ def test_untrusted_footage_key_tracks_bytes_when_stat_identity_collides(tmp_path
     monkeypatch.setattr(serve, '_run_footage', encode)
     first, _ = serve.footage('episode_x', 0, 1)
     assert first.read_bytes() == b'aaaa'
+    time.sleep(0.05)  # a fast runner can write twice inside one kernel clock tick, leaving the stat unchanged
     source.write_bytes(b'bbbb')
     second, _ = serve.footage('episode_x', 0, 1)
     assert second != first and second.read_bytes() == b'bbbb'
