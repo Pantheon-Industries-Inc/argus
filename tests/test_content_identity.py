@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ def _copy_with_new_times(path):
 
 def _same_size_and_time(path, data):
     seen = path.stat()
+    time.sleep(0.05)  # let the change time move: a fast runner can write twice inside one clock tick
     path.write_bytes(data)
     os.utime(path, ns=(seen.st_atime_ns, seen.st_mtime_ns))
     assert (path.stat().st_size, path.stat().st_mtime_ns) == (seen.st_size, seen.st_mtime_ns)
