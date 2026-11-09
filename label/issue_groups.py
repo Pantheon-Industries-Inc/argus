@@ -43,7 +43,10 @@ came, each with the reason under the record's fallbacks.
 The record. result["issue_groups"] says what was asked, what was grouped, every fallback and its reason, and the
 calls' cost; the cost is also an invoice of kind issue_groups in result["auxiliary_cost_history"], so
 label/harness.py episode_cost counts it. ARGUS_ISSUE_GROUPS=0 turns the step off (label/pieces.py stitch_run);
-ARGUS_ISSUE_GROUPS_CAP_USD bounds what one stitch run may spend on it (CAP_USD by default).
+ARGUS_ISSUE_GROUPS_CAP_USD bounds what one stitch run may spend on it (CAP_USD by default), and inside a run with a
+--cap (python -m review, python -m label) the calls also reserve against what that cap leaves (Budget), so a run never
+spends past its --cap; the issues of a call left unasked for want of allowance stay as they came, and the stitch
+reports how many calls it left unasked.
 
     python -m label.issue_groups --label RESULT.json|DIR --out OUT [--dry-run] [--cap 5]
     python -m label.issue_groups --dump ISSUES.jsonl --out OUT [--takes 150] [--seed 0] [--dry-run] [--cap 5]
@@ -409,17 +412,35 @@ def _in_time_order(items: list) -> list:
 # ---------------------------------------------------------------- the model
 
 class Budget:
-    """What the calls may spend, held at each call's bound until its reply says what it cost (label/seam.py)."""
+    """What the calls may spend, held at each call's bound until its reply says what it cost (label/seam.py).
 
-    def __init__(self, cap_usd: float):
+    cap_usd is grouping's own limit. run_left_usd, when the calls run inside a run with a --cap, is what that cap leaves
+    after every earlier charge and open reservation of the run (labelling, the field dictionary, earlier grouping), so
+    grouping spends from the run's one allowance and never past it; the smaller of the two bounds the calls."""
+
+    def __init__(self, cap_usd: float, run_left_usd: float | None = None):
         self.cap, self.spent, self.lock = float(cap_usd), 0.0, threading.Lock()
+        self.run_left = None if run_left_usd is None else max(0.0, float(run_left_usd))
+        self.refused = 0
+
+    @property
+    def limit(self) -> float:
+        return self.cap if self.run_left is None else min(self.cap, self.run_left)
 
     def reserve(self, bound: float) -> bool:
         with self.lock:
-            if self.spent + bound > self.cap:
+            if self.spent + bound > self.limit:
+                self.refused += 1
                 return False
             self.spent += bound
             return True
+
+    def refusal(self) -> str:
+        """Why a call was not asked, in words."""
+        if self.run_left is not None and self.run_left < self.cap:
+            return (f"the run's --cap leaves ${self.run_left:.4f} for issue grouping, less than this call may cost; "
+                    "not asked")
+        return f"the ${self.cap:g} cap for issue grouping is reached; not asked"
 
     def settle(self, bound: float, cost: float) -> None:
         with self.lock:
@@ -479,7 +500,7 @@ def model_asker(chosen: dict, key: str | None, cache: Cache, budget: Budget, *, 
         if key is None:
             return {"problem": "no model key: set OPENROUTER_API_KEYS or OPENAI_API_KEY"}, None
         if not budget.reserve(bound):
-            return {"problem": f"the ${budget.cap:g} cap for issue grouping is reached; not asked"}, None
+            return {"problem": budget.refusal()}, None
         request = {"model": chosen["model"], "reasoning": chosen["reasoning"], "max_tokens": chosen["max_tokens"],
                    "reserved_usd": bound}
         try:
