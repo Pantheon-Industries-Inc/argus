@@ -51,10 +51,13 @@ def output_spend_complete(out: Path) -> bool:
 
 
 def remaining_label_budget(job: Path, cap: float) -> float:
-    """Uncommitted allowance across invocations, including unknown-charge reservations."""
+    """Uncommitted allowance across invocations, including unknown-charge reservations and the calls that merged data
+    issues in an earlier stitch (label/issue_groups.py), which spend from the same --cap."""
     if not math.isfinite(cap) or cap < 0:
         raise ValueError('job cap must be finite and nonnegative')
-    return max(0.0, cap - dictionary_spend(job)['reserved_usd'] - label_spend(job))
+    from label import issue_groups
+    grouping = issue_groups.spend(Path(job) / 'issue_groups.json')['cost_usd']
+    return max(0.0, cap - dictionary_spend(job)['reserved_usd'] - label_spend(job) - grouping)
 
 
 def _label_receipts(out: Path):

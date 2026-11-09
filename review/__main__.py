@@ -301,7 +301,10 @@ def build_review_board(job: Path, eps: Path, long_eps, info: dict, dataset: str,
     from label import pieces
     print("== board", flush=True)
     final = job / 'run_final'
-    result = pieces.stitch_run(job, eps, long_eps, final / 'out')
+    # the calls that merge data issues spend from what --cap leaves after labelling (label/issue_groups.py Budget)
+    from label import dictionary_stage
+    allowance = dictionary_stage.remaining_label_budget(job, float(info.get('cap_usd') or 0.0))
+    result = pieces.stitch_run(job, eps, long_eps, final / 'out', allowance=allowance)
     write_atomic(final / 'run.json', info, indent=1)
     entry = board_rules.own_data_entry(dataset, str(final), str(eps), rig, packaging)
     write_atomic(job / 'manifest.json', {'board': job.name, 'datasets': [entry]}, indent=1)
@@ -310,8 +313,8 @@ def build_review_board(job: Path, eps: Path, long_eps, info: dict, dataset: str,
 
 
 def add_grouping_cost(info: dict, job: Path, total: float, reserved: float, complete: bool) -> None:
-    """run.json's cost with the calls that merged data issues in the stitch (label/issue_groups.py), which spend under
-    their own limit and so are not in the labelling's receipts."""
+    """run.json's cost with the calls that merged data issues in the stitch (label/issue_groups.py), which spend from
+    the job's --cap but keep their receipts in job/issue_groups.json, not in the labelling's receipts."""
     from label import issue_groups
     grouping = issue_groups.spend(job / 'issue_groups.json')
     complete = complete and grouping['complete']

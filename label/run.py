@@ -89,9 +89,15 @@ def stitch(run: Path, info: dict, slice_dir: Path) -> None:
     from its parts (label/pieces.py stitch_run). A stitch that fails is recorded, never hidden."""
     if not info.get("pieces"):
         return
-    from label import pieces
+    from label import issue_groups, pieces
     try:
-        info["stitched"] = pieces.stitch_run(run, slice_dir, info["pieces"], run / "out", src=run / "parts")
+        # the calls that merge data issues spend from what the run's --cap leaves after every charge and hold so far,
+        # earlier grouping calls included (label/issue_groups.py Budget); a dry run leaves them nothing
+        allowance = 0.0 if info.get("kind") == "dry" else max(0.0, float(info.get("cap_usd") or 0.0)
+                                                              - billed_cost(run, info)
+                                                              - issue_groups.spend(run / "issue_groups.json")["cost_usd"])
+        info["stitched"] = pieces.stitch_run(run, slice_dir, info["pieces"], run / "out", src=run / "parts",
+                                             allowance=allowance)
         info.pop("stitch_error", None)
     except Exception as error:  # noqa: BLE001 - recorded in run.json, and a resume stitches again
         info["stitch_error"] = repr(error)[:500]
@@ -166,7 +172,9 @@ def _resume(a, slice_dir: Path) -> None:
         if settled["resolved"]:
             print(f"resume: {settled['resolved']} unanswered calls settled at OpenRouter's billed cost, "
                   f"${settled['released_usd']:.2f} of holds released", flush=True)
-    spent = billed_cost(run, info)
+    from label import issue_groups
+    # the calls that merged data issues in an earlier stitch spent from the same cap
+    spent = billed_cost(run, info) + issue_groups.spend(run / "issue_groups.json")["cost_usd"]
     if info["kind"] != "dry" and getattr(a, "cap", 0):
         # a new --cap on a resume replaces the run's cap, so a run the cap stopped can be finished
         if not math.isfinite(a.cap) or a.cap <= 0:

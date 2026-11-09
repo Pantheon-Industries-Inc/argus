@@ -163,7 +163,7 @@ A human ego clip of one task takes that task's outcome unless the dataset provid
 
 Argus cuts a recording too long for one request (450s at default sampling) at still moments, labels each part and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s, and the stitch joins a task or step to its counterpart from the other side when the two share at least half of the shorter one's seconds in the overlap, however differently the requests worded them. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)).
 
-A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed teleop or UMI recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. A small text-only request, with its own $5 limit outside `--cap`, merges data issues that several parts report ([`label/issue_groups.py`](label/issue_groups.py)).
+A task still under way at a cut that cannot be joined gets the outcome `unclear`, and an instructed teleop or UMI recording labelled in parts gets an unclear overall verdict, since no part sees both its start and its end. A small text-only request merges data issues that several parts report ([`label/issue_groups.py`](label/issue_groups.py)). It spends from what `--cap` leaves after labelling, within its own $5 limit, and when that runs out the issues stay apart.
 
 ### Data issue severity
 

@@ -53,15 +53,16 @@ def test_the_harness_labels_the_units_into_parts_when_the_run_cut(tmp_path):
 def test_stitch_reads_the_parts_and_records_a_failure(tmp_path, monkeypatch):
     seen = {}
 
-    def fake(job, eps, long_eps, out, src=None):
-        seen.update(job=job, out=out, src=src, long_eps=long_eps)
+    def fake(job, eps, long_eps, out, src=None, allowance=None):
+        seen.update(job=job, out=out, src=src, long_eps=long_eps, allowance=allowance)
         return {"stitched": 1, "incomplete": [], "unlabelled": []}
 
     monkeypatch.setattr(pieces, "stitch_run", fake)
-    info = {"pieces": {"episode_b": ["episode_b__p1"]}}
+    info = {"pieces": {"episode_b": ["episode_b__p1"]}, "cap_usd": 2.0}
     R.stitch(tmp_path, info, tmp_path / "slice")
+    # nothing billed yet, so the stitch's calls may spend the whole cap (tests/test_grouping_cap.py)
     assert seen == {"job": tmp_path, "out": tmp_path / "out", "src": tmp_path / "parts",
-                    "long_eps": {"episode_b": ["episode_b__p1"]}} and info["stitched"]["stitched"] == 1
+                    "long_eps": {"episode_b": ["episode_b__p1"]}, "allowance": 2.0} and info["stitched"]["stitched"] == 1
     monkeypatch.setattr(pieces, "stitch_run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("changed input")))
     R.stitch(tmp_path, info, tmp_path / "slice")
     assert "changed input" in info["stitch_error"]
