@@ -98,7 +98,9 @@ def write_mcap(bag: dict, target: Path) -> list[str]:
     """Copy every message of the bag's .db3 files into one MCAP at target; returns what could not be copied."""
     from mcap.writer import CompressionType, Writer
     notes, schemas, channels, unknown = [], {}, {}, {}
-    with open(target, "wb") as fh:
+    # created exclusively: a file or link already at target is refused, never written through (the staged tree links
+    # the upload's own files, so writing through a link would overwrite an original)
+    with open(target, "xb") as fh:
         writer = Writer(fh, compression=CompressionType.NONE)
         writer.start(profile="ros2", library="argus prepare.ros2_bag")
         for path in bag["files"]:
@@ -134,6 +136,17 @@ def write_mcap(bag: dict, target: Path) -> list[str]:
     return notes
 
 
+def _free_target(folder: Path, name: str) -> Path:
+    """folder/name.mcap, or when a staged file already holds that name in any case (an MCAP uploaded beside the bag,
+    or another bag's), folder/name_db3.mcap, then name_db3_2.mcap and on, so every recording keeps its own file."""
+    held = {p.name.lower() for p in folder.iterdir()} if folder.is_dir() else set()
+    for n in range(1, 10_000):
+        candidate = f"{name}.mcap" if n == 1 else f"{name}_db3.mcap" if n == 2 else f"{name}_db3_{n - 1}.mcap"
+        if candidate.lower() not in held:
+            return folder / candidate
+    raise FileExistsError(f"no free name for the ROS 2 bag {name} in {folder}")
+
+
 def stage(root: Path, dest: Path) -> tuple[Path, list[str]]:
     """The upload's root, with each .db3 bag in it read as one MCAP: a fresh tree under dest linking every other file
     and holding the bags' MCAP files in their folders, and what was done, in words. An upload with no .db3 file is
@@ -158,7 +171,7 @@ def stage(root: Path, dest: Path) -> tuple[Path, list[str]]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(source.resolve())
     for bag in bags:
-        target = staged / bag["folder"].relative_to(root) / f"{bag['name']}.mcap"
+        target = _free_target(staged / bag["folder"].relative_to(root), bag["name"])
         target.parent.mkdir(parents=True, exist_ok=True)
         lost = write_mcap(bag, target)
         names = [p.relative_to(root).as_posix() for p in bag["files"]]
