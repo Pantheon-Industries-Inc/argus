@@ -35,7 +35,9 @@ def _read(df, n=300):
 
 def test_a_gripper_untracked_for_4s_keeps_the_other_and_its_own_tracked_frames():
     df, st, valid = _table()
-    state, _, kind, note, issues = _read(df)
+    # the table as DiverseUMI ships it (NaN where invalid), read without the validity helper, as main read it
+    state, _, kind, note, issues = f.state_on_frames(df, f._cells(df["observation.state"]), None, 300, FPS, "ee_pose",
+                                                     None)
     assert kind == "ee_pose" and note is None
     assert np.isnan(state[:120, 7:]).all() and np.isfinite(state[120:, 7:]).all()
     assert np.allclose(state[:, :7], st[:, :7])
