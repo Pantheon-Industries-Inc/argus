@@ -278,7 +278,7 @@ _DESCRIPTIONS: contextvars.ContextVar = contextvars.ContextVar("argus_rig_descri
 def describing(paths, root=None):
     """While one episode is read (formats.convert_item), the description files that may name its arrays' values."""
     token = _DESCRIPTIONS.set({"paths": [str(p) for p in paths or ()], "root": str(root) if root else None,
-                               "claims": None})
+                               "claims": None, "texts": None})
     try:
         yield
     finally:
@@ -303,6 +303,42 @@ def description_claims() -> tuple[list[dict], list[str]]:
             claims += [{**c, "rank": rank} for c in claims_in(doc, label, kinds=("names", "units"))]
         state["claims"] = claims
     return state["claims"], [Path(p).name for p in state["paths"]]
+
+
+DOCUMENT_SUFFIXES = (".json", ".yaml", ".yml", ".md", ".txt")
+
+
+def documentation_texts() -> list[tuple[str, str]]:
+    """(file, text) of what the episode being read documents about its values in prose: its description files, and
+    for a LeRobot dataset every description or text file of its meta folder (a conventions.json beside info.json) and
+    the README beside that folder, then the README at the upload's root. Each file at most DESCRIPTION_BYTES, read
+    once; an episode read outside describing has none."""
+    state = _DESCRIPTIONS.get()
+    if not state:
+        return []
+    if state.get("texts") is None:
+        root = Path(state["root"]) if state["root"] else None
+        paths = [Path(p) for p in state["paths"]]
+        for p in list(paths):
+            if p.name == "info.json" and p.parent.name == "meta":
+                try:
+                    paths += sorted(q for q in p.parent.iterdir() if q.suffix.lower() in DOCUMENT_SUFFIXES
+                                    and not q.name.startswith(".") and q.is_file())[:DESCRIPTIONS_PER_FOLDER]
+                except OSError:
+                    pass
+                paths.append(p.parent.parent / "README.md")
+        if root is not None:
+            paths.append(root / "README.md")
+        texts = []
+        for p in dict.fromkeys(paths):
+            try:
+                if p.is_file() and p.stat().st_size <= DESCRIPTION_BYTES:
+                    label = p.relative_to(root).as_posix() if root and root in p.parents else p.name
+                    texts.append((label, p.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                continue
+        state["texts"] = texts
+    return state["texts"]
 
 
 def mcap_claims(path: Path) -> list[dict]:
