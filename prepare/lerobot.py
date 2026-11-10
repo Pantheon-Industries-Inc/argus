@@ -33,6 +33,7 @@ from pathlib import Path
 from prepare import cli
 from prepare import formats
 from label.atomic import write_atomic
+from prepare.value_names import describing
 
 RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
 WHOLE_BODY = {"humanoid": True, "legged_no_arms": "legged_no_arms"}
@@ -56,6 +57,8 @@ def main() -> int:
         raise SystemExit(f"{a.root} holds no LeRobot dataset (it reads as {det['format']}); "
                          "python -m prepare folder reads any format")
     plan, used, missing, _ = formats.plan_lerobot(det, a.root)
+    # the description files and documentation an episode is read with, as the folder command reads them (convert_item)
+    formats.assign_rig_descriptions(a.root, plan)
     items = {it["name"]: it for it in plan}
     for line in used + missing:
         print(line)
@@ -75,7 +78,9 @@ def main() -> int:
         if not a.force and (a.out / formats.episode_name(n) / "context.json").exists():
             return "skip"
         it = items[n]
-        (formats.convert_lerobot_item if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
+        with describing(it.get("rig_descriptions"), it.get("rig_root")):
+            (formats.convert_lerobot_item if it["kind"] == "lerobot" else formats.convert_recording)(
+                it, a.rig, a.out, name)
         describe(a.out / formats.episode_name(n), a.whole_body, a.robot)
         return "ok"
     rc = cli.run(picks, one, a.jobs)

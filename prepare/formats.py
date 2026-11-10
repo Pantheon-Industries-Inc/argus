@@ -2284,6 +2284,19 @@ STATE_PART_POSE_NOTE = ("Kinematic checks unavailable: the recorded state's valu
                         "a 6D pose and an opening per gripper.")
 STATE_UNAXED_NOTE = ("Kinematic checks unavailable: the recorded state's value names give a position or a pose without the "
                      "axes our checks read ({}), not six joints and a gripper per arm.")
+# x y z, then r and each axis (rx ry rz), is how UR controllers and UMI name a pose whose rotation is a rotation vector
+# (axis times angle in radians), and how other arms (Piper, Dobot) name Euler angles, so the names alone settle neither.
+# The dataset's own documentation settles it (documented_rotation_vectors).
+STATE_ROTVEC_AXES = ["x", "y", "z", "rx", "ry", "rz"]
+STATE_ROTATION_UNDECLARED_NOTE = (
+    "Kinematic checks unavailable: the recorded state's value names give a position and rx, ry and rz ({}), which "
+    "some datasets use for a rotation vector and others for Euler angles, and the dataset's documentation does not "
+    "declare rotation vectors in metres and radians.")
+ROTATION_VECTOR_TEXT = re.compile(r"rotation[ _-]?vectors?|axis[ _-]?angle|axis (?:x|times) angle|\brotvecs?\b", re.I)
+EULER_TEXT = re.compile(r"\beuler\b|\broll\W+(?:and\W+)?pitch\W+(?:and\W+)?yaw\b", re.I)
+METRE_TEXT = re.compile(r"\b(?:metres?|meters?)\b|\(m\)", re.I)
+RADIAN_TEXT = re.compile(r"\bradians?\b|\(rad\)", re.I)
+ROTVEC_CONVERSION = {"from": "rotation_vector", "to": "euler_xyz"}
 
 
 def state_parts(name: str) -> list[str]:
@@ -2383,6 +2396,8 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None, *, value_r
     if seventh and not any(grip(x) for g in groups for x in g[:6]):
         if all([last[x] for x in g[:6]] == ["x", "y", "z", "roll", "pitch", "yaw"] for g in groups):
             return "ee_pose", None
+        if all([last[x] for x in g[:6]] == STATE_ROTVEC_AXES for g in groups):
+            return "none", STATE_ROTATION_UNDECLARED_NOTE.format(groups[0][3])
         if unaxed:
             return "none", STATE_UNAXED_NOTE.format(framed)
         if all((names_joint(x) or x in joints) and last[x] not in STATE_POSITION_AXES
@@ -2442,7 +2457,10 @@ def state_units(metadata: dict, names: list[str] | None, dims: int) -> list[str 
 
 def physical_state_layout(dims: int, rig: str, names=None, *, metadata=None, value_roles=None, conversion=None):
     """Canonical physical state needs units as well as explicit roles and ordered axes. conversion is the record of
-    columns converted from degrees (joint_degrees), whose names may still say their source unit (unit_names)."""
+    columns converted from degrees (joint_degrees), whose names may still say their source unit (unit_names), or of
+    rotation vectors converted to roll, pitch and yaw (rotation_vectors), whose names still say rx, ry and rz
+    (rotation_names)."""
+    names = rotation_names(names, conversion)
     kind, note = state_layout(dims, rig, names, value_roles=value_roles)
     if kind == "none":
         return kind, note
@@ -2457,6 +2475,85 @@ def physical_state_layout(dims: int, rig: str, names=None, *, metadata=None, val
 DEGREE_UNITS = {"deg", "degree", "degrees"}
 DEGREE_EVIDENCE_JOINTS = 3     # of an arm's six joints that must read past one turn in radians
 STATE_UNIT_CONTRADICTED = "state_unit_contradicted"     # reader issue: readings only degrees explain, declared radians
+
+
+def rotation_names(names, conversion):
+    """The names a state's layout is read from: a column converted from a rotation vector to roll, pitch and yaw
+    (rotation_vectors) is read by the angle it now holds (left_rx is read as left_roll), which the conversion records.
+    Anything but a well formed rotation conversion changes nothing."""
+    if not names or not isinstance(conversion, dict) or {k: conversion.get(k) for k in ROTVEC_CONVERSION} \
+            != ROTVEC_CONVERSION or not isinstance(conversion.get("columns"), list):
+        return names
+    angle = dict(zip(STATE_ROTVEC_AXES[3:], ("roll", "pitch", "yaw")))
+    converted = {c for c in conversion["columns"] if type(c) is int}
+    out = []
+    for i, name in enumerate(names):
+        parts = state_parts(name)
+        unit = parts[-1:] if len(parts) > 1 and parts[-1] in STATE_UNIT_WORDS else []
+        axis = parts[-1 - len(unit)] if len(parts) > len(unit) else None
+        out.append("_".join(parts[:-1 - len(unit)] + [angle[axis]] + unit)
+                   if i in converted and axis in angle else name)
+    return out
+
+
+def rotation_vector_columns(dims: int, rig: str, names, roles=None) -> list[int] | None:
+    """The rotation columns of a state named x y z rx ry rz and a gripper per group of seven (state_layout gives
+    STATE_ROTATION_UNDECLARED_NOTE for it), else None."""
+    if not names or len(names) != dims or dims not in (7, 14):
+        return None
+    if state_layout(dims, rig, names, value_roles=roles)[1] != STATE_ROTATION_UNDECLARED_NOTE.format(names[3]):
+        return None
+    return [offset + i for offset in range(0, dims, 7) for i in range(3, 6)]
+
+
+def documented_rotation_vectors() -> str | None:
+    """The file of the episode's documentation (value_names.documentation_texts) that declares its rotations rotation
+    vectors (axis angle) in metres and radians, or None: when no file does, or any file names Euler angles or roll,
+    pitch and yaw, since the documentation then does not settle which the state holds."""
+    from prepare.value_names import documentation_texts
+    texts = documentation_texts()
+    if any(EULER_TEXT.search(text) for _, text in texts):
+        return None
+    return next((label for label, text in texts if ROTATION_VECTOR_TEXT.search(text) and METRE_TEXT.search(text)
+                 and RADIAN_TEXT.search(text)), None)
+
+
+def rotation_vectors(readings, names, roles, units, rig) -> dict | None:
+    """The record of a pose state's rotation vectors to convert to roll, pitch and yaw: names x y z rx ry rz and a
+    gripper per group (rotation_vector_columns), documentation that declares rotation vectors in metres and radians
+    (documented_rotation_vectors), and no value of the pose declared in another unit. None otherwise."""
+    if readings is None or getattr(readings, "ndim", 0) != 2:
+        return None
+    columns = rotation_vector_columns(readings.shape[1], rig, names, roles)
+    if columns is None:
+        return None
+    pose = [offset + i for offset in range(0, readings.shape[1], 7) for i in range(6)]
+    if any(units[c] not in (None, "m" if c % 7 < 3 else "rad") for c in pose):
+        return None
+    source = documented_rotation_vectors()
+    if source is None:
+        return None
+    return {**ROTVEC_CONVERSION, "columns": columns, "basis": "declared", "source": source}
+
+
+def in_euler(readings, units, rotation):
+    """The readings with each rotation vector rotation_vectors found converted to roll, pitch and yaw (scipy's
+    extrinsic "xyz", the order label/state reads ee_pose by), and the units of each pose value: metres and radians as
+    documented. A rotation with a missing value has no angles."""
+    from scipy.spatial.transform import Rotation
+    readings = np.array(readings, dtype=np.result_type(readings, np.float32), copy=True)
+    columns = rotation["columns"]
+    for i in range(0, len(columns), 3):
+        block = columns[i:i + 3]
+        values = readings[:, block].astype(np.float64)
+        ok = np.isfinite(values).all(axis=1)
+        out = np.full(values.shape, np.nan)
+        if ok.any():
+            out[ok] = Rotation.from_rotvec(values[ok]).as_euler("xyz")
+        readings[:, block] = out
+    rot = set(columns)
+    pose = {c - 3 + k for c in columns[::3] for k in range(3)}
+    return readings, ["rad" if i in rot else "m" if i in pose else unit for i, unit in enumerate(units)]
 
 
 def unit_names(names, conversion):
@@ -2569,7 +2666,8 @@ def qualified_state(readings, names, roles, units, rig, source: str, issues: lis
     """The one rule every reader (LeRobot, HDF5, MCAP) qualifies a recorded state or command array by, before it may
     join kinematic checks: (kind, note, readings, units, conversion). units are the array's declared units
     (state_units, which reads the metadata and the names). Joints in degrees, declared or proven by the readings
-    (joint_degrees), are converted to radians and the conversion is returned for the contract; the layout and units
+    (joint_degrees), are converted to radians, and a pose's rotation vectors its documentation declares
+    (rotation_vectors) to roll, pitch and yaw, and the conversion is returned for the contract; the layout and units
     are then checked (physical_state_layout). Joints declared in radians whose readings meet the degree evidence
     (degree_evidence) keep their declared unit, but the readings contradict it, so the array is left out of
     kinematic checks (kind "none") and a reader issue saying so goes into issues, named by source. A kind of "none"
@@ -2577,6 +2675,10 @@ def qualified_state(readings, names, roles, units, rig, source: str, issues: lis
     dims = readings.shape[1] if readings is not None and getattr(readings, "ndim", 0) == 2 else len(units or [])
     degrees = joint_degrees(readings, names, roles, units, rig)
     converted, converted_units = in_radians(readings, units, degrees)
+    if degrees is None:
+        degrees = rotation_vectors(readings, names, roles, units, rig)
+        if degrees is not None:
+            converted, converted_units = in_euler(readings, units, degrees)
     kind, note = physical_state_layout(dims, rig, names, value_roles=roles, metadata={"units": converted_units},
                                        conversion=degrees)
     if kind == "none":
@@ -2601,7 +2703,7 @@ def joined_conversion(conversions: list, widths: list[int]) -> dict | None:
     order), from each array's own (qualified_state), or None when none was converted."""
     columns, bases, beyond, offset = [], [], [], 0
     for conversion, width in zip(conversions, widths):
-        if conversion:
+        if conversion and conversion.get("from") == "deg":
             columns += [offset + c for c in conversion["columns"]]
             bases.append(conversion["basis"])
             beyond += conversion.get("joints_beyond_one_turn") or []
@@ -7480,6 +7582,14 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
         rows, gap = fill_rows(t, t[ok], a[ok])
         if gap:
             return None, gap_words(gap, 0.0)
+        if kind == "ee_pose" and ok.sum() > 1:
+            # roll, pitch and yaw are filled along the turn between the readings around them (Slerp), as the HDF5
+            # reader fills them, never value by value, which turns the long way round where an angle wraps at pi
+            from scipy.spatial.transform import Rotation, Slerp
+            missing = np.clip(t[~ok], t[ok][0], t[ok][-1])
+            for start in range(0, a.shape[1] - 6 + 1, JOINT_DIMS):
+                angles = slice(start + 3, start + 6)
+                rows[~ok, angles] = Slerp(t[ok], Rotation.from_euler("xyz", a[ok, angles]))(missing).as_euler("xyz")
         miss = np.flatnonzero(~ok)
         issues.append(state_filled_issue(what, len(miss), n, float(t[miss[0]]), float(t[miss[-1]])))
         return rows, None
