@@ -68,6 +68,7 @@
  "tests/test_edit_list.py": 1.1,
  "tests/test_encrypted_video.py": 0.1,
  "tests/test_episode_index_ownership.py": 0.6,
+ "tests/test_error_in_reply.py": 1.6,
  "tests/test_evidence_access.py": 10.8,
  "tests/test_evidence_coverage.py": 3.0,
  "tests/test_execution_integrity_v6.py": 8.2,
