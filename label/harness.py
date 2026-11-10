@@ -40,6 +40,7 @@ import base64
 import copy
 import hashlib
 import http.client
+import io
 import json
 import math
 import os
@@ -249,6 +250,34 @@ def _post_at_tier(url: str, body: dict, api_key: str, timeout: int, **options) -
     return response
 
 
+# Codes of OpenRouter's documented errors (https://openrouter.ai/docs/api-reference/errors) that say the request was refused
+# before any generation ran: invalid request, input flagged by moderation, rate limited, and no provider available.
+# OpenRouter can send one inside a 200 reply with no choices, and such a reply costs what the same code as an HTTP status
+# costs: nothing. k10-0315 (2026-11-10) held 16 sends of {"code": 429, "message": "... temporarily rate-limited upstream
+# ..."} at $3.105 each as possibly billed, $49.68, while its label.log said total_cost=$0.00 and the run was billed $1.01
+# for its 3 labels. 408 and 502 stay possibly billed, since OpenRouter sends them when a generation timed out or failed
+# after it started, and so do 401 and 402: a key error inside a 200 is no proof the key is spent, so it neither releases
+# the hold nor retires the key (test_unverified_final_key_error_never_releases_hold_or_fails_over).
+REFUSED_IN_REPLY = frozenset({400, 403, 429, 503})
+
+
+class ErrorInReply(urllib.error.HTTPError):
+    """A 200 reply whose body is one of OpenRouter's refusals (REFUSED_IN_REPLY), handled as that code's HTTP error."""
+
+
+def refusal_in_reply(resp: dict) -> int | None:
+    """The code of a refusal carried in a 200 reply with no choices, or None. A reply that reports a billed cost is
+    never one, whatever its code says."""
+    error = resp.get('error') if isinstance(resp.get('error'), dict) else resp
+    code = error.get('code')
+    usage = resp.get('usage')
+    cost = usage.get('cost') if isinstance(usage, dict) else None
+    if type(code) is not int or code not in REFUSED_IN_REPLY or (usage is not None and not (
+            type(cost) in (int, float) and cost == 0)):
+        return None
+    return code
+
+
 def _retry_after(headers, attempt: int) -> float:
     try:
         stated = float((headers or {}).get('Retry-After'))
@@ -417,6 +446,11 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
                         time.sleep(_retry_after(None, tries - 1))
                         continue
                     raise DispatchError(f"model call failed after {tries} HTTP attempts: {last}", http_status=502, verified_unpaid=clean, stage='rejected')
+                refused = refusal_in_reply(resp)
+                if refused is not None:
+                    # the provider refused the send and generated nothing: handled below as the same HTTP status
+                    raise ErrorInReply(url, refused, 'error in a 200 reply', getattr(r, 'headers', None) or {},
+                                       io.BytesIO(json.dumps(resp).encode()))
                 raise DispatchError(f"200 response with no choices: {err}", http_status=200, stage='unknown')
             failure = reply_error(resp)
             cost = (resp.get('usage') or {}).get('cost') if isinstance(resp.get('usage'), dict) else None
@@ -439,7 +473,7 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             raw_error = e.read(65537)
             text = raw_error.decode(errors="replace")
             complete_error = len(raw_error) <= 65536
-            last = f"HTTP {e.code}: {text[:300]}"
+            last = (f"HTTP 200 carrying error {e.code}" if isinstance(e, ErrorInReply) else f"HTTP {e.code}") + f": {text[:300]}"
             if flex and e.code in TRANSIENT_STATUS:
                 tier.note_rejection()
             if is_key_exhausted(e.code, text):

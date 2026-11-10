@@ -257,7 +257,7 @@ A resumed review refuses changed source data, inputs, or preparation and annotat
 
 A reply counts as labelled only when its timeline covers every sampled instant, it gives the outcome its request asks for, and every face issue gives a start and end ([`face_gaps`](label/completeness.py)). Argus resends a reply whose only gap is a face issue, and never retries another unusable model-written reply on its own. To pay for another attempt, add [`--retry-received EPISODE`](review/__main__.py) to the review command, optionally with a higher [`--max-tokens`](review/__main__.py). [`python -m label.reparse RUN`](label/reparse.py) parses stored replies again without a call.
 
-A request refused with a transient status (408, 409, 425, 429, 500, 502, 503 or 529), or one that never left the machine, cost nothing and is tried up to four times. A request whose reply carries the provider's error or never arrives is kept, counted against the cap, and resent at most twice, after 30s and 120s.
+A request refused with a transient status (408, 409, 425, 429, 500, 502, 503 or 529), or one that never left the machine, cost nothing and is tried up to four times. OpenRouter's refusal inside a 200 reply ([`REFUSED_IN_REPLY`](label/harness.py)) is handled as its status. Any other reply carrying the provider's error, or none, is kept, counted against the cap, and resent at most twice, after 30s and 120s.
 
 **Cost caps**
 
