@@ -112,6 +112,40 @@ def test_motion_rows_say_map_change_and_list_no_untracked_stretch():
     assert "untracked" not in text
 
 
+def _blip_then_lost():
+    """A real 10K pattern (k10 fob_319d48-4b1a68e1-408-8, right frame 30636): the map switches for one frame, back
+    again, and the gripper then loses tracking for over a second."""
+    df, _ = _table(lost=(152, 200), jump=0.0)
+    chunk = np.full(N, 3, dtype=np.int8)
+    chunk[151] = 4
+    df["left_chunk"] = chunk
+    return df
+
+
+def test_a_one_frame_map_switch_before_an_untracked_stretch_is_a_map_change_not_a_broken_value():
+    df = _blip_then_lost()
+    state, _, _, _, issues = _read(df)
+    assert np.isnan(state[151, :6]).all() and np.isfinite(state[151, 6])
+    ep = _ep(state, df)
+    ep["context"]["reader_issues"] = issues          # the untracked stretch is its own data issue
+    assert me.map_change_runs(ep) == [(0, 151, 151)]
+    assert me.untracked_spans(ep, {"n": N}) == [(0, 152, 199)]
+    assert cq.canonical_states(ep)["nonfinite"] == []
+    rows = ms.recorded_motion(state, [120, 180, 240], ["left", "right"], moved=me.map_change_frames(ep))
+    assert rows[0]["grippers"]["left"] == {"untracked": True, "map_change": True}
+    text = me._motion_table(ep, {"n": N, "ks": [120, 180, 240], "state_span": (0, N)})
+    assert "left untracked, map change" in text
+
+
+def test_a_map_change_on_the_last_frame_is_not_a_broken_value():
+    df, _ = _table(change=N - 1)
+    state = _read(df)[0]
+    assert np.isnan(state[N - 1, :6]).all()
+    ep = _ep(state, df)
+    assert me.map_change_runs(ep) == [(0, N - 1, N - 1)]
+    assert cq.canonical_states(ep)["nonfinite"] == []
+
+
 def test_capture_qc_does_not_count_map_change_rows_as_broken_values():
     df, _ = _table(lost=(144, 153))
     state = _read(df)[0]

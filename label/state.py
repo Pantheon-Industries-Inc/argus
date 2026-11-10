@@ -228,14 +228,19 @@ def recorded_motion(state: np.ndarray, ks: list[int], names: list[str], moved=No
         for g, name in enumerate(names):
             o = 7 * g
             xyz = s[a:b + 1, o:o + 3]
-            if (moved is not None and g < np.shape(moved)[1] and moved[a:b + 1, g].any()
-                    and np.isfinite(s[[a, b], o + 6]).all()
-                    and np.isfinite(s[a:b + 1, o:o + 7][~moved[a:b + 1, g]]).all()):
+            crossed = moved is not None and g < np.shape(moved)[1] and bool(moved[a:b + 1, g].any())
+            lost = ~np.isfinite(s[a:b + 1, o:o + 7]).all(axis=1)
+            if crossed:
+                lost &= ~moved[a:b + 1, g]
+            if crossed and not lost.any() and np.isfinite(s[[a, b], o + 6]).all():
                 # positions on either side of a change of map cannot be compared: no move is claimed
                 row["grippers"][name] = {"map_change": True, "open_a": float(s[a, o + 6]),
                                          "open_b": float(s[b, o + 6])}
                 continue
             if not np.isfinite(s[a:b + 1, o:o + 7]).all():
+                if crossed:
+                    row["grippers"][name] = {"untracked": True, "map_change": True}
+                    continue
                 # an untracked stretch touches the interval (prepare/formats.py fill_tracked): no motion is claimed
                 row["grippers"][name] = {"untracked": True}
                 continue

@@ -2103,7 +2103,7 @@ def _motion_table(ep: dict, pl: dict) -> str:
     rows = []
     if kind == "ee_pose":
         for r in ms.recorded_motion(st, ks, names, moved=map_change_frames(ep, pl["n"])):
-            parts = [f"{a} untracked" if g.get("untracked") else
+            parts = [f"{a} untracked" + (", map change" if g.get("map_change") else "") if g.get("untracked") else
                      f"{a} map change, {g['open_a']:.2f}>{g['open_b']:.2f}" if g.get("map_change") else
                      f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
                      f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
@@ -2162,40 +2162,36 @@ def _motion_table(ep: dict, pl: dict) -> str:
         + "\n".join(rows))
 
 
-def map_change_runs(ep: dict, n: int | None = None) -> list[tuple[int, int, int]]:
-    """(actor, first frame, last frame) of each run of frames where an actor's position has no reading because the map
-    it is recorded in changes there (prepare/formats.py at_map_changes): its signal named by context.json state_maps
-    differs between the readings on either side, and the run is no longer than a gap the reader fills (STATE_GAP_S and a
-    frame), so it is not a stretch the recording lost (untracked). Positions in two maps cannot be compared, so such a
-    run is neither motion nor a disagreement with the video. The gripper value is kept there."""
-    from prepare.formats import STATE_GAP_S
-    maps = ep["context"].get("state_maps") or []
+def map_change_frames(ep: dict, n: int | None = None) -> np.ndarray:
+    """[frames, actors] True where an actor's position has no reading because the map it is recorded in changes there
+    (prepare/formats.py at_map_changes, for an actor whose map column context.json state_maps names): a run of frames
+    whose position and turn are NaN while the gripper value is kept, ending on a frame whose map (that column's signal)
+    differs from the frame's before the run. A stretch the recording lost (untracked) has no value at all, and a
+    broken value inside one map changes no map, so neither is one. Positions in two maps cannot be compared, so such a
+    frame is neither motion nor a disagreement with the video."""
     st = np.asarray(ep["state"][:n] if n is not None else ep["state"], dtype=np.float64)
-    if st.ndim != 2 or not maps:
-        return []
-    fps = ep_fps(ep)
-    out = []
-    for g, name in enumerate(maps[:st.shape[1] // 7]):
+    groups = st.shape[1] // 7 if st.ndim == 2 else 0
+    out = np.zeros((len(st), groups), dtype=bool)
+    for g, name in enumerate((ep["context"].get("state_maps") or [])[:groups]):
         sig = ep.get("signals", {}).get(name) if name else None
         if sig is None:
             continue
-        m = np.asarray(sig, dtype=np.float64).reshape(len(sig), -1)[:len(st), 0]
-        miss = ~np.isfinite(st[:, 7 * g:7 * g + 6]).all(axis=1)
-        edges = np.flatnonzero(np.diff(np.r_[0, miss.astype(np.int8), 0]))
+        m = np.asarray(sig, dtype=np.float64).reshape(len(sig), -1)[:, 0]
+        blank = ~np.isfinite(st[:, 7 * g:7 * g + 6]).all(axis=1) & np.isfinite(st[:, 7 * g + 6])
+        edges = np.flatnonzero(np.diff(np.r_[0, blank.astype(np.int8), 0]))
         for i, j in zip(edges[::2], edges[1::2]):
-            if i == 0 or j >= len(st) or j >= len(m) or (j - i) / fps > STATE_GAP_S + 1.5 / fps:
-                continue
-            if np.isfinite(m[i - 1]) and np.isfinite(m[j]) and m[i - 1] != m[j]:
-                out.append((g, int(i), int(j) - 1))
+            if 0 < i and j <= len(m) and np.isfinite(m[i - 1]) and np.isfinite(m[j - 1]) and m[i - 1] != m[j - 1]:
+                out[i:j, g] = True
     return out
 
 
-def map_change_frames(ep: dict, n: int | None = None) -> np.ndarray:
-    """[frames, actors] True on each frame of a map_change_runs run of that actor."""
-    st = ep["state"][:n] if n is not None else ep["state"]
-    out = np.zeros((len(st), max(np.shape(st)[1] // 7 if np.ndim(st) == 2 else 0, 0)), dtype=bool)
-    for g, a, b in map_change_runs(ep, n):
-        out[a:b + 1, g] = True
+def map_change_runs(ep: dict, n: int | None = None) -> list[tuple[int, int, int]]:
+    """(actor, first frame, last frame) of each run of map_change_frames."""
+    moved = map_change_frames(ep, n)
+    out = []
+    for g in range(moved.shape[1]):
+        edges = np.flatnonzero(np.diff(np.r_[0, moved[:, g].astype(np.int8), 0]))
+        out += [(g, int(i), int(j) - 1) for i, j in zip(edges[::2], edges[1::2])]
     return out
 
 
