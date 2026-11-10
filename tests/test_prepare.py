@@ -271,6 +271,111 @@ def test_a_lerobot_state_named_as_a_pose_is_read_as_a_pose_on_an_arm_rig(tmp_pat
             assert ctx["recorded_state_archive"]["meaning"].startswith("Unsupported native rows")
 
 
+# observation.state of Pantheon-inc/DiverseUMI-10k (and DiverseUMI-sample100) as its meta/info.json names it, and
+# what its meta/conventions.json says of it
+UMI_STATE_NAMES = [f"{side}_{axis}" for side in ("left", "right")
+                   for axis in ("x", "y", "z", "rx", "ry", "rz", "gripper")]
+UMI_ACTION_NAMES = [f"{side}_d{axis}" for side in ("left", "right")
+                    for axis in ("x", "y", "z", "rx", "ry", "rz", "gripper")]
+UMI_CONVENTIONS = {
+    "observation.state": "per wrist: TCP x, y, z in the SLAM chunk's map, rotation vector, gripper open fraction "
+                         "(0 closed, 1 open); NaN where observation.state_valid is false",
+    "units": "metres and radians; rotations are rotation vectors (axis x angle)"}
+
+
+def _umi_lerobot(root, conventions):
+    """A two gripper LeRobot dataset named as DiverseUMI-10k names its state: a position and a rotation vector per
+    gripper, near pointing down as a handheld gripper is held, with one frame not tracked (NaN)."""
+    _lerobot_v21(root, dims=14)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    info["features"]["observation.state"]["names"] = UMI_STATE_NAMES
+    info["features"]["action"]["names"] = UMI_ACTION_NAMES
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    if conventions is not None:
+        (root / "meta" / "conventions.json").write_text(json.dumps(conventions))
+    path = root / "data" / "chunk-000" / "episode_000000.parquet"
+    df = pd.read_parquet(path)
+    rng = np.random.default_rng(1)
+    n = len(df)
+    state = np.zeros((n, 14), dtype=np.float32)
+    for o in (0, 7):
+        state[:, o:o + 3] = 0.3 + np.cumsum(rng.normal(0, 0.002, (n, 3)), axis=0)
+        state[:, o + 3:o + 6] = np.array([2.6, 0.4, -0.3]) + np.cumsum(rng.normal(0, 0.01, (n, 3)), axis=0)
+        state[:, o + 6] = np.linspace(0.2, 0.9, n)
+    # the right gripper turns through half a turn about x across its missing frame: roll reads 3.1 then -3.1
+    state[4, 10:13], state[6, 10:13], state[5, 7:14] = (3.1, 0, 0), (-3.1, 0, 0), np.nan
+    df["observation.state"] = list(state)
+    df.to_parquet(path)
+    return state
+
+
+def test_a_rotation_vector_pose_its_dataset_documents_is_read_as_a_pose(tmp_path):
+    """DiverseUMI-10k names each gripper's state x y z rx ry rz and a gripper, a rotation vector in metres and radians
+    by its meta/conventions.json. Read by names alone it was a position without a pose our checks read, so its
+    episodes had no kinematic checks; its documentation settles the rotation vector, which is converted to the roll,
+    pitch and yaw ee_pose holds."""
+    from scipy.spatial.transform import Rotation
+    root = tmp_path / "umi"
+    state = _umi_lerobot(root, UMI_CONVENTIONS)
+    out = tmp_path / "episodes"
+    rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "handheld_gripper", "--out", out])
+    ctx = json.loads((out / "episode_000000" / "context.json").read_text())
+    assert rc == 0 and ctx["state_kind"] == "ee_pose" and "state_note" not in ctx, ctx.get("state_note")
+    conversion = ctx["state_contract"]["unit_conversion"]
+    assert conversion == {"from": "rotation_vector", "to": "euler_xyz", "columns": [3, 4, 5, 10, 11, 12],
+                          "basis": "declared", "source": "meta/conventions.json"}
+    assert ctx["state_contract"]["units"] == (["m"] * 3 + ["rad"] * 3 + [None]) * 2
+    with np.load(out / "episode_000000" / "state.npz") as arrays:
+        prepared = arrays["state"]
+    ok = np.isfinite(state).all(axis=1)
+    for o in (0, 7):
+        assert np.array_equal(prepared[ok][:, [o, o + 1, o + 2, o + 6]], state[ok][:, [o, o + 1, o + 2, o + 6]])
+        # the angles are the same rotation, read back as label/state and checks/capture_qc read ee_pose
+        back = Rotation.from_rotvec(state[ok, o + 3:o + 6]).inv() * Rotation.from_euler("xyz", prepared[ok, o + 3:o + 6])
+        assert np.all(back.magnitude() < 1e-5)
+    # the missing frame is filled along the short turn through half a turn, not by averaging 3.1 and -3.1 to 0
+    filled = Rotation.from_rotvec([np.pi, 0, 0]).inv() * Rotation.from_euler("xyz", prepared[5, 10:13])
+    assert np.isfinite(prepared[5]).all() and filled.magnitude() < 1e-4
+    from prepare.state_contract import prepared_state_problem
+    assert prepared_state_problem(ctx, prepared.shape[1]) is None
+
+
+@pytest.mark.parametrize("conventions, why", [
+    (None, "no documentation"),
+    ({"units": "metres and radians; rotations are Euler angles"}, "Euler angles"),
+    ({"observation.state": "x, y, z (m), then roll, pitch and yaw (rad), then the gripper"}, "roll pitch yaw"),
+    ({"observation.state": "position, rotation vector and gripper"}, "no units"),
+])
+def test_rx_ry_rz_its_dataset_does_not_document_keeps_its_note(tmp_path, conventions, why):
+    """rx, ry and rz name a rotation vector on some arms and Euler angles on others (Piper, Dobot), so a state named
+    so is read only when its documentation declares rotation vectors in metres and radians and names no Euler angles;
+    otherwise it stays signals, and the note says why."""
+    root = tmp_path / "umi"
+    _umi_lerobot(root, conventions)
+    out = tmp_path / "episodes"
+    rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "handheld_gripper", "--out", out])
+    ctx = json.loads((out / "episode_000000" / "context.json").read_text())
+    assert rc == 0 and ctx["state_kind"] == "none", why
+    assert ctx["state_note"] == formats.STATE_ROTATION_UNDECLARED_NOTE.format("left_rx"), why
+    assert "state_contract" not in ctx
+
+
+def test_rotation_vector_names_are_read_as_angles_only_after_their_conversion():
+    """The layout of x y z rx ry rz names is a pose only through a rotation conversion record, the way the state
+    contract is checked again later; a malformed record or names in another order change nothing."""
+    units = {"units": (["m"] * 3 + ["rad"] * 3 + [None]) * 2}
+    conversion = {"from": "rotation_vector", "to": "euler_xyz", "columns": [3, 4, 5, 10, 11, 12]}
+    assert formats.state_layout(14, "handheld_gripper", UMI_STATE_NAMES)[0] == "none"
+    assert formats.physical_state_layout(14, "handheld_gripper", UMI_STATE_NAMES, metadata=units,
+                                         conversion=conversion) == ("ee_pose", None)
+    assert formats.physical_state_layout(14, "handheld_gripper", UMI_STATE_NAMES, metadata=units,
+                                         conversion={**conversion, "to": "quaternion"})[0] == "none"
+    assert formats.rotation_names(["a_rx_rad", "rz"], {**conversion, "columns": [0, 1]}) == ["a_roll_rad", "yaw"]
+    swapped = UMI_STATE_NAMES[:3] + ["left_rz", "left_ry", "left_rx"] + UMI_STATE_NAMES[6:]
+    assert formats.rotation_vector_columns(14, "handheld_gripper", swapped) is None
+    assert formats.rotation_vector_columns(14, "handheld_gripper", UMI_STATE_NAMES) == [3, 4, 5, 10, 11, 12]
+
+
 def test_video_views_episode_reads_the_state_by_its_value_names(tmp_path):
     _mp4(tmp_path / "v" / "a.mp4", 6)
     state = np.zeros((6, 7))
