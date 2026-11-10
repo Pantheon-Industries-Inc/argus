@@ -242,6 +242,11 @@ def test_one_contribution_policy_reaches_runtime_requests(rig, evidence, given, 
         assert "straightening a piece already set in a bin" in flat
         assert "One example among many, not a complete list" in flat
         assert f"When the {actor} keeps returning to the same object" in flat
+        # a failed try is named for the object its own frames show at the actor, never one borrowed from a later
+        # step: on a laptop take the model called 3-12s of bay work failed pickups of the screwdriver taken at 13s
+        assert f"A failed attempt is at an object the frames of that span show at the {actor}" in flat
+        assert "never an object that only appears earlier or later" in flat
+        assert "rather than borrowing the target from a neighbouring step" in flat
         assert "only the try that finally works is advancing" not in flat
         assert '"timeline_columns":' in fixed and '"operator_mistakes":' in fixed
         assert "Each failed\n  attempt is a key_event with outcome failure." in fixed

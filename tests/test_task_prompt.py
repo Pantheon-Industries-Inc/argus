@@ -73,7 +73,9 @@ TWO_ACTORS = {rig: f"""- When two {actor}s act at the same moment and do DIFFERE
 # An approved edit to the shared contribution rule (Eric, 2026-10-23): runs of missed grasps on a fine object were
 # labelled as adjusting or repositioning. The sentence on repetition goes on to say a real correction advances, that
 # returns to an object that never get their result are failed attempts, and gives missed grasps as one example among
-# many.
+# many. A further approved edit (Eric, 2026-11-10, PR 238): a failed try is named for the object its own frames show,
+# since on a 10K laptop take the model called 3-12s of work on a part in the bay failed pickups of the screwdriver
+# taken at 13s.
 REPETITION = '  Repeated failed attempts at the same aim are wasteful, but repetition alone is not evidence of failure.\n'
 MISSED_GRASPS = '''  Repeated failed attempts at the same aim are wasteful, but repetition alone is not evidence of failure: a few
   seconds spent straightening a piece already set in a bin, or turning a part into line, gets what it aims at and
@@ -82,7 +84,10 @@ MISSED_GRASPS = '''  Repeated failed attempts at the same aim are wasteful, but 
   One example among many, not a complete list: repeated missed grasps of a particularly fine object can look like
   small adjustments, but naming them "adjust", "reposition", "align" or "nudge" does not make them succeed; if the
   frames never show the object held, each try aimed at holding it failed. Those words fit whenever the object does
-  end up where it was evidently meant to be.
+  end up where it was evidently meant to be. A failed attempt is at an object the frames of that span show at the
+  {actor}: name what the {actor} is at in those frames, never an object that only appears earlier or later, such as
+  a tool picked up a few seconds on. If the target of a try cannot be made out, name what is visible at the {actor}
+  and say in notes that the aim is unclear, rather than borrowing the target from a neighbouring step.
 '''
 
 
