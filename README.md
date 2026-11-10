@@ -185,7 +185,7 @@ For a run in progress, give a dataset's manifest entry a [`target`](board/build.
 > [!TIP]
 > To count the tasks in your labelled data and the hours of each, run [`python -m label.catalog`](label/catalog.py) `--label L --out OUT`. It places every labelled task in a task family, a coarse task and a specific task. A specific task is one action on one kind of object, so picking up a rubber duck and picking up a stuffed animal are counted separately. Each row lists its hours, the hours in which the task succeeded, and how many recordings it appears in. When you label more data, [`--base`](label/catalog.py) adds it to your last catalog under the same task names.
 
-Public exports (the static site, downloads and [`/api/export`](board/serve.py)) name the uploader's own metadata (file attributes, sidecar fields, publisher fields) but leave out its values, because no filter can recognize every secret a person writes there; [`--publish-uploader-values`](board/serve.py) publishes them. In every field, exports also redact access attributes, recognizable credential values and private access locations. A site for customers adds the rules in [`board/public_board.py`](board/public_board.py): `--public-header` shows one title top left, `--customer` removes every data issue and fails the build if its audit still finds one, and `--split-episodes` gives a subtask split out of a longer recording its own prompt and every other card the recording's summary.
+Public exports (the static site, downloads and [`/api/export`](board/serve.py)) name the uploader's own metadata (file attributes, sidecar fields, publisher fields) but leave out its values, because no filter can recognize every secret a person writes there. Add [`--publish-uploader-values`](board/serve.py) to `board serve` or `board static site` to publish them. In every field, exports also redact access attributes, recognizable credential values and private access locations.
 
 Field definitions from the dataset publisher or user override inferred meanings and layouts without changing recorded measurements. Changes to source data or field interpretations invalidate stale findings.
 
@@ -333,7 +333,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`board hands`](board/hands.py) | `--src`, `--qa`, `--clips`, `--episodes`, `--out`, `--jobs` |
 | [`board sensors`](board/sensors.py) | `--qa`, `--episodes`, `--out` |
 | [`board serve`](board/serve.py) | `--board`, `--clips`, `--host`, `--port`, `--title`, `--header`, `--allow-host`, `--publish-uploader-values`, `--dictionary-job` |
-| [`board static`](board/static.py) | `--board`, `--clips`, `--compare`, `--hands`, `--keypoints`, `--sensors`, `--out`, `--jobs`, `--threads`, `--limit-per-dataset`, `--dataset`, `--samples`, `--first`, `--public-base`, `--publish-uploader-values`, `--dictionary-job`, `--build-id`, `--force`, `--title`, `--header`, `--public-header`, `--customer`, `--audit-deny`, `--split-episodes`, `--episode-order` |
+| [`board static`](board/static.py) | `--board`, `--clips`, `--compare`, `--hands`, `--keypoints`, `--sensors`, `--out`, `--jobs`, `--threads`, `--limit-per-dataset`, `--dataset`, `--samples`, `--first`, `--public-base`, `--publish-uploader-values`, `--dictionary-job`, `--build-id`, `--force`, `--title`, `--header` |
 | [`board to_board`](board/to_board.py) | `--in-dir`, `--out-dir`, `--dataset` |
 | [`board.hand_pose.specs`](board/hand_pose/specs.py) | `--out` |
 | [`compare board`](compare/__main__.py) | `--entries`, `--out` |

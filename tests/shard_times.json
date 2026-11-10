@@ -150,7 +150,6 @@
  "tests/test_progress_bound.py": 13.5,
  "tests/test_prompt_blocks.py": 2.3,
  "tests/test_prompt_sampling_truth.py": 0.2,
- "tests/test_public_board.py": 0.8,
  "tests/test_public_export.py": 0.5,
  "tests/test_public_export_boundaries.py": 0.3,
  "tests/test_publisher_schemas.py": 1.1,
