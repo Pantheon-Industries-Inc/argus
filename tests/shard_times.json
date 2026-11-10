@@ -22,6 +22,7 @@
  "tests/test_board_serve_access.py": 5.6,
  "tests/test_board_serve_connections.py": 0.5,
  "tests/test_board_shared_files.py": 14.2,
+ "tests/test_board_summary_fallback.py": 0.5,
  "tests/test_board_touch.py": 0.2,
  "tests/test_board_viewer_nav.py": 49.7,
  "tests/test_cache_warmup.py": 2.0,
