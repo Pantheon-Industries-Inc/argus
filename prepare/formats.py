@@ -7259,7 +7259,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
                     'basis': 'unique exact encoded PTS against publisher window origin and declared row cadence',
                     'original_table_rows': len(df)}
         state, action, kind, note, fixes = lerobot_rows_on_frames(parts, aligned_df, state, action, n_frames, fps,
-                                                                  kind, note)
+                                                                  kind, note, names=state_names)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length"), "frames_on_grid": grid}, **extra}
@@ -7338,7 +7338,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
     camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
                        {v: k for v, k in vmap.items()}, {"profile": rig, "cameras": cameras})
     state, action, kind, note, fixes = lerobot_rows_on_frames(parts, df, state, action, sources[anchor]["n_frames"],
-                                                              fps, kind, note)
+                                                              fps, kind, note, names=state_names)
     ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
@@ -7364,11 +7364,11 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
 
 
 
-def lerobot_rows_on_frames(parts, df, state, action, n, fps, kind, note):
+def lerobot_rows_on_frames(parts, df, state, action, n, fps, kind, note, names=None):
     """state_on_frames, with the recorded state an optional part: if placing it fails the episode has no state."""
     with part(parts, "the recorded state's rows"):
         skip_when_cameras_only()
-        return state_on_frames(df, state, action, n, fps, kind, note)
+        return state_on_frames(df, state, action, n, fps, kind, note, names=names)
     return None, None, "none", StateNote("The recorded state could not be placed on the frames; the episode is "
                                          "labelled from its video.", "unreadable"), []
 
@@ -7610,7 +7610,46 @@ def lerobot_state_note(note: StateNote | None, notes: list[str]) -> StateNote:
     return StateNote(" ".join(x for x in [note, *notes] if x), note.why if note else "unreadable")
 
 
-def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None) -> tuple:
+# A column naming the map an actor's position is recorded in, beside a state whose values that actor's name starts:
+# DiverseUMI-10k's <side>_chunk names the SLAM chunk whose map a wrist's pose is in, and its conventions say positions
+# in two maps cannot be compared. MAP_SUFFIXES are the column names read so.
+MAP_SUFFIXES = ("chunk", "map", "map_id")
+
+
+def state_map_columns(df, names, groups: int) -> list:
+    """Per arm or gripper of the state (JOINT_DIMS values each), the table's column naming the map its position is in
+    (MAP_SUFFIXES after the prefix its value names share, such as left_ for left_x ... left_gripper), or None. Only a
+    column of whole numbers counts."""
+    out = []
+    for g in range(groups):
+        own = [str(x) for x in (names or [])[JOINT_DIMS * g:JOINT_DIMS * (g + 1)]]
+        prefix = os.path.commonprefix(own) if len(own) == JOINT_DIMS else ""
+        col = next((prefix + sfx for sfx in MAP_SUFFIXES if prefix.endswith(("_", ".")) and df is not None
+                    and prefix + sfx in df.columns), None)
+        if col is not None:
+            v = _cells(df[col])
+            if v is None or v.shape[1] != 1 or not np.all(np.isnan(v) | (v == np.round(v))):
+                col = None
+        out.append(col)
+    return out
+
+
+def at_map_changes(df, rows: np.ndarray, at, n: int, columns: list) -> np.ndarray:
+    """rows with each actor's values set to no reading (NaN) at every frame where the column naming its map
+    (state_map_columns) changes from the frame before: its position there is in another map than the frame before, so
+    no motion, speed or step is ever read across it."""
+    out = np.array(rows, dtype=np.float64, copy=True)
+    for g, col in enumerate(columns):
+        if col is None:
+            continue
+        m = on_frames(np.asarray(_cells(df[col]), dtype=np.float64), at, n)[:, 0]
+        k = np.flatnonzero(np.isfinite(m[1:]) & np.isfinite(m[:-1]) & (m[1:] != m[:-1])) + 1
+        out[k, JOINT_DIMS * g:JOINT_DIMS * (g + 1)] = np.nan
+    return out
+
+
+def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None,
+                    names=None) -> tuple:
     """(state, action, kind, note, data issues) of a LeRobot episode's state and action rows (_cells, NaN where a cell
     could not be read) on its n video frames: each row at its frame (frame_rows, on_frames), and a frame with no
     reading filled from the readings around it across no gap longer than STATE_GAP_S (fill_rows), as the MCAP
@@ -7705,6 +7744,9 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
         return state, None, "none", StateNote(f"Labelled from the video, because the recorded observation.state {why}; "
                                               "it is kept among the signals.", "short"), issues
     act = fit(action, "action")[0] if action is not None else None
+    if kind == "ee_pose" and st.shape[1] % JOINT_DIMS == 0:
+        # after filling, so no gap is ever filled across a change of map
+        st = at_map_changes(df, st, at, n, state_map_columns(df, names, st.shape[1] // JOINT_DIMS))
     return st, act, kind, note, issues
 
 
@@ -8091,7 +8133,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             extra['source']['packed_partial_rows'] = {'camera': key, 'publisher_rows': owned.tolist(),
                 'basis': 'unique exact encoded PTS against publisher window origin and declared row cadence',
                 'original_table_rows': len(df)}
-    state, action, kind, note, fixes = state_on_frames(state_rows, state, action, count, fps, kind, note)
+    state, action, kind, note, fixes = state_on_frames(state_rows, state, action, count, fps, kind, note,
+                                                       names=state_names)
     for issue in fixes:
         add_issue(extra, **issue)
     signals = recorded_signals(aligned_df, _used_columns(kind, state, action, state_columns, action_columns,
