@@ -137,6 +137,20 @@ def test_a_one_frame_map_switch_before_an_untracked_stretch_is_a_map_change_not_
     assert "left untracked, map change" in text
 
 
+def test_a_switch_that_comes_back_inside_one_blanked_run_is_a_map_change():
+    # k10 fob_47b204-12fbf01f-437-10_p14, right 425-435: a gap filled across 5 -> 6, one frame read in map 6, then 5
+    df, _ = _table(lost=(140, 149), jump=0.0)
+    chunk = np.full(N, 3, dtype=np.int8)
+    chunk[149] = 4
+    df["left_chunk"] = chunk
+    state, _, _, _, issues = _read(df)
+    assert np.isnan(state[140:151, :6]).all() and np.isfinite(state[140:151, 6]).all()
+    ep = _ep(state, df)
+    ep["context"]["reader_issues"] = issues
+    assert me.map_change_runs(ep) == [(0, 140, 150)]
+    assert cq.canonical_states(ep)["nonfinite"] == []
+
+
 def test_a_map_change_on_the_last_frame_is_not_a_broken_value():
     df, _ = _table(change=N - 1)
     state = _read(df)[0]

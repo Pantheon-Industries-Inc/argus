@@ -2165,8 +2165,8 @@ def _motion_table(ep: dict, pl: dict) -> str:
 def map_change_frames(ep: dict, n: int | None = None) -> np.ndarray:
     """[frames, actors] True where an actor's position has no reading because the map it is recorded in changes there
     (prepare/formats.py at_map_changes, for an actor whose map column context.json state_maps names): a run of frames
-    whose position and turn are NaN while the gripper value is kept, ending on a frame whose map (that column's signal)
-    differs from the frame's before the run. A stretch the recording lost (untracked) has no value at all, and a
+    whose position and turn are NaN while the gripper value is kept, over which the map (that column's signal) changes,
+    from the frame before the run to its last (a switch can go and come back inside one run). A stretch the recording lost (untracked) has no value at all, and a
     broken value inside one map changes no map, so neither is one. Positions in two maps cannot be compared, so such a
     frame is neither motion nor a disagreement with the video."""
     st = np.asarray(ep["state"][:n] if n is not None else ep["state"], dtype=np.float64)
@@ -2180,7 +2180,8 @@ def map_change_frames(ep: dict, n: int | None = None) -> np.ndarray:
         blank = ~np.isfinite(st[:, 7 * g:7 * g + 6]).all(axis=1) & np.isfinite(st[:, 7 * g + 6])
         edges = np.flatnonzero(np.diff(np.r_[0, blank.astype(np.int8), 0]))
         for i, j in zip(edges[::2], edges[1::2]):
-            if 0 < i and j <= len(m) and np.isfinite(m[i - 1]) and np.isfinite(m[j - 1]) and m[i - 1] != m[j - 1]:
+            seen = m[i - 1:j] if 0 < i and j <= len(m) else np.array([])
+            if np.isfinite(seen).all() and len(set(seen.tolist())) > 1:
                 out[i:j, g] = True
     return out
 
