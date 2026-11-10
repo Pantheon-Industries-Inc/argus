@@ -100,7 +100,10 @@ def contribution_rules(r: str) -> str:
   One example among many, not a complete list: repeated missed grasps of a particularly fine object can look like
   small adjustments, but naming them "adjust", "reposition", "align" or "nudge" does not make them succeed; if the
   frames never show the object held, each try aimed at holding it failed. Those words fit whenever the object does
-  end up where it was evidently meant to be.
+  end up where it was evidently meant to be. A failed attempt is at an object the frames of that span show at the
+  {actor}: name what the {actor} is at in those frames, never an object that only appears earlier or later, such as
+  a tool picked up a few seconds on. If the target of a try cannot be made out, name what is visible at the {actor}
+  and say in notes that the aim is unclear, rather than borrowing the target from a neighbouring step.
   Intentional undo, disassembly, reset or a new activity does not retroactively make useful work wasteful.
   Assess each step's effect within the activity it served, whether or not the whole activity ultimately succeeds.
   Do not excuse an observed failure by inventing learning or exploration, or invent inefficiency from a
