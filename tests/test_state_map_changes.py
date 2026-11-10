@@ -170,3 +170,20 @@ def test_capture_qc_does_not_count_map_change_rows_as_broken_values():
     broken[40, 2] = np.nan                               # a real broken value is still reported
     cs = cq.canonical_states(_ep(broken, df))
     assert [e["rows"] for e in cs["nonfinite"]] == [1]
+
+
+def test_a_step_with_no_pose_reading_is_never_read_as_holding_still():
+    # a step blanked at a map change (or untracked) has no action: the camera moving there was flagged as "large
+    # visual change while the arms hold" in 7 of 42 10K episodes of the sweep
+    from checks.vendor import public_dataset_adapter_qc as up
+    policy = cq.policy_for("handheld_gripper")[0]
+    act = np.zeros((4, 14))
+    valid = np.ones((4, 14), dtype=bool)
+    valid[2, 0:6] = False                         # step 2: the left pose has no reading
+    big = {"left": [0.0, 20.0, 20.0, 0.0]}
+    out, _ = up._unexplained_visual_change_checks(act, valid, big, policy)
+    assert out["cameras"]["left"]["flagged_indices"] == [1]
+    # a channel the arm never records (a joint-state rig's pose) is still ignored
+    valid[:, 0:6] = valid[:, 7:13] = False
+    out, _ = up._unexplained_visual_change_checks(act, valid, big, policy)
+    assert out["cameras"]["left"]["flagged_indices"] == [1, 2]

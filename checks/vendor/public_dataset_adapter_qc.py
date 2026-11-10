@@ -43,6 +43,11 @@ Every modification made to the upstream text:
   5. _unexplained_visual_change_checks: the per-camera mean and 95th percentile in the metrics are
      taken over finite values (np.nanmean / np.nanquantile) for the same reason. The flag rule is
      unchanged (a NaN never passes the >= test).
+  6. _unexplained_visual_change_checks: a step counts as holding still only when every channel an arm
+     records somewhere in the episode (translation, rotation, gripper) has a reading on that step and it
+     is small. Upstream counted a channel with no reading on the step as still, so a frame whose pose was
+     not tracked, or was blanked at a change of SLAM map, read as "the arm held" beside any camera
+     motion. A channel the arm never records (the pose of a joint-state rig) is still ignored.
 
 Requires Python 3.10 or newer (upstream uses dataclass slots and zip(strict=...)).
 """
@@ -885,11 +890,14 @@ def _unexplained_visual_change_checks(
         translation = np.linalg.norm(actions_global[:, offset : offset + 3], axis=1)
         rotation = np.linalg.norm(actions_global[:, offset + 3 : offset + 6], axis=1)
         gripper = np.abs(actions_global[:, offset + 6])
-        arm_present = translation_valid | rotation_valid | gripper_valid
-        arm_tiny = ~translation_valid | (translation <= policy.maximum_unexplained_translation_m)
-        arm_tiny &= ~rotation_valid | (rotation <= policy.maximum_unexplained_rotation_rad)
-        arm_tiny &= ~gripper_valid | (gripper <= policy.maximum_unexplained_gripper_delta)
-        tiny &= ~arm_present | arm_tiny
+        # Modification 6: a channel the arm records somewhere must have a reading on the step to count as still
+        arm_tiny = np.ones(count, dtype=np.bool_)
+        for valid, size, limit in ((translation_valid, translation, policy.maximum_unexplained_translation_m),
+                                   (rotation_valid, rotation, policy.maximum_unexplained_rotation_rad),
+                                   (gripper_valid, gripper, policy.maximum_unexplained_gripper_delta)):
+            if valid.any():
+                arm_tiny &= valid & (size <= limit)
+        tiny &= arm_tiny
     checks: dict[str, Any] = {
         "thresholds": {
             "mean_absolute_luma_difference": policy.minimum_unexplained_visual_difference,
