@@ -100,7 +100,11 @@ def contribution_rules(r: str) -> str:
   One example among many, not a complete list: repeated missed grasps of a particularly fine object can look like
   small adjustments, but naming them "adjust", "reposition", "align" or "nudge" does not make them succeed; if the
   frames never show the object held, each try aimed at holding it failed. Those words fit whenever the object does
-  end up where it was evidently meant to be. A failed attempt is at an object the frames of that span show at the
+  end up where it was evidently meant to be. Held is read from the frames the same way: an object that stays in the
+  {actor}'s grip as it moves, or as the scene shifts past it, is held, and pressing, seating, turning, carrying or
+  handing over a held object is work on it, not a grasp attempt; a regrip that keeps or regains the object is part
+  of that work. A try is missed where the grip closes and comes away without the object. A failed attempt is at an
+  object the frames of that span show at the
   {actor}: name what the {actor} is at in those frames, never an object that only appears earlier or later, such as
   a tool picked up a few seconds on. If the target of a try cannot be made out, name what is visible at the {actor}
   and say in notes that the aim is unclear, rather than borrowing the target from a neighbouring step.
