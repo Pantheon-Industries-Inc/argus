@@ -221,11 +221,14 @@ def canonical_states(ep: dict) -> dict:
     # a stretch the reader left untracked (prepare/formats.py fill_tracked: an actor with no reading for longer than it
     # fills) is a data issue of its own (state_untracked), so its empty rows are not repeated as broken values here
     untracked = any(i.get("kind") == "state_untracked" for i in ep["context"].get("reader_issues") or [])
+    # nor are the rows blanked where an actor's map changes (label/episode.py map_change_runs): positions in two maps
+    # cannot be compared, so no step is read across them, and they are not a broken value of the recording
+    moved = me.map_change_frames(ep)
     for g in range(n_act):
         block = s[a:b, 7 * g:7 * g + 7]
         # a row with a missing (NaN) or infinite value is reported and left out (invalid); every other row is checked
         ok = np.isfinite(block).all(axis=1)
-        bad = ~ok & ~(np.isnan(block).all(axis=1) if untracked else False)
+        bad = ~ok & ~(np.isnan(block).all(axis=1) if untracked else False) & ~moved[a:b, g]
         if bad.any():
             out["nonfinite"].append({"actor": names[g], "rows": int(bad.sum()),
                                      "first_row": a + int(np.flatnonzero(bad)[0])})
