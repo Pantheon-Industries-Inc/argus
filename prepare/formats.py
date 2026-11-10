@@ -7591,12 +7591,17 @@ def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
                     f"across no gap longer than {STATE_GAP_S:g} s"}
 
 
-def state_untracked_issue(what: str, group: int, t0: float, t1: float) -> dict:
-    """The data issue of a stretch where one arm or gripper of a state (group, 0 first) has no reading for longer than
-    the reader fills (fill_tracked): its rows there are NaN, and the episode's other readings are kept."""
-    return {"kind": "state_untracked", "signal": what, "t0_s": t0, "t1_s": t1,
-            "what": f"{what} has no reading for its recorded group {group + 1} from {t0:.1f} s to {t1:.1f} s; that "
-                    "stretch is left without a reading, and the rest of the state is kept"}
+def state_untracked_issue(what: str, group: int, spans: list) -> dict:
+    """The data issue of one arm or gripper of a state (group, 0 first) with no reading over spans [(start, end)] longer
+    than the reader fills (fill_tracked): its rows there are NaN, and the episode's other readings are kept. One issue
+    per actor, from its first stretch to its last, since a long recording can lose tracking hundreds of times."""
+    total = sum(t1 - t0 for t0, t1 in spans)
+    longest = max(spans, key=lambda x: x[1] - x[0])
+    many = f"in {len(spans)} stretches, {total:.1f} s in all, the longest from {longest[0]:.1f} s to {longest[1]:.1f} s" \
+        if len(spans) > 1 else f"from {spans[0][0]:.1f} s to {spans[0][1]:.1f} s"
+    return {"kind": "state_untracked", "signal": what, "t0_s": spans[0][0], "t1_s": spans[-1][1],
+            "what": f"{what} has no reading for its recorded group {group + 1} {many}; those stretches are left "
+                    "without a reading, and the rest of the state is kept"}
 
 
 def lerobot_state_note(note: StateNote | None, notes: list[str]) -> StateNote:
@@ -7669,7 +7674,8 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
         def untracked_at(g, spans):
             # the state's stretches are the issue; the action's, which follow them, would only repeat it
             if what == "observation.state":
-                issues.extend(state_untracked_issue(what, g, t0, t1) for t0, t1 in spans)
+                if spans:
+                    issues.append(state_untracked_issue(what, g, spans))
         for g in range(a.shape[1] // JOINT_DIMS):
             cols = slice(JOINT_DIMS * g, JOINT_DIMS * (g + 1))
             ok = np.isfinite(a[:, cols]).all(axis=1)

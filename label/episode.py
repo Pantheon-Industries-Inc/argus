@@ -2173,14 +2173,21 @@ def untracked_spans(ep: dict, pl: dict) -> list[tuple[int, int, int]]:
     return out
 
 
+UNTRACKED_LISTED = 40
+
+
 def _untracked_text(ep: dict, pl: dict, names: list[str], n: dict) -> str:
     """The stretches where an actor's recorded state has no reading, so its rows say untracked there. Its camera and
     the scene still show what it did: only the recording is missing."""
     spans = untracked_spans(ep, pl)
     if not spans:
         return ""
+    # a long recording can lose tracking hundreds of times: the longest UNTRACKED_LISTED are named, by actor then time
+    shown = sorted(sorted(spans, key=lambda s: s[1] - s[2])[:UNTRACKED_LISTED], key=lambda s: (s[0], s[1]))
     said = "; ".join(f"{names[g] if g < len(names) else g + 1} from {seconds(frame_time(ep, a))} to "
-                     f"{seconds(frame_time(ep, b))}" for g, a, b in spans)
+                     f"{seconds(frame_time(ep, b))}" for g, a, b in shown)
+    if len(spans) > len(shown):
+        said += f"; and {len(spans) - len(shown)} shorter stretches"
     return (f"The recording has no reading for these {n['actors']} over these stretches: {said}. A row that touches "
             f"one says untracked for that {n['actor']}; read what it did there from the frames alone. A missing "
             "reading is not a disagreement with the video.\n")

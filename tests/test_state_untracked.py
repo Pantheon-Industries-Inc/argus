@@ -63,7 +63,8 @@ def test_both_grippers_lost_at_the_end_is_declared_untracked_not_a_whole_state_g
     df["observation.state"] = list(st)
     state, _, kind, _, issues = _read(df)
     assert kind == "ee_pose" and np.isnan(state[220:]).all() and np.isfinite(state[120:220]).all()
-    assert len([i for i in issues if i["kind"] == "state_untracked"]) == 3
+    # one issue per gripper, however many stretches it lost
+    assert len([i for i in issues if i["kind"] == "state_untracked"]) == 2
 
 
 def test_a_short_gap_is_still_filled_and_a_table_short_of_its_video_is_still_not_read():
