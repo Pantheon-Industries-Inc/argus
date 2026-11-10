@@ -7263,6 +7263,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length"), "frames_on_grid": grid}, **extra}
+        if maps := state_maps(aligned_df, state_names, state, kind):
+            ctx["state_maps"] = maps
         set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps, ep=ep))
         if note or notes:
             no_state(ctx, lerobot_state_note(note, notes))
@@ -7343,6 +7345,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
            **extra}
+    if maps := state_maps(df, state_names, state, kind):
+        ctx["state_maps"] = maps
     set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps, ep=ep))
     if note or notes:
         no_state(ctx, lerobot_state_note(note, notes))
@@ -7634,18 +7638,33 @@ def state_map_columns(df, names, groups: int) -> list:
     return out
 
 
-def at_map_changes(df, rows: np.ndarray, at, n: int, columns: list) -> np.ndarray:
-    """rows with each actor's values set to no reading (NaN) at every frame where the column naming its map
-    (state_map_columns) changes from the frame before: its position there is in another map than the frame before, so
-    no motion, speed or step is ever read across it."""
+def at_map_changes(df, rows: np.ndarray, raw: np.ndarray, at, n: int, columns: list) -> np.ndarray:
+    """rows with each actor's position and turn (its first 6 values) set to no reading (NaN) where the column naming its
+    map (state_map_columns) changes between two of its readings (raw, before filling): every frame after the last
+    reading in the old map up to and including the first in the new one. Its position there is in another map than the
+    reading before, so no motion, speed or step is ever read across it, and a short gap filled across the change (a
+    mix of two maps) is not kept. The gripper value does not depend on the map and is kept. A longer gap with no
+    reading (fill_tracked: untracked) is already NaN and is left as it is."""
     out = np.array(rows, dtype=np.float64, copy=True)
     for g, col in enumerate(columns):
         if col is None:
             continue
+        cols = slice(JOINT_DIMS * g, JOINT_DIMS * (g + 1))
         m = on_frames(np.asarray(_cells(df[col]), dtype=np.float64), at, n)[:, 0]
-        k = np.flatnonzero(np.isfinite(m[1:]) & np.isfinite(m[:-1]) & (m[1:] != m[:-1])) + 1
-        out[k, JOINT_DIMS * g:JOINT_DIMS * (g + 1)] = np.nan
+        read = np.flatnonzero(np.isfinite(np.asarray(raw)[:, cols]).all(axis=1) & np.isfinite(m))
+        for i, j in zip(read, read[1:]):
+            if m[i] != m[j] and np.isfinite(out[i + 1:j, cols]).all():
+                out[i + 1:j + 1, JOINT_DIMS * g:JOINT_DIMS * g + 6] = np.nan
     return out
+
+
+def state_maps(df, names, state, kind: str) -> list | None:
+    """context.json state_maps: per arm or gripper, the signal naming the map its position is in (state_map_columns),
+    for an end-effector pose with at least one; None otherwise. label/episode.py map_change_runs reads it."""
+    if kind != "ee_pose" or state is None or np.ndim(state) != 2 or np.shape(state)[1] % JOINT_DIMS:
+        return None
+    cols = state_map_columns(df, names, np.shape(state)[1] // JOINT_DIMS)
+    return cols if any(cols) else None
 
 
 def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None,
@@ -7745,8 +7764,9 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
                                               "it is kept among the signals.", "short"), issues
     act = fit(action, "action")[0] if action is not None else None
     if kind == "ee_pose" and st.shape[1] % JOINT_DIMS == 0:
-        # after filling, so no gap is ever filled across a change of map
-        st = at_map_changes(df, st, at, n, state_map_columns(df, names, st.shape[1] // JOINT_DIMS))
+        # on the filled rows, against the readings before filling, so a gap filled across a change of map is undone
+        st = at_map_changes(df, st, on_frames(np.asarray(state, dtype=np.float64), at, n), at, n,
+                            state_map_columns(df, names, st.shape[1] // JOINT_DIMS))
     return st, act, kind, note, issues
 
 
@@ -8135,6 +8155,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
                 'original_table_rows': len(df)}
     state, action, kind, note, fixes = state_on_frames(state_rows, state, action, count, fps, kind, note,
                                                        names=state_names)
+    if maps := state_maps(state_rows, state_names, state, kind):
+        extra["state_maps"] = maps
     for issue in fixes:
         add_issue(extra, **issue)
     signals = recorded_signals(aligned_df, _used_columns(kind, state, action, state_columns, action_columns,

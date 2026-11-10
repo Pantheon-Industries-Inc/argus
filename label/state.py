@@ -215,10 +215,12 @@ def _turn_deg(rpy_a: np.ndarray, rpy_b: np.ndarray) -> float:
     return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
 
 
-def recorded_motion(state: np.ndarray, ks: list[int], names: list[str]) -> list[dict]:
+def recorded_motion(state: np.ndarray, ks: list[int], names: list[str], moved=None) -> list[dict]:
     """Per interval between consecutive sampled frames, per gripper (7 values each: x y z m, roll pitch
     yaw rad, opening): net move (cm), the largest single-frame step inside the interval (cm), net turn
-    (deg), and the opening at both ends, all straight from the recorded state."""
+    (deg), and the opening at both ends, all straight from the recorded state. moved ([frames, grippers] bool,
+    label/episode.py map_change_frames) marks the frames where a gripper's map changes: an interval touching one
+    claims no move (map_change), only the opening at both ends."""
     s = np.asarray(state, dtype=np.float64)
     out = []
     for a, b in zip(ks, ks[1:]):
@@ -226,6 +228,13 @@ def recorded_motion(state: np.ndarray, ks: list[int], names: list[str]) -> list[
         for g, name in enumerate(names):
             o = 7 * g
             xyz = s[a:b + 1, o:o + 3]
+            if (moved is not None and g < np.shape(moved)[1] and moved[a:b + 1, g].any()
+                    and np.isfinite(s[[a, b], o + 6]).all()
+                    and np.isfinite(s[a:b + 1, o:o + 7][~moved[a:b + 1, g]]).all()):
+                # positions on either side of a change of map cannot be compared: no move is claimed
+                row["grippers"][name] = {"map_change": True, "open_a": float(s[a, o + 6]),
+                                         "open_b": float(s[b, o + 6])}
+                continue
             if not np.isfinite(s[a:b + 1, o:o + 7]).all():
                 # an untracked stretch touches the interval (prepare/formats.py fill_tracked): no motion is claimed
                 row["grippers"][name] = {"untracked": True}

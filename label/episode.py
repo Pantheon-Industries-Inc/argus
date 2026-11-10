@@ -2102,8 +2102,9 @@ def _motion_table(ep: dict, pl: dict) -> str:
     ks = [k for k in pl["ks"] if sa <= k < sb]
     rows = []
     if kind == "ee_pose":
-        for r in ms.recorded_motion(st, ks, names):
+        for r in ms.recorded_motion(st, ks, names, moved=map_change_frames(ep, pl["n"])):
             parts = [f"{a} untracked" if g.get("untracked") else
+                     f"{a} map change, {g['open_a']:.2f}>{g['open_b']:.2f}" if g.get("map_change") else
                      f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
                      f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
@@ -2157,17 +2158,57 @@ def _motion_table(ep: dict, pl: dict) -> str:
            "the episode, so the rows stop there and nothing is recorded outside it.\n"
            if (sa, sb) != (0, len(st)) else "")
         + _untracked_text(ep, pl, names, n)
+        + _map_change_text(ep, pl, n)
         + "\n".join(rows))
+
+
+def map_change_runs(ep: dict, n: int | None = None) -> list[tuple[int, int, int]]:
+    """(actor, first frame, last frame) of each run of frames where an actor's position has no reading because the map
+    it is recorded in changes there (prepare/formats.py at_map_changes): its signal named by context.json state_maps
+    differs between the readings on either side, and the run is no longer than a gap the reader fills (STATE_GAP_S and a
+    frame), so it is not a stretch the recording lost (untracked). Positions in two maps cannot be compared, so such a
+    run is neither motion nor a disagreement with the video. The gripper value is kept there."""
+    from prepare.formats import STATE_GAP_S
+    maps = ep["context"].get("state_maps") or []
+    st = np.asarray(ep["state"][:n] if n is not None else ep["state"], dtype=np.float64)
+    if st.ndim != 2 or not maps:
+        return []
+    fps = ep_fps(ep)
+    out = []
+    for g, name in enumerate(maps[:st.shape[1] // 7]):
+        sig = ep.get("signals", {}).get(name) if name else None
+        if sig is None:
+            continue
+        m = np.asarray(sig, dtype=np.float64).reshape(len(sig), -1)[:len(st), 0]
+        miss = ~np.isfinite(st[:, 7 * g:7 * g + 6]).all(axis=1)
+        edges = np.flatnonzero(np.diff(np.r_[0, miss.astype(np.int8), 0]))
+        for i, j in zip(edges[::2], edges[1::2]):
+            if i == 0 or j >= len(st) or j >= len(m) or (j - i) / fps > STATE_GAP_S + 1.5 / fps:
+                continue
+            if np.isfinite(m[i - 1]) and np.isfinite(m[j]) and m[i - 1] != m[j]:
+                out.append((g, int(i), int(j) - 1))
+    return out
+
+
+def map_change_frames(ep: dict, n: int | None = None) -> np.ndarray:
+    """[frames, actors] True on each frame of a map_change_runs run of that actor."""
+    st = ep["state"][:n] if n is not None else ep["state"]
+    out = np.zeros((len(st), max(np.shape(st)[1] // 7 if np.ndim(st) == 2 else 0, 0)), dtype=bool)
+    for g, a, b in map_change_runs(ep, n):
+        out[a:b + 1, g] = True
+    return out
 
 
 def untracked_spans(ep: dict, pl: dict) -> list[tuple[int, int, int]]:
     """(actor, first frame, last frame) of each stretch where one actor's recorded state has no reading (NaN), inside
-    the frames the state covers: a gripper whose pose was not tracked there (prepare/formats.py fill_tracked)."""
+    the frames the state covers: a gripper whose pose was not tracked there (prepare/formats.py fill_tracked). A run
+    blanked at a change of map (map_change_runs) is not one."""
     st = np.asarray(ep["state"][:pl["n"]], dtype=np.float64)
     sa, sb = pl.get("state_span") or (0, len(st))
+    moved = map_change_frames(ep, pl["n"])
     out = []
     for g in range(st.shape[1] // 7 if st.ndim == 2 else 0):
-        miss = ~np.isfinite(st[sa:sb, 7 * g:7 * g + 7]).all(axis=1)
+        miss = ~np.isfinite(st[sa:sb, 7 * g:7 * g + 7]).all(axis=1) & ~moved[sa:sb, g]
         edges = np.flatnonzero(np.diff(np.r_[0, miss.astype(np.int8), 0]))
         out += [(g, sa + int(i), sa + int(j) - 1) for i, j in zip(edges[::2], edges[1::2])]
     return out
@@ -2191,6 +2232,18 @@ def _untracked_text(ep: dict, pl: dict, names: list[str], n: dict) -> str:
     return (f"The recording has no reading for these {n['actors']} over these stretches: {said}. A row that touches "
             f"one says untracked for that {n['actor']}; read what it did there from the frames alone. A missing "
             "reading is not a disagreement with the video.\n")
+
+
+def _map_change_text(ep: dict, pl: dict, n: dict) -> str:
+    """What a "map change" row means, when the episode has one: the recording places each position in a map of its own
+    (a SLAM chunk's), and two maps cannot be compared."""
+    sa, sb = pl.get("state_span") or (0, pl["n"])
+    if not any(sa <= a < sb for _, a, _b in map_change_runs(ep, pl["n"])):
+        return ""
+    return (f"The recording places each {n['actor']}'s position in a map of its own and switches to a new map now and "
+            "then; positions in two maps cannot be compared. A row that crosses a switch says map change for that "
+            f"{n['actor']}, with no move or turn: it is neither motion nor a disagreement with the video, and never a "
+            "data issue. Read what happened there from the frames.\n")
 
 
 def annotation_lines(ctx: dict) -> list[str]:
