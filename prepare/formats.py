@@ -7044,6 +7044,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         skip_when_cameras_only()
         state = _cells(df["observation.state"]) if df is not None and "observation.state" in df.columns else None
         action = _cells(df["action"]) if df is not None and "action" in df.columns else None
+        # a value the dataset's own validity column marks invalid is no reading, whatever number the cell holds
+        state = recorded_validity(df, "observation.state", state)
+        action = recorded_validity(df, "action", action)
         if df is not None and rig == "teleop_arms":
             if state is None:
                 state, state_columns, state_groups, split_note = split_lerobot_columns(df, feats, "observation.state")
@@ -7287,7 +7290,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         with part(parts, "the recorded signals"):
             skip_when_cameras_only()
             signals = lerobot_recorded_signals(ep, ctx, r, aligned_df, _used_columns(kind, state, action, state_columns,
-                                               action_columns) | set(hold_back), ctx["n_state_frames"],
+                                               action_columns, df=aligned_df) | set(hold_back), ctx["n_state_frames"],
                                                anchor_times=encoded_times[anchor])
             if partial_rows and df is not None:
                 retain_partial_publisher_table(signals, df, r['features'], hold_back)
@@ -7355,7 +7358,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
     with part(parts, "the recorded signals"):
         skip_when_cameras_only()
         signals = lerobot_recorded_signals(ep, ctx, r, df, _used_columns(kind, state, action, state_columns,
-                                           action_columns) | set(hold_back), ctx["n_state_frames"],
+                                           action_columns, df=df) | set(hold_back), ctx["n_state_frames"],
                                            anchor_times=(times or {}).get(anchor))
     return finish_lerobot(ep, ctx, sources, state if kind != "none" else None, action, times, signals, df, row)
 
@@ -7536,14 +7539,49 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
     return dep, tz
 
 
-def _used_columns(kind: str, state=None, action=None, state_columns=(), action_columns=()) -> set:
+# A LeRobot table's own per-value validity column for a column (observation.state_valid beside observation.state),
+# true where the value is a real reading. DiverseUMI marks each gripper's untracked stretches this way.
+VALIDITY_COLUMNS = {"observation.state": "observation.state_valid", "action": "action_valid"}
+
+
+def validity_mask(df, column: str, values) -> np.ndarray | None:
+    """The dataset's validity column for column (VALIDITY_COLUMNS) as booleans shaped like values, or None when the table
+    has none or its cells do not hold one flag per value on every row."""
+    name = VALIDITY_COLUMNS.get(column)
+    if df is None or values is None or name not in getattr(df, "columns", ()):
+        return None
+    flags = _cells(df[name])
+    if flags is None or flags.shape != np.shape(values) or not np.isfinite(flags).all():
+        return None
+    return flags != 0
+
+
+def recorded_validity(df, column: str, values):
+    """values with NaN wherever the dataset's validity column (validity_mask) says the value is not a reading."""
+    mask = validity_mask(df, column, values)
+    if mask is None or mask.all():
+        return values
+    out = np.array(values, dtype=np.float64, copy=True)
+    out[~mask] = np.nan
+    return out
+
+
+def _used_columns(kind: str, state=None, action=None, state_columns=(), action_columns=(), df=None) -> set:
     """The columns already read as the state and action. A state that does not fit the arm layout (kind "none") is not
     read as one, so it stays a signal the model is shown, and so does an action finish_episode does not keep (not read,
-    or of another shape than the state), which had been dropped without a word."""
+    or of another shape than the state), which had been dropped without a word. A validity column read as the
+    state's or action's missing readings (validity_mask) is used with it."""
     if kind == "none":
         return set()
     kept = action is not None and (state is None or np.shape(action) == np.shape(state))
-    return set(state_columns or ["observation.state"]) | (set(action_columns or ["action"]) if kept else set())
+    used = set(state_columns or ["observation.state"]) | (set(action_columns or ["action"]) if kept else set())
+    if df is not None and not state_columns and "observation.state" in df.columns:
+        if validity_mask(df, "observation.state", _cells(df["observation.state"])) is not None:
+            used.add(VALIDITY_COLUMNS["observation.state"])
+    if df is not None and kept and not action_columns and "action" in df.columns:
+        if validity_mask(df, "action", _cells(df["action"])) is not None:
+            used.add(VALIDITY_COLUMNS["action"])
+    return used
 
 
 def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
@@ -7551,6 +7589,19 @@ def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
     return {"kind": "state_filled", "signal": what, "t0_s": t0, "t1_s": t1,
             "what": f"{what} has no reading at {k} of its {n} frames; they were filled from the readings around them, "
                     f"across no gap longer than {STATE_GAP_S:g} s"}
+
+
+def state_untracked_issue(what: str, group: int, spans: list) -> dict:
+    """The data issue of one arm or gripper of a state (group, 0 first) with no reading over spans [(start, end)] longer
+    than the reader fills (fill_tracked): its rows there are NaN, and the episode's other readings are kept. One issue
+    per actor, from its first stretch to its last, since a long recording can lose tracking hundreds of times."""
+    total = sum(t1 - t0 for t0, t1 in spans)
+    longest = max(spans, key=lambda x: x[1] - x[0])
+    many = f"in {len(spans)} stretches, {total:.1f} s in all, the longest from {longest[0]:.1f} s to {longest[1]:.1f} s" \
+        if len(spans) > 1 else f"from {spans[0][0]:.1f} s to {spans[0][1]:.1f} s"
+    return {"kind": "state_untracked", "signal": what, "t0_s": spans[0][0], "t1_s": spans[-1][1],
+            "what": f"{what} has no reading for its recorded group {group + 1} {many}; those stretches are left "
+                    "without a reading, and the rest of the state is kept"}
 
 
 def lerobot_state_note(note: StateNote | None, notes: list[str]) -> StateNote:
@@ -7565,18 +7616,36 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
     reading filled from the readings around it across no gap longer than STATE_GAP_S (fill_rows), as the MCAP
     and HDF5 state readers fill an arm's frames, with a state_filled issue. A state with a longer gap (a table shorter
     than its video) is not read as the state, with the gap in the note; its column stays a signal (_used_columns). A
-    state with one NaN frame had been dropped and the episode told the dataset records no observation.state."""
+    state with one NaN frame had been dropped and the episode told the dataset records no observation.state.
+    Two or more arms or grippers are read each on its own when some actor has a reading at every frame (tracked): one
+    that lost its reading for longer (DiverseUMI's untracked stretches, which observation.state_valid marks) is NaN
+    there with a state_untracked issue, and the state is kept, so the checks run on everything that was tracked."""
     issues = []
     if state is None or kind == "none" or not n:
         return state, action, kind, note, issues
     at = frame_rows(df, n)
     t = np.arange(n) / float(fps or 30.0)
+    # the columns whose missing readings the dataset declares itself (VALIDITY_COLUMNS), under fit's names for them
+    declared = {column for column in VALIDITY_COLUMNS if df is not None and column in df.columns
+                and validity_mask(df, column, _cells(df[column])) is not None}
 
     def fit(a, what):
         a = on_frames(np.asarray(a, dtype=np.float64), at, n)
         ok = np.isfinite(a).all(axis=1)
         if ok.all():
             return a, None
+        if kind in ("ee_pose", "joints") and a.shape[1] % JOINT_DIMS == 0 and a.shape[1] > JOINT_DIMS:
+            # a gap where no actor has a reading (a table shorter than its video, a recorder that stopped) is the whole
+            # state's and is read as before; one where only some actors lose their reading is each actor's (tracked)
+            # A frame the table has a row for but whose values its own validity column marks invalid
+            # (recorded_validity) was declared untracked, which is each actor's even when all of them lost it at once
+            some = np.zeros(len(a), dtype=bool)
+            for g in range(a.shape[1] // JOINT_DIMS):
+                some |= np.isfinite(a[:, JOINT_DIMS * g:JOINT_DIMS * (g + 1)]).all(axis=1)
+            if what in declared:
+                some |= np.isfinite(on_frames(np.zeros((len(df), 1)), at, n)[:, 0])
+            if some.any() and fill_rows(t, t[some], np.zeros((int(some.sum()), 1)))[1] is None:
+                return tracked(a, what)
         if not ok.any():
             return None, "has no reading on any frame"
         rows, gap = fill_rows(t, t[ok], a[ok])
@@ -7592,6 +7661,44 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
                 rows[~ok, angles] = Slerp(t[ok], Rotation.from_euler("xyz", a[ok, angles]))(missing).as_euler("xyz")
         miss = np.flatnonzero(~ok)
         issues.append(state_filled_issue(what, len(miss), n, float(t[miss[0]]), float(t[miss[-1]])))
+        return rows, None
+
+    def tracked(a, what):
+        # each arm or gripper (JOINT_DIMS values) on its own: a short gap is filled as fill_rows fills one, and a
+        # stretch where that actor has no reading for longer (a gripper whose pose was not tracked) stays NaN, with a
+        # state_untracked issue, while its readings elsewhere and the other actors' are kept. The checks and the
+        # motion rows read a NaN row as no reading (checks/capture_qc.py canonical_states, label/state.py)
+        rows = np.full(a.shape, np.nan)
+        filled_any = np.zeros(len(a), dtype=bool)
+
+        def untracked_at(g, spans):
+            # the state's stretches are the issue; the action's, which follow them, would only repeat it
+            if what == "observation.state":
+                if spans:
+                    issues.append(state_untracked_issue(what, g, spans))
+        for g in range(a.shape[1] // JOINT_DIMS):
+            cols = slice(JOINT_DIMS * g, JOINT_DIMS * (g + 1))
+            ok = np.isfinite(a[:, cols]).all(axis=1)
+            if ok.all():
+                rows[:, cols] = a[:, cols]
+                continue
+            if not ok.any():
+                untracked_at(g, [(float(t[0]), float(t[-1]))])
+                continue
+            rows[:, cols], filled, untracked = fill_tracked(t, ok, a[:, cols])
+            if kind == "ee_pose" and filled.any() and ok.sum() > 1:
+                from scipy.spatial.transform import Rotation, Slerp
+                angles = slice(JOINT_DIMS * g + 3, JOINT_DIMS * g + 6)
+                rows[filled, angles] = Slerp(t[ok], Rotation.from_euler("xyz", a[ok, angles]))(
+                    np.clip(t[filled], t[ok][0], t[ok][-1])).as_euler("xyz")
+            filled_any |= filled
+            untracked_at(g, untracked)
+        if filled_any.any():
+            miss = np.flatnonzero(filled_any)
+            issues.append(state_filled_issue(what, len(miss), n, float(t[miss[0]]), float(t[miss[-1]])))
+        if not np.isfinite(rows).any():
+            issues[:] = [x for x in issues if x.get("signal") != what]
+            return None, "has no reading on any frame"
         return rows, None
     st, why = fit(state, "observation.state")
     if st is None:
@@ -7987,7 +8094,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     state, action, kind, note, fixes = state_on_frames(state_rows, state, action, count, fps, kind, note)
     for issue in fixes:
         add_issue(extra, **issue)
-    signals = recorded_signals(aligned_df, _used_columns(kind, state, action, state_columns, action_columns)
+    signals = recorded_signals(aligned_df, _used_columns(kind, state, action, state_columns, action_columns,
+                                                       df=aligned_df)
                                | set(r["image_cams"]) | set(r.get("image_depths") or []) | set(hold_back),
                                0 if image_anchor else count, r["features"])
     if partial_anchor:
@@ -10396,6 +10504,36 @@ def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray |
         if gaps:
             return None, max(gaps, key=lambda g: g[1] - g[0])
     return lerp_rows(q, t, y), None
+
+
+def fill_tracked(q: np.ndarray, ok: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray, list]:
+    """(rows, filled, untracked) of one tracked actor's rows y at times q, read where ok: a run of frames with no
+    reading is filled from the readings around it (lerp_rows) when fill_rows would fill it (a gap no longer than
+    STATE_GAP_S and STATE_STOP_STEPS of the median step, an end within the edge slack), and is left NaN otherwise.
+    filled marks the frames filled; untracked lists each run left NaN as (first time, last time) of q. A gripper whose
+    pose was not tracked for 20 s keeps its readings on either side, which fill_rows would have thrown away with it."""
+    q = np.asarray(q, dtype=np.float64)
+    ok = np.asarray(ok, dtype=bool)
+    rows = np.full((len(q), y.shape[1]), np.nan)
+    rows[ok] = y[ok]
+    filled = np.zeros(len(q), dtype=bool)
+    t = q[ok]
+    step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+    longest, edge = max(STATE_GAP_S, STATE_STOP_STEPS * step), edge_slack(float(q[-1] - q[0])) if len(q) else 0.0
+    bounds = np.flatnonzero(np.diff(np.r_[1, ok.astype(np.int8), 1]))
+    untracked = []
+    for i, j in zip(bounds[::2], bounds[1::2]):
+        if i == 0 and j == len(q):
+            untracked.append((float(q[0]), float(q[-1])))
+            continue
+        span, allowed = ((float(q[j] - q[0]), edge) if i == 0 else (float(q[-1] - q[i - 1]), edge) if j == len(q)
+                         else (float(q[j] - q[i - 1]), longest))
+        if span <= allowed:
+            rows[i:j] = lerp_rows(q[i:j], t, y[ok])
+            filled[i:j] = True
+        else:
+            untracked.append((float(q[i]), float(q[j - 1])))
+    return rows, filled, untracked
 
 
 def gap_words(gap: tuple, zero: float) -> str:

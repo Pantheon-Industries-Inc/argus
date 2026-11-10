@@ -226,6 +226,10 @@ def recorded_motion(state: np.ndarray, ks: list[int], names: list[str]) -> list[
         for g, name in enumerate(names):
             o = 7 * g
             xyz = s[a:b + 1, o:o + 3]
+            if not np.isfinite(s[a:b + 1, o:o + 7]).all():
+                # an untracked stretch touches the interval (prepare/formats.py fill_tracked): no motion is claimed
+                row["grippers"][name] = {"untracked": True}
+                continue
             steps = np.linalg.norm(np.diff(xyz, axis=0), axis=1) if b > a else np.zeros(1)
             row["grippers"][name] = {
                 "move_cm": float(np.linalg.norm(xyz[-1] - xyz[0]) * 100),
@@ -248,6 +252,9 @@ def recorded_joint_motion(state: np.ndarray, ks: list[int], names: list[str]) ->
         for g, name in enumerate(names):
             o = 7 * g
             j = s[a:b + 1, o:o + 6]
+            if not np.isfinite(s[a:b + 1, o:o + 7]).all():
+                row["arms"][name] = {"untracked": True}
+                continue
             steps = np.abs(np.diff(j, axis=0)).max() if b > a else 0.0
             row["arms"][name] = {"max_deg": float(np.degrees(np.abs(j[-1] - j[0]).max())),
                                  "max_step_deg": float(np.degrees(steps)),
