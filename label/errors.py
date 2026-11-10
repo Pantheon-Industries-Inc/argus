@@ -6,8 +6,9 @@ class DispatchError(RuntimeError):
 
     verified_unpaid is True only when the request provably cost nothing: it never left the machine (the connection
     or the upload failed before the provider had the whole request), or the provider answered with an error status
-    instead of a completion. Every other failure (a timeout or reset after the request was sent, a gateway timeout,
-    a 200 with no completion) is unknown and keeps its reservation.
+    instead of a completion, or with one of its refusals inside a 200 reply (label/harness.py REFUSED_IN_REPLY).
+    Every other failure (a timeout or reset after the request was sent, a gateway timeout, any other 200 with no
+    completion) is unknown and keeps its reservation.
 
     client_timeout is True when our own client gave up: the connection carried no bytes for longer than any live
     reply can be silent (label/harness.py SILENT_CONNECTION_LIMIT_S), so we closed it as dead. It is never the
