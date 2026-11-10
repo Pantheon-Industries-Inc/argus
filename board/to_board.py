@@ -169,6 +169,13 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     with t_s null, and the page lists it untimed after the timed ones. The run's own output is unchanged."""
     failed = label_failed(result)
     labels, dropped = ({}, []) if failed else typed(result)
+    raw = result.get("labels") if isinstance(result.get("labels"), dict) and not failed else {}
+
+    def released(name):
+        # a released dataset's name for a field the model writes under another (DiverseUMI-10k ships task_summary
+        # as recording_summary and performance_review as recording_review), read only when the model's own is absent
+        value = raw.get(name)
+        return value if isinstance(value, str) else ""
     off = {}
     for x in dropped:
         off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
@@ -267,7 +274,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
 
     return {
         "dataset": dataset,
-        "episode_prompt": labels.get("task_summary") or "",
+        "episode_prompt": labels.get("task_summary") or released("recording_summary"),
         "viewpoint": labels.get("viewpoint"),  # ego: first_person | third_person
         **({'camera_observations': finite(copy.deepcopy(result['camera_observations']))}
            if not failed and isinstance(result.get('camera_observations'), dict)
@@ -279,7 +286,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "scene_graph": labels.get("scene_graph") or [],
         "recovery": labels.get("recovery") or [],
         "instruction_variants": labels.get("instruction_variants") or [],
-        "performance_review": labels.get("performance_review") or "",
+        "performance_review": labels.get("performance_review") or released("recording_review"),
         # with an instruction or annotation: how the model's independent reading relates to it (aligned,
         # narrower, broader, different, unrelated); None when there is nothing to compare against
         "goal_alignment": labels.get("goal_alignment") if isinstance(labels.get("goal_alignment"), dict) else None,
