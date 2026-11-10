@@ -998,7 +998,7 @@ READER_ISSUE_KINDS = {
     "data": ["camera_not_aligned", "camera_not_decodable", "camera_decode_failed", "clip_frame_count",
              "unshown_camera_not_decodable", "depth_not_read", "depth_not_decodable", "depth_clip_partial",
              "signal_bad_cells", "signal_not_finite", "signal_alignment_assumed",
-             "state_filled", "state_unaligned", "state_partial", "table_short", "table_long", "task_files_disagree"],
+             "state_filled", "state_untracked", "state_unaligned", "state_partial", "table_short", "table_long", "task_files_disagree"],
     "labelling": ["model_reply_unparsed", "model_reply_cut_off", "part_not_labelled", "label_output_unreadable",
                   "no_part_labelled", "model_no_reply", "model_reply_not_shown", "model_reply_off_schema",
                   "model_reply_fields_dropped"],

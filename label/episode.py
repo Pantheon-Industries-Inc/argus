@@ -2103,7 +2103,8 @@ def _motion_table(ep: dict, pl: dict) -> str:
     rows = []
     if kind == "ee_pose":
         for r in ms.recorded_motion(st, ks, names):
-            parts = [f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
+            parts = [f"{a} untracked" if g.get("untracked") else
+                     f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
                      f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
         what = ("Each row gives, per gripper: moved (cm, the straight-line distance between the recorded "
@@ -2115,7 +2116,8 @@ def _motion_table(ep: dict, pl: dict) -> str:
                  "step of several cm with no jump in the view at that moment")
     else:
         for r in ms.recorded_joint_motion(st, ks, names):
-            parts = [f"{a} {g['max_deg']:.1f}, {g['max_step_deg']:.1f}, {g['grip_a']:.2f}>{g['grip_b']:.2f}"
+            parts = [f"{a} untracked" if g.get("untracked") else
+                     f"{a} {g['max_deg']:.1f}, {g['max_step_deg']:.1f}, {g['grip_a']:.2f}>{g['grip_b']:.2f}"
                      for a, g in r["arms"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
         what = ("Each row gives, per arm: joints moved up to (deg, the largest change of any one joint "
@@ -2154,7 +2156,34 @@ def _motion_table(ep: dict, pl: dict) -> str:
         + (f"The recorded state covers only {seconds(frame_time(ep, sa))} to {seconds(frame_time(ep, sb - 1))} of "
            "the episode, so the rows stop there and nothing is recorded outside it.\n"
            if (sa, sb) != (0, len(st)) else "")
+        + _untracked_text(ep, pl, names, n)
         + "\n".join(rows))
+
+
+def untracked_spans(ep: dict, pl: dict) -> list[tuple[int, int, int]]:
+    """(actor, first frame, last frame) of each stretch where one actor's recorded state has no reading (NaN), inside
+    the frames the state covers: a gripper whose pose was not tracked there (prepare/formats.py fill_tracked)."""
+    st = np.asarray(ep["state"][:pl["n"]], dtype=np.float64)
+    sa, sb = pl.get("state_span") or (0, len(st))
+    out = []
+    for g in range(st.shape[1] // 7 if st.ndim == 2 else 0):
+        miss = ~np.isfinite(st[sa:sb, 7 * g:7 * g + 7]).all(axis=1)
+        edges = np.flatnonzero(np.diff(np.r_[0, miss.astype(np.int8), 0]))
+        out += [(g, sa + int(i), sa + int(j) - 1) for i, j in zip(edges[::2], edges[1::2])]
+    return out
+
+
+def _untracked_text(ep: dict, pl: dict, names: list[str], n: dict) -> str:
+    """The stretches where an actor's recorded state has no reading, so its rows say untracked there. Its camera and
+    the scene still show what it did: only the recording is missing."""
+    spans = untracked_spans(ep, pl)
+    if not spans:
+        return ""
+    said = "; ".join(f"{names[g] if g < len(names) else g + 1} from {seconds(frame_time(ep, a))} to "
+                     f"{seconds(frame_time(ep, b))}" for g, a, b in spans)
+    return (f"The recording has no reading for these {n['actors']} over these stretches: {said}. A row that touches "
+            f"one says untracked for that {n['actor']}; read what it did there from the frames alone. A missing "
+            "reading is not a disagreement with the video.\n")
 
 
 def annotation_lines(ctx: dict) -> list[str]:

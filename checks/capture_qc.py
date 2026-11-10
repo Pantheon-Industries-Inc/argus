@@ -218,13 +218,17 @@ def canonical_states(ep: dict) -> dict:
         return out
     n_act = s.shape[1] // 7
     a, b = me.state_span(ep)
+    # a stretch the reader left untracked (prepare/formats.py fill_tracked: an actor with no reading for longer than it
+    # fills) is a data issue of its own (state_untracked), so its empty rows are not repeated as broken values here
+    untracked = any(i.get("kind") == "state_untracked" for i in ep["context"].get("reader_issues") or [])
     for g in range(n_act):
         block = s[a:b, 7 * g:7 * g + 7]
         # a row with a missing (NaN) or infinite value is reported and left out (invalid); every other row is checked
         ok = np.isfinite(block).all(axis=1)
-        if not ok.all():
-            out["nonfinite"].append({"actor": names[g], "rows": int((~ok).sum()),
-                                     "first_row": a + int(np.flatnonzero(~ok)[0])})
+        bad = ~ok & ~(np.isnan(block).all(axis=1) if untracked else False)
+        if bad.any():
+            out["nonfinite"].append({"actor": names[g], "rows": int(bad.sum()),
+                                     "first_row": a + int(np.flatnonzero(bad)[0])})
         rows = a + np.flatnonzero(ok)
         o = 7 * g
         if kind == "ee_pose":
