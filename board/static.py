@@ -46,12 +46,13 @@ Subcommands (all resumable):
   python -m board static measure --board BOARD --clips CLIPS
   python -m board static media --board BOARD --clips CLIPS [--limit-per-dataset 50] [--dataset NAME]
   python -m board static site --board BOARD --clips CLIPS [--public-base https://example.org/board/] [--title T]
-      [--header FILE]
+      [--header FILE] [--public-header] [--customer] [--audit-deny RE] [--split-episodes F] [--episode-order F]
 
 Every subcommand needs ffmpeg and ffprobe. Goal frames are cut by board/serve.py's extract_frame, so
 BOARD_FFMPEG_CONCURRENCY (default 4) also bounds how many are cut at once. OUT (--out) defaults to BOARD/static.
 The page's header shows --title (default "Data Dashboard") and the board's name from BOARD/manifest.json, or the site
-header in --header. Test a build with any static server that answers byte ranges, e.g.
+header in --header. A public board's rules (--public-header, --customer, --split-episodes, --episode-order) are
+board/public_board.py's. Test a build with any static server that answers byte ranges, e.g.
 `npx http-server BOARD/static -p 8991`, then open http://localhost:8991/<build_id>/.
 board/publish.sh uploads a build with rclone (to an S3-compatible bucket, for example).
 """
@@ -75,6 +76,7 @@ from pathlib import Path
 
 from board import clips as bc
 from board import hands as hands_overlay
+from board import public_board as pb
 from board import serve as sa
 from board.to_board import dumps
 from board.label_projection import verdict_or_tasks
@@ -661,7 +663,7 @@ def media_status(eps, media_root: Path):
 # the identity as given (cmd_site), so forgetting an option here costs a new build id, never a stale one.
 _UNPUBLISHED_OPTIONS = frozenset({'cmd', 'board', 'qa', 'clips', 'out', 'jobs', 'threads', 'limit_per_dataset',
                                   'dataset', 'samples', 'first', 'build_id', 'force', 'compare', 'hands', 'keypoints',
-                                  'sensors', 'dictionary_job', 'header'})
+                                  'sensors', 'dictionary_job', 'header', 'split_episodes', 'episode_order'})
 
 
 def cmd_site(a):
@@ -673,6 +675,15 @@ def cmd_site(a):
         print('No episodes are available for publication. Build a board with labels before creating a static site.')
         return 1
     files = [e["rec"]["file"] for e in eps]
+    # the public board rules (board/public_board.py)
+    public_header, customer = getattr(a, "public_header", False), getattr(a, "customer", False)
+    if public_header and getattr(a, "header", None):
+        raise ValueError("--public-header writes the page's header itself; leave out --header")
+    split = pb.read_ids(getattr(a, "split_episodes", None), "--split-episodes")
+    order = pb.read_ids(getattr(a, "episode_order", None), "--episode-order")
+    unknown = sorted(set(split + order) - {e["rec"]["episode_id"] for e in eps})
+    if unknown:
+        raise ValueError(f"--split-episodes or --episode-order names episodes the board does not have: {unknown[:5]}")
     hands = hands_dir(a.qa, a.hands)
     keypoints = keypoints_dir(a.qa, a.keypoints)
     sensors = sensors_dir(a.qa, getattr(a, "sensors", None))
@@ -687,7 +698,8 @@ def cmd_site(a):
     # unless it is known not to change what is published, so an option added later cannot reuse an old build id.
     options = {k: v for k, v in vars(a).items() if k not in _UNPUBLISHED_OPTIONS}
     presentation = dumps([options, sa.board_name(a.board), sa.labels_license(a.board), sa.targets(a.board),
-                          sa.read_header(getattr(a, 'header', None)), publication_policy()], sort_keys=True, default=str)
+                          sa.read_header(getattr(a, 'header', None)), publication_policy(), split, order],
+                         sort_keys=True, default=str)
     bid = a.build_id or identity + '-' + _h(presentation, 8)
     if not bid or Path(bid).name != bid or bid.startswith('.'):
         raise ValueError('build id must be a single visible directory name')
@@ -704,6 +716,8 @@ def cmd_site(a):
     grid_count = 0
     by_ds = defaultdict(list)
     idx_eps = []
+    empty = []
+    categories = set()     # the board's own data-issue categories, which a customer build's data must not name
     for e in eps:
         rec = dict(e["rec"])
         rec["_media"] = {k: m["rel"] for k, m in e["media"].items()}
@@ -720,6 +734,14 @@ def cmd_site(a):
         current = sa.current_label(json.loads((a.qa / rec["file"]).read_text()),
                                    getattr(a, "dictionary_job", None), rec["file"])
         view = sa.episode_view(current)
+        categories |= pb.label_categories([current])
+        if split or public_header or customer:
+            # a subtask split out of a longer recording shows its subtask prompt, a whole recording its summary
+            view["episode_prompt"] = rec["episode_prompt"] = pb.card_text(view, rec["episode_id"] in split)
+            if not view["episode_prompt"].strip():
+                empty.append(rec["episode_id"])
+        if customer:
+            view = pb.without_issue_traces(view)
         (stage / "data/ep" / site_file(rec["file"])).write_text(dumps(view))
         from board import grids as bg
         grid_root = a.qa.parent / 'grids'
@@ -740,7 +762,13 @@ def cmd_site(a):
             (stage / 'data/grids' / site_file(rec['file'])).write_text(dumps(bg.view(gidx, lambda i, g: rels[i])))
             rec['_grids'] = len(rels)
             grid_count += 1
+    if empty and (public_header or customer):
+        raise ValueError(f"a public board shows no empty card; no prompt or summary for {empty[:5]}")
+    eid_of = {e["rec"]["file"]: e["rec"]["episode_id"] for e in eps}
+    idx_eps = pb.ordered(idx_eps, order, lambda row: eid_of[row[1]])
     for ds, recs in by_ds.items():
+        recs = pb.ordered([pb.without_issue_traces(r) if customer else r for r in recs], order,
+                          lambda r: r["episode_id"])
         (stage / "data/lists" / f"{site_name(ds)}.json").write_text(dumps(public_json(recs), separators=(",", ":")))
     # the page fetches each dataset's list and each episode's files by these names, never by a name of its own making
     site_names = {f: site_file(f) for f in files if site_file(f) != f}
@@ -835,9 +863,10 @@ def cmd_site(a):
            "labels_license": sa.labels_license(a.board), "targets": sa.targets(a.board),
            "grids": grid_count > 0}
     name = sa.board_name(a.board)
-    header = sa.read_header(getattr(a, "header", None))
-    (stage / "index.html").write_text(sa.render_index(
-        a.title, {"mode": "static", "data": "data/", "media": "../media/", **has}, name, header))
+    header = pb.header_markup(a.title) if public_header else sa.read_header(getattr(a, "header", None))
+    finish = pb.with_public_header if public_header else (lambda page: page)
+    (stage / "index.html").write_text(finish(sa.render_index(
+        a.title, {"mode": "static", "data": "data/", "media": "../media/", **has}, name, header)))
     if a.public_base:
         base = a.public_base.rstrip("/") + "/"
         page = sa.render_index(
@@ -846,7 +875,7 @@ def cmd_site(a):
         # parses (the lists and labels are fetched with CORS, the videos and frames without, and each has its own)
         origin = "/".join(base.split("/")[:3])
         hint = f'<link rel="preconnect" href="{origin}" crossorigin>\n<link rel="preconnect" href="{origin}">\n'
-        (stage / "index.public.html").write_text(page.replace("<head>", "<head>\n" + hint, 1))
+        (stage / "index.public.html").write_text(finish(page.replace("<head>", "<head>\n" + hint, 1)))
     st, missing = media_status(eps, a.out / "media")
     build = {"build_id": bid, "built_at": dt.datetime.now().isoformat(timespec="seconds"), "code": _git_commit(),
              "qa": str(a.qa), "clips": str(a.clips), "enc": ENC_TAG, "public_base": a.public_base,
@@ -855,6 +884,12 @@ def cmd_site(a):
              "hands": hands_res, "keypoints": kp_res, "sensors": sn_res,
              "media": st, "missing_media": missing}
     (stage / "BUILD.json").write_text(dumps(public_build_manifest(build), indent=1))
+    if customer:
+        hits = pb.audit(stage, getattr(a, "audit_deny", None) or [], categories)
+        if hits:
+            from board.build import remove_tree
+            remove_tree(stage)
+            raise ValueError(f"customer build names what a customer page must not: {hits[:10]}")
     # Operational paths stay outside the publication root, including its media.
     root_key = hashlib.sha256(str(a.out.resolve()).encode()).hexdigest()[:16]
     receipt = a.out.resolve().parent / '.argus-build-receipts' / root_key / f'{bid}.json'
@@ -924,6 +959,17 @@ def main():
                                                    f"(default {TITLE!r})")
     ap.add_argument("--header", type=Path, help="site: an HTML file with a site's own header, shown in place of the "
                                                 "page's title bar (python -m board serve --header)")
+    ap.add_argument("--public-header", action="store_true",
+                    help="site: a public board's header, --title alone top left, no dataset tabs or repeated board name")
+    ap.add_argument("--customer", action="store_true",
+                    help="site: no data-issue trace on the page or in its data; an audit fails the build otherwise")
+    ap.add_argument("--audit-deny", action="append", metavar="REGEX",
+                    help="site, with --customer: a pattern no file of the build may contain (repeatable)")
+    ap.add_argument("--split-episodes", type=Path,
+                    help="site: a JSON list of episode ids split out of a longer recording; their cards show the "
+                         "subtask prompt, the others the recording's summary")
+    ap.add_argument("--episode-order", type=Path,
+                    help="site: a JSON list of episode ids shown first, in this order")
     a = ap.parse_args()
     a.qa = a.board / "qa"
     if not a.qa.is_dir():
