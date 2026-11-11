@@ -64,6 +64,7 @@ from label import episode as me, policy, tier
 from label.atomic import write_atomic
 # the idle rule (an idle stretch is a low data issue unless it is other activity), applied in parse_response
 from label.idle import idle_category, idle_issues_low, other_activity, OTHER_ACTIVITY  # noqa: F401
+from label.hand_issues import hand_issues_low
 from label.errors import DispatchError, KeyExhausted, SpendCap, Truncated
 from label.route import route_width
 from label import inflight
@@ -1186,6 +1187,7 @@ def parse_response(text: str) -> tuple[dict, bool]:
         labels = typed_labels(normalize_timeline(labels))
         derive_instruction_mismatch(labels)
         idle_issues_low(labels)
+        hand_issues_low(labels)
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
