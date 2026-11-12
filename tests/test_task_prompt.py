@@ -264,14 +264,28 @@ HANDHELD_SIDES = """- WHICH HAND EACH GRIPPER CAMERA IS ON. Where the dataset na
 # frames with a face outside every face_visible span (bystanders, faces in a mirror, a close face seen briefly), so the
 # rule names those cases and asks for one occurrence per appearance. Then (2026-11-03): 17 of 1,241 face issues on the
 # same takes came back with no times, one issue for a face that came and went, so each reappearance now gives the t_s
-# and end_s of its stretch (label/completeness.py face_gaps).
+# and end_s of its stretch (label/completeness.py face_gaps). Then (Eric, 2026-11-12): bare-hand or human help is an issue only when
+# the action or its duration is egregious, with the egregious actions listed, and a guess gets the benefit of the doubt.
 HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of the following is a data issue over its span
   and goes in data_issues even when the timeline already describes it. These severities are minimums set by what the
   dataset may ship, not by the training-impact scale below; apply them even when a model would learn little wrong
   from the moment. The operator holding or using their own phone is at least medium severity. A gripper set down,
   parked or taken off while the demonstration goes on (the other gripper or a bare hand keeps working) is at least
-  medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper taken off and the
-  bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. Any
+  medium severity. Bare-hand work and another person's work are at least medium only when the action or its
+  duration is egregious. These actions are egregious at any length: another person's hand in the work, such as
+  picking something off the floor and putting it back on the table; anything put in or held by the mouth; a
+  gripper taken off and the bare hand reaching for or moving task objects; with the gripper still worn, the hand
+  itself closing round a task object and holding, carrying or stretching it while the jaws are open or off it;
+  the operator dropping something and bending down to pick it up; a phone pulled out. Help that is not
+  egregious, such as fingers brushing an object or briefly pulling or steadying it while the gripper is worn,
+  is not an issue when it is brief; sustained
+  fiddling, such as fingers working an object for tens of seconds, is at least medium. Fingers holding a tool or
+  object below or beside open jaws are doing the work even when the jaws touch it, and sustained means across
+  the whole span: fingers that keep coming back to the object through it count, though each touch is short.
+  Judge the duration by common sense, not by a fixed count of seconds. In a wrist camera the other hand's
+  fingers are often visible during a handoff, and a top camera rarely shows whether fingers touch an object;
+  when it only appears, seems or may be so, give the benefit of the doubt: report nothing, or at most a low
+  issue. Any
   face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
   face_visible, over its span; report every one, and anything that may be a face: bystanders, faces in a mirror
   or screen, at a frame edge or seen for under a second, and the operator's own; report each reappearance as
