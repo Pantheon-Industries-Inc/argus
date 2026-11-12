@@ -57,8 +57,7 @@ media/architecture.source.svg
     Tien Kung drawer recording, frame at 33s; RGB scaling and depth color rendering by Pantheon.
 
     The UMI playback uses Pantheon's standalone demonstration in media/board_demo.webp. The model annotations in
-    the chart and the README's sensor-finding excerpt are Pantheon annotations, licensed CC BY 4.0 as stated in
-    the README. The recorded imagery retains its source license.
+    the chart are Pantheon annotations, licensed CC BY 4.0 as stated in the README. The recorded imagery retains its source license.
 
     State/video comparison excerpts: 10Kh-RealOmin-OpenData, published by GenRobot under CC BY-SA 4.0
     (https://creativecommons.org/licenses/by-sa/4.0/). Source: https://huggingface.co/datasets/genrobot2025/10Kh-RealOmin-OpenData.
