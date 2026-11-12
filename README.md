@@ -167,7 +167,7 @@ A task still under way at a cut that cannot be joined gets the outcome `unclear`
 
 ### Data issue severity
 
-Some severities are fixed minimums, independent of training impact. On [`handheld_gripper`](label/prompts.py), the prompt rates the operator using their own phone, a gripper set down or taken off while the work goes on, and egregious bare-hand work at least medium: another person's hand, something in the mouth, a bare hand on task objects with the gripper off, picking up a dropped object, or fingers working an object for a sustained stretch, while brief help with the gripper on is not an issue. It rates any face in any camera medium under `face_visible`, with one timed issue per stretch.
+Some severities are fixed minimums, independent of training impact. On [`handheld_gripper`](label/prompts.py), the prompt rates the operator using their own phone, a gripper set down or taken off while the work goes on, and egregious bare-hand work at least medium. It rates any face in any camera medium under `face_visible`, with one timed issue per stretch.
 
 On every rig, the parser ([`idle_issues_low`](label/idle.py)) rates an idle stretch low and keeps the model's own rating in `severity_as_labelled`. An idle item that describes other activity, such as phone use, another person handling the objects, bare-hand work or a gripper set down, keeps the model's severity, as does a frozen or black camera.
 

@@ -277,10 +277,13 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   gripper taken off and the bare hand reaching for or moving task objects; the operator dropping something and
   bending down to pick it up; a phone pulled out. Help that is not egregious, such as fingers brushing an object
   or briefly pulling or steadying it while the gripper is worn, is not an issue when it is brief; sustained
-  fiddling, such as fingers working an object for tens of seconds, is at least medium. Judge the duration by
-  common sense, not by a fixed count of seconds. In a wrist camera the other hand's fingers are often visible
-  during a handoff, and a top camera rarely shows whether fingers touch an object; when it only appears, seems
-  or may be so, give the benefit of the doubt: report nothing, or at most a low issue. Any
+  fiddling, such as fingers working an object for tens of seconds, is at least medium. Fingers holding a tool or
+  object below or beside open jaws are doing the work even when the jaws touch it, and sustained means across
+  the whole span: fingers that keep coming back to the object through it count, though each touch is short.
+  Judge the duration by common sense, not by a fixed count of seconds. In a wrist camera the other hand's
+  fingers are often visible during a handoff, and a top camera rarely shows whether fingers touch an object;
+  when it only appears, seems or may be so, give the benefit of the doubt: report nothing, or at most a low
+  issue. Any
   face in any camera, whole or partial, anyone's, even printed, is medium (never higher), tagged exactly
   face_visible, over its span; report every one, and anything that may be a face: bystanders, faces in a mirror
   or screen, at a frame edge or seen for under a second, and the operator's own; report each reappearance as
