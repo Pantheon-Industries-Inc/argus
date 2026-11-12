@@ -274,9 +274,11 @@ HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of th
   medium severity. Bare-hand work and another person's work are at least medium only when the action or its
   duration is egregious. These actions are egregious at any length: another person's hand in the work, such as
   picking something off the floor and putting it back on the table; anything put in or held by the mouth; a
-  gripper taken off and the bare hand reaching for or moving task objects; the operator dropping something and
-  bending down to pick it up; a phone pulled out. Help that is not egregious, such as fingers brushing an object
-  or briefly pulling or steadying it while the gripper is worn, is not an issue when it is brief; sustained
+  gripper taken off and the bare hand reaching for or moving task objects; with the gripper still worn, the hand
+  itself closing round a task object and holding, carrying or stretching it while the jaws are open or off it;
+  the operator dropping something and bending down to pick it up; a phone pulled out. Help that is not
+  egregious, such as fingers brushing an object or briefly pulling or steadying it while the gripper is worn,
+  is not an issue when it is brief; sustained
   fiddling, such as fingers working an object for tens of seconds, is at least medium. Fingers holding a tool or
   object below or beside open jaws are doing the work even when the jaws touch it, and sustained means across
   the whole span: fingers that keep coming back to the object through it count, though each touch is short.
