@@ -446,7 +446,7 @@ aside.rail {
   background: var(--border-strong); pointer-events: none; }
 /* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule centred on the
    rail's border (the segment is 1px wider than the rail) */
-.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 0 24px 0 10px;
+.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 0 24px 0 var(--page-pad);
   background: var(--surface); border-right: 3px solid var(--border-strong); }
 .cv-all .cv-k { font: 600 11px/1 var(--sans); color: var(--fg-2); letter-spacing: 0.01em; white-space: nowrap; }
 .cv-all .cv-fig { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; min-width: 0; overflow: hidden; }
@@ -488,9 +488,9 @@ aside.rail {
 .cv-cell.none:hover { background: none; }
 /* all nine tabs fit from 1600 px down to 1280 px (at 1440 px the last one ran past the edge) */
 @media (max-width: 1600px) { .cv-cell { padding: 0 10px; } .cv-num { font-size: 10.5px; } .cv-all {
-  padding: 0 16px 0 10px; } }
+  padding: 0 16px 0 var(--page-pad); } }
 @media (max-width: 1280px) { .cv-num .u { display: none; } .cv-cell { padding: 0 11px; } .cv-all {
-  padding: 0 16px 0 10px; } }
+  padding: 0 16px 0 var(--page-pad); } }
 @media (max-width: 1200px) { .cv-num { font-size: 10.5px; } .cv-name { font-size: 12px; } .cv-cell { padding: 0 8px; }
   .cv-all .cv-fig b { font-size: 16px; } }
 .rail-empty {
@@ -9820,6 +9820,26 @@ function layoutDefects(folds, overlaysOnly = false) {
     const r = el.getBoundingClientRect(), over = r.bottom - (frameBottom - controls);
     if (over > 1 && r.top < frameBottom) note(el, "covers the video player's controls", over,
       (el.textContent || '').trim().slice(0, 80));
+  }
+  // the page's left column starts on one vertical line: the title, the board totals and the rail's heading all begin
+  // at the shared gutter (--page-pad). The totals once kept a 10px padding of their own at wide widths and sat 6px
+  // left of the title and the rail (2026-11-18)
+  const edgeOf = sel => {
+    const el = document.querySelector(sel);
+    if (!el || isHidden(el)) return null;
+    const t = [...el.childNodes].find(c => c.nodeType === 3 && c.data.trim());
+    if (!t) return null;
+    const r = document.createRange();
+    r.selectNodeContents(t);
+    return {el, left: r.getBoundingClientRect().left};
+  };
+  const edges = ['.page-head h1', '.cv-all .cv-k', 'aside.rail .rd-name'].map(edgeOf).filter(Boolean);
+  if (edges.length > 1) {
+    const line = edges[0].left;
+    for (const e of edges.slice(1)) {
+      const off = Math.abs(e.left - line);
+      if (off > 1) note(e.el, 'starts off the page gutter the title starts on', off, (e.el.textContent || '').trim().slice(0, 80));
+    }
   }
   const sw = document.documentElement.scrollWidth;
   if (sw > vw + 1) note(null, 'page scrolls sideways', sw - vw, '');
