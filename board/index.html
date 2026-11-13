@@ -41,6 +41,7 @@
   --arm-left:  #4f6d8f;
   --arm-right: #8a5a9a;
 
+  --page-pad: 16px;
   --header-h: 44px;   /* the page header: title and board name */
   --cov-h: 62px;
   --rail-w: 240px;    /* the episode rail's column; the board totals above it take the same width */
@@ -74,7 +75,7 @@ body {
 code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 /* ---------- header: the page title and the board's name ---------- */
-.page-head { display: flex; align-items: center; gap: 12px; height: var(--header-h); padding: 0 18px;
+.page-head { display: flex; align-items: center; gap: 12px; height: var(--header-h); padding: 0 var(--page-pad);
   background: var(--bg); box-shadow: 0 1px 0 var(--border); position: sticky; top: 0; z-index: 11; }
 .page-head h1 { margin: 0; font: 600 15px/1.2 var(--sans); color: var(--fg); letter-spacing: -0.005em; }
 .ph-board { font: 500 12px/1.2 var(--mono); color: var(--fg-3); overflow-wrap: anywhere; }
@@ -329,7 +330,7 @@ main {
 /* ---------- episode rail (persistent picker) ---------- */
 aside.rail {
   background: var(--bg); border-right: 1px solid var(--border);
-  --rail-pad: 10px; padding: 12px var(--rail-pad);
+  --rail-pad: var(--page-pad); padding: 12px var(--rail-pad);
   position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h));
   /* sticky makes the rail its own stacking context; it sits above the main column so the filter menu, which is
      wider than the rail, is drawn over the video instead of under it */
@@ -2285,7 +2286,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .cv-num { font-size: 11px; }
   .cv-num .u { display: inline; }
   main { display: block; height: auto; }
-  aside.rail { position: static; height: auto; overflow: visible; --rail-pad: 16px; padding: 14px var(--rail-pad); border-right: 0;
+  aside.rail { position: static; height: auto; overflow: visible; --rail-pad: var(--page-pad); padding: 14px var(--rail-pad); border-right: 0;
     border-bottom: 1px solid var(--border-strong); }
   #ep-list { max-height: 46vh; }
   .if-menu { width: min(340px, calc(100vw - 32px)); }
