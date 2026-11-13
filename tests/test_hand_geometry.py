@@ -98,20 +98,24 @@ def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path):
                                               'start':start,'frames':[frame]*15}))
     import base64
     video_url='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
-    prelude="""const STATIC=true, BOARD={hands:true,data:''}; let _activeFile='episode.json';
+    prelude="""const STATIC=true, BOARD={hands:true,data:''}, KP_INDEX=null; let _activeFile='episode.json';
 window._epCleanup=[]; const siteFile=x=>x;
 function fetchJson(url){return fetch(url.replace('hands/','')).then(r=>r.ok?r.json():null);}
 function remember(c,k,p){c.set(k,p);return p;}
-const on=(e,k,f)=>e.addEventListener(k,f);
+let testAbort=new AbortController(); const on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
+function selectMode(mode){document.getElementById('hp-mode').dispatchEvent(new KeyboardEvent('keydown',{key:{off:'Home',skeleton:'ArrowRight',mesh:'End'}[mode]}));}
 """
-    tail="""document.getElementById('controls').innerHTML=hpModes();
+    import re
+    mode = re.search(r'<button id="hp-mode"[\s\S]*?</button>', html).group()
+    tail="""
 const vid=document.querySelector('video');
 vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile));
 """
-    (tmp_path/'index.html').write_text('''<style>#cell{position:relative;width:320px;height:280px}video{position:absolute;top:40px;width:320px;height:240px}.hp-canvas{position:absolute;pointer-events:none}.hp-modes{display:flex}</style>
+    (tmp_path/'index.html').write_text('''<style>#cell{position:relative;width:320px;height:280px}video{position:absolute;top:40px;width:320px;height:240px}.hp-canvas{position:absolute;pointer-events:none}</style>
 <button id="hp-btn" class="ep-head-dl hp-btn" aria-pressed="true"><span class="hp-sw"></span>Hand pose</button>
-<div id="controls"></div><div id="hp-aligned"><div class="kp-note-in"></div></div>
+<span id="hp-mode-home" hidden></span>MODE_MARKUP<div id="hp-aligned"><div class="kp-note-in"></div></div>
 <div id="cell"><video src="VIDEO_URL" muted playsinline></video><canvas id="hp-canvas"></canvas></div><script>'''+prelude+script+tail+'</script>')
+    (tmp_path/'index.html').write_text((tmp_path/'index.html').read_text().replace('MODE_MARKUP',mode))
     (tmp_path/'index.html').write_text((tmp_path/'index.html').read_text().replace('VIDEO_URL',video_url))
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(tmp_path),**kwargs)
@@ -124,7 +128,7 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
             target=send('Target.createTarget',{'url':f'http://127.0.0.1:{server.server_port}/index.html'})['targetId']
             sid=send('Target.attachToTarget',{'targetId':target,'flatten':True})['sessionId']
             def js(code):
-                result=send('Runtime.evaluate',{'expression':code,'returnByValue':True,'awaitPromise':True},sid,deadline=time.monotonic()+20)
+                result=send('Runtime.evaluate',{'expression':code,'returnByValue':True,'awaitPromise':True,'userGesture':True},sid,deadline=time.monotonic()+20)
                 assert 'exceptionDetails' not in result,result
                 return result.get('result',{}).get('value')
             for _ in range(100):
@@ -132,11 +136,14 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
                 time.sleep(.05)
             assert js('window._hp.state.data')
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==0
-            js("document.querySelector('[data-mode=mesh]').click()")
+            js("selectMode('mesh')")
             for _ in range(100):
                 if js("document.querySelector('.hp-status').textContent === ''"):break
                 time.sleep(.02)
-            assert js("document.querySelector('[data-mode=mesh]').getAttribute('aria-pressed')")=='true'
+            assert js("document.getElementById('hp-mode').getAttribute('aria-valuetext')")=='Mesh'
+            for expected in ('Off','Skeleton','Mesh'):
+                js("document.getElementById('hp-mode').click()")
+                assert js("document.getElementById('hp-mode').getAttribute('aria-valuetext')")==expected
             assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")>0
             assert js("""(() => { const surface=hpSurface(); const image=surface.draw([
               {h:'right',points:[[0,0,1],[100,0,10],[0,100,10]]},
@@ -152,22 +159,32 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
             assert js('window._hp.state.frame')==20, js('JSON.stringify({state:window._hp.state,time:vid.currentTime,seeking:vid.seeking,ready:vid.readyState,error:vid.error,status:document.querySelector(".hp-status").textContent})')
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==1
             assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")==0
-            js("vid.play(); document.querySelector('[data-mode=off]').click()")
+            js("vid.play(); selectMode('off')")
             assert js('window._hp.state.active') is False
             assert js('vid.paused') is False
             assert js("document.querySelector('canvas').getContext('2d').getImageData(170,60,1,1).data[3]")==0
-            js("document.querySelector('[data-mode=skeleton]').click()")
+            js("selectMode('off');selectMode('skeleton')")
             assert js('window._hp.state.active') is True
             js("document.getElementById('cell').style.width='195px';vid.style.width='195px'")
             assert js('window._hp.state.data') is True
+            # The same pill follows the fullscreen camera, then returns to its header slot.
+            js("window.savedPill=document.getElementById('hp-mode');document.getElementById('cell').requestFullscreen()")
+            js("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
+            assert js("document.fullscreenElement===document.getElementById('cell') && savedPill.parentElement===document.fullscreenElement") is True
+            js("selectMode('mesh')")
+            assert js("savedPill.getAttribute('aria-valuetext')")=='Mesh'
+            js("document.exitFullscreen()")
+            js("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
+            assert js("document.getElementById('hp-mode-home').nextElementSibling===savedPill") is True
+            js("selectMode('off');selectMode('skeleton')")
             # Second episode setup must discard the first episode's frame and canvas state.
-            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json')")
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[];testAbort.abort();testAbort=new AbortController(); setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json')")
             assert js('window._hp.state.active') is True
-            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; const nativeContext=HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:nativeContext.call(this,kind,...args)}; setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json'); document.querySelector('[data-mode=mesh]').click()")
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[];testAbort.abort();testAbort=new AbortController(); const nativeContext=HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:nativeContext.call(this,kind,...args)}; setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json'); selectMode('mesh')")
             assert js("document.querySelector('.hp-status').textContent")=='Unavailable'
-            js("HTMLCanvasElement.prototype.getContext=nativeContext; document.querySelector('[data-mode=skeleton]').click()")
+            js("HTMLCanvasElement.prototype.getContext=nativeContext; selectMode('off');selectMode('skeleton')")
             assert js('window._hp.state.active') is True
-            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; _activeFile='missing-episode.json'; setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile); vid.currentTime=0;vid.play()")
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[];testAbort.abort();testAbort=new AbortController(); _activeFile='missing-episode.json'; setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile); vid.currentTime=0;vid.play()")
             for _ in range(100):
                 if js("document.querySelector('.hp-status').textContent === 'Unavailable'"):break
                 time.sleep(.02)
@@ -177,16 +194,16 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
             assert js("document.querySelector('.hp-status').textContent")=='Unavailable'
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('absent-part.json')).length")==1
             # An optional mesh preference must never replace or disable legacy controls.
-            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];_activeFile='legacy.json';HP_MODE='mesh';HP_ON=true;_hpData.set(_activeFile,{n:30,w:160,h:120,times:Array.from({length:30},(_,i)=>i/10),edges:[[0,1]],hands:{left:{xy:new Float32Array(30*42).fill(20),spans:[[0,30]]}}});setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
+            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];testAbort.abort();testAbort=new AbortController();_activeFile='legacy.json';HP_MODE='mesh';HP_ON=true;_hpData.set(_activeFile,{n:30,w:160,h:120,times:Array.from({length:30},(_,i)=>i/10),edges:[[0,1]],hands:{left:{xy:new Float32Array(30*42).fill(20),spans:[[0,30]]}}});setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
             assert js("document.getElementById('hp-btn').hidden") is False
-            assert js("document.getElementById('hp-modes').hidden") is True
+            assert js("document.getElementById('hp-mode').hidden") is True
             assert js('window._hp.state.active') is True
             js("document.getElementById('hp-btn').click()")
             assert js('window._hp.state.active') is False
             assert js("localStorage.getItem('board.handPose')")=='0'
-            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];_activeFile='legacy-unfetched.json';setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
+            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];testAbort.abort();testAbort=new AbortController();_activeFile='legacy-unfetched.json';setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
             assert js("document.getElementById('hp-btn').hidden") is False
-            assert js("document.getElementById('hp-modes').hidden") is True
+            assert js("document.getElementById('hp-mode').hidden") is True
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('legacy-unfetched.json')).length")==0
         finally:
             close()
