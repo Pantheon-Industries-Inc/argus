@@ -1,6 +1,7 @@
 """Canonical geometry contracts reject stale chunks and invalid native topology."""
 import subprocess
 from pathlib import Path
+import pytest
 
 
 def manifest(prediction="p1", chunk="part.json"):
@@ -100,7 +101,7 @@ def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path):
     video_url='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
     prelude="""const STATIC=true, BOARD={hands:true,data:''}, KP_INDEX=null; let _activeFile='episode.json';
 window._epCleanup=[]; const siteFile=x=>x;
-function fetchJson(url){return fetch(url.replace('hands/','')).then(r=>r.ok?r.json():null);}
+function fetchJson(url,options={}){return fetch(url.replace('hands/',''),options).then(r=>r.ok?r.json():null);}
 function remember(c,k,p){c.set(k,p);return p;}
 let testAbort=new AbortController(); const on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
 function selectMode(mode){document.getElementById('hp-mode').dispatchEvent(new KeyboardEvent('keydown',{key:{off:'Home',skeleton:'ArrowRight',mesh:'End'}[mode]}));}
@@ -135,7 +136,7 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
                 if js("!!window._hp && window._hp.state.data"):break
                 time.sleep(.05)
             assert js('window._hp.state.data')
-            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==0
+            assert js("_hpData.get(_activeFile).pending.has('chunk-b.json') || _hpData.get(_activeFile).loaded.has('chunk-b.json')") is True
             js("selectMode('mesh')")
             for _ in range(100):
                 if js("document.querySelector('.hp-status').textContent === ''"):break
@@ -277,3 +278,100 @@ def test_identical_shared_chunks_reuse_public_filename(tmp_path):
         (tmp_path/name).write_text(json.dumps(manifest()))
     (tmp_path/'part.json').write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'p1','start':0,'frames':[{}]}))
     assert set(geometry_bundle(tmp_path,['episode_000001.json','episode_000002.json']))=={'episode_000001.json','episode_000002.json','part.json'}
+
+
+@pytest.mark.parametrize("display_mode", ["skeleton", "mesh"])
+def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, display_mode):
+    """Real video crosses six boundaries with 280ms chunks and one 1.2s response."""
+    import base64
+    import http.server
+    import json
+    import re
+    import shutil
+    import tempfile
+    import threading
+    import time
+    import pytest
+    from test_layout_fits import chrome, _devtools
+    if not chrome() or not shutil.which('ffmpeg'):
+        pytest.skip('Chrome and ffmpeg required')
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=30:d=8',
+                    '-c:v','libx264','-pix_fmt','yuv420p',str(tmp_path/'clip.mp4')],check=True)
+    header={'format':'board-hand-geometry/1','prediction_id':'buffer-fixture',
+            'coordinates':{'xy':'source_pixels','z':'camera_meters'},
+            'clip':{'w':160,'h':120,'times':[i/30 for i in range(240)]},'edges':[[0,1]],
+            'topology':{'left':[[0,1,2]],'right':[]},
+            'chunks':[{'start':i*30,'end':(i+1)*30,'file':f'chunk-{i}.json'} for i in range(8)]}
+    (tmp_path/'episode.json').write_text(json.dumps(header))
+    for spec in header['chunks']:
+        frames=[]
+        for frame in range(spec['start'],spec['end']):
+            x=20+frame%100
+            vertices=[[x+(i%3)*.123456789012345,20+(i%5)*.123456789012345,1.123456789012345] for i in range(718)]
+            vertices[:3]=[[x-3,17,1],[x+3,17,1],[x,25,1]]
+            hand={'joints':[[x,20,1],[x+10,30,1]],'vertices':vertices}
+            frames.append({'left':hand,'right':hand})
+        (tmp_path/spec['file']).write_text(json.dumps({'format':'board-hand-geometry-chunk/1',
+            'prediction_id':'buffer-fixture','start':spec['start'],'frames':frames}))
+    source=Path('board/index.html').read_text()
+    script='let HP_MODE ='+source.split('let HP_MODE =',1)[1].split('// ================= the recording',1)[0]
+    mode=re.search(r'<button id="hp-mode"[\s\S]*?</button>',source).group()
+    css=source.split('<style>',1)[1].split('</style>',1)[0]
+    video='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
+    prelude="""const STATIC=true,BOARD={hands:true,data:''},KP_INDEX=null;let _activeFile='episode.json';
+window._epCleanup=[];const siteFile=x=>x;const remember=(c,k,p)=>(c.set(k,p),p);
+function fetchJson(url,options={}){return fetch(url.replace('hands/',''),options).then(r=>r.ok?r.json():null);}
+const testAbort=new AbortController(),on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
+"""
+    page='<style>'+css+'#cell{position:relative;width:320px;height:240px}video{width:320px;height:240px}</style>'
+    page+='<button id="hp-btn"></button><span id="hp-mode-home" hidden></span>'+mode
+    page+='<div id="hp-aligned"><div class="kp-note-in"></div></div><div id="cell"><video muted src="'+video+'"></video><canvas id="hp-canvas"></canvas></div>'
+    page+='<script>'+prelude+script+"const vid=document.querySelector('video');vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile));</script>"
+    (tmp_path/'index.html').write_text(page)
+    class Delayed(http.server.SimpleHTTPRequestHandler):
+        def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(tmp_path),**kwargs)
+        def do_GET(self):
+            if self.path.startswith('/chunk-'):time.sleep(1.2 if self.path=='/chunk-4.json' else .28)
+            try:super().do_GET()
+            except (BrokenPipeError,ConnectionResetError):pass
+        def log_message(self,*args):pass
+    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Delayed)
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    with tempfile.TemporaryDirectory() as profile:
+        send,close=_devtools(chrome(),['--headless=new','--no-sandbox','--autoplay-policy=no-user-gesture-required',f'--user-data-dir={profile}','about:blank'])
+        try:
+            target=send('Target.createTarget',{'url':f'http://127.0.0.1:{server.server_port}/index.html'})['targetId']
+            sid=send('Target.attachToTarget',{'targetId':target,'flatten':True})['sessionId']
+            def js(code):
+                result=send('Runtime.evaluate',{'expression':code,'returnByValue':True,'awaitPromise':True,'userGesture':True},sid,deadline=time.monotonic()+20)
+                assert 'exceptionDetails' not in result,result
+                return result.get('result',{}).get('value')
+            for _ in range(200):
+                if js("window._hp?.state.data && document.getElementById('hp-status').textContent==='' "):break
+                time.sleep(.02)
+            js(f"document.querySelector('[data-mode={display_mode}]').click()")
+            result=js("""(async()=>{const samples=[],pill=document.getElementById('hp-mode'),width=pill.getBoundingClientRect().width;
+await vid.play();while(vid.currentTime<6.4){await new Promise(r=>setTimeout(r,15));const s=window._hp.state,d=_hpData.get(_activeFile);
+if(s.frame<1)continue;const x=(20+s.frame%100)*2,alpha=document.getElementById('hp-canvas').getContext('2d').getImageData(x,40,1,1).data[3];
+samples.push({frame:s.frame,status:document.getElementById('hp-status').textContent,alpha,loaded:d.loaded.size,pending:d.pending.size,width:pill.getBoundingClientRect().width});}
+vid.pause();return {samples,width};})()""")
+            samples=result['samples']
+            assert len({s['frame']//30 for s in samples})>=7
+            assert all(s['status']=='' and s['alpha']>0 for s in samples),[s for s in samples if s['status'] or not s['alpha']][:15]
+            assert max(s['loaded'] for s in samples)<=5 and max(s['pending'] for s in samples)<=3
+            assert all(s['width']==result['width'] for s in samples)
+            # A far seek discards old requests and never draws a stale source frame.
+            js("vid.currentTime=.1")
+            for _ in range(100):
+                if js("!vid.seeking && window._hp.state.frame===3"):break
+                time.sleep(.02)
+            assert js('window._hp.state.frame')==3
+            assert js('_hpData.get(_activeFile).pending.size')>0
+            assert js("document.getElementById('hp-canvas').getContext('2d').getImageData(46,40,1,1).data[3]")==0
+            js("document.querySelector('[data-mode=off]').click()")
+            assert js('_hpData.get(_activeFile).pending.size')==0
+            assert js('window._hp.state.active') is False
+            js("document.querySelector('[data-mode=skeleton]').click();window._epCleanup.forEach(f=>f());testAbort.abort()")
+            assert js('_hpData.get(_activeFile).pending.size')==0
+        finally:
+            close();server.shutdown();server.server_close()
