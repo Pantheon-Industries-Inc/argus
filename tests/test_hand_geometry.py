@@ -338,9 +338,10 @@ def test_identical_shared_chunks_reuse_public_filename(tmp_path):
 
 
 @pytest.mark.parametrize("display_mode", ["skeleton", "mesh"])
-@pytest.mark.parametrize("late_chunk", [False, True])
-def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, display_mode, late_chunk):
+@pytest.mark.parametrize("delay_profile", ["normal", "late", "burst"])
+def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, display_mode, delay_profile):
     """Keep bounded fetches alive across playback, but cancel intentional navigation."""
+    late_chunk = delay_profile == "late"
     import base64
     import http.server
     import json
@@ -353,13 +354,13 @@ def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, di
     from test_layout_fits import chrome, _devtools
     if not chrome() or not shutil.which('ffmpeg'):
         pytest.skip('Chrome and ffmpeg required')
-    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=30:d=12',
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=30:d=20',
                     '-c:v','libx264','-pix_fmt','yuv420p',str(tmp_path/'clip.mp4')],check=True)
     header={'format':'board-hand-geometry/1','prediction_id':'buffer-fixture',
             'coordinates':{'xy':'source_pixels','z':'camera_meters'},
-            'clip':{'w':160,'h':120,'times':[i/30 for i in range(360)]},'edges':[[0,1]],
+            'clip':{'w':160,'h':120,'times':[i/30 for i in range(600)]},'edges':[[0,1]],
             'topology':{'left':[[0,1,2]],'right':[]},
-            'chunks':[{'start':i*30,'end':(i+1)*30,'file':f'chunk-{i}.json'} for i in range(12)]}
+            'chunks':[{'start':i*30,'end':(i+1)*30,'file':f'chunk-{i}.json'} for i in range(20)]}
     (tmp_path/'episode.json').write_text(json.dumps(header))
     for spec in header['chunks']:
         frames=[]
@@ -392,6 +393,7 @@ const testAbort=new AbortController(),on=(e,k,f)=>e.addEventListener(k,f,{signal
         def do_GET(self):
             if self.path.startswith('/chunk-'):
                 delay = (4.2 if late_chunk else 2.5) if self.path=='/chunk-3.json' else 3.1 if self.path=='/chunk-4.json' else 2.5 if int(self.path.split('-')[1].split('.')[0])>=5 else .28
+                if delay_profile == "burst" and self.path in ('/chunk-6.json','/chunk-7.json','/chunk-8.json'):delay=4.2
                 time.sleep(delay)
             try:super().do_GET()
             except (BrokenPipeError,ConnectionResetError):pass
@@ -410,6 +412,11 @@ const testAbort=new AbortController(),on=(e,k,f)=>e.addEventListener(k,f,{signal
             for _ in range(200):
                 if js("window._hp?.state.data && document.getElementById('hp-status').textContent==='' "):break
                 time.sleep(.02)
+            if delay_profile == "burst":
+                for _ in range(240):
+                    if js("_hpData.get(_activeFile).loaded.size>=6"):break
+                    time.sleep(.02)
+                assert js("_hpData.get(_activeFile).loaded.size>=6"), 'Paused playback needs a forward buffer beyond five chunks'
             js(f"document.querySelector('[data-mode={display_mode}]').click()")
             result=js("""(async()=>{const samples=[],pill=document.getElementById('hp-mode'),width=pill.getBoundingClientRect().width;
 await vid.play();while(vid.currentTime<6.4){await new Promise(r=>setTimeout(r,15));const s=window._hp.state,d=_hpData.get(_activeFile);
@@ -426,7 +433,7 @@ vid.pause();return {samples,width};})()""")
                 assert js("!_hpData.get(_activeFile).loaded.has('chunk-3.json')")
             else:
                 assert all(s['status']=='' and s['alpha']>0 for s in samples),[s for s in samples if s['status'] or not s['alpha']][:15]
-            assert max(s['loaded'] for s in samples)<=5 and max(s['pending'] for s in samples)<=3
+            assert max(s['loaded'] for s in samples)<=12 and max(s['pending'] for s in samples)<=3
             assert all(s['width']==result['width'] for s in samples)
             # A far seek discards old requests and never draws a stale source frame.
             js("vid.currentTime=.1")
