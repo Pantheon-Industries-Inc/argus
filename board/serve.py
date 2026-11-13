@@ -1851,10 +1851,17 @@ def render_index(title: str, board: dict, name: str = "", header: str | None = N
     cfg = public_json({**board, "models": {**model_names(), **(board.get("models") or {})},
                        "reasoning": reasoning_effort()})
     page = INDEX_HTML
+    if board.get("hand_geometry"):
+        note = 'Predicted hand keypoints. See the download for license and attribution.'
+        page = re.sub(r'(<span id="kp-attribution">).*?(</span>)', lambda m: m[1] + note + m[2], page, flags=re.S)
+        page = re.sub(r'(<div class="kp-note off" id="kp-note"><div class="kp-note-in">).*?(</div></div>)',
+                      lambda m: m[1] + note + m[2], page, flags=re.S)
     if header is not None:
         styles = "".join(re.findall(r"<style>.*?</style>", header, re.S))
         markup = re.sub(r"<style>.*?</style>", "", header, flags=re.S).strip()
         page = page.replace(PAGE_HEAD, markup, 1).replace("</head>", styles + "\n</head>", 1)
+    elif name.strip().casefold() == title.strip().casefold():
+        name = ""
     return (page.replace("__PAGE_TITLE__", html.escape(title)).replace("__BOARD_NAME__", html.escape(name))
             .replace("__BOARD_CONFIG__", _js(cfg)).replace("__TAG_NAMES__", _js(load_tag_names()))
             .replace("__FAMILIES__", _js({**FAMILIES.catalog(), **capture_catalog()})))
