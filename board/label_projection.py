@@ -291,7 +291,8 @@ def _arm_names(config=None):
 def allowed_arms(config=None):
     return set(_arm_names(config).values()) | {'left', 'right', 'both', 'body'}   # body: a whole-body robot's walk
 TEXT = {
-    'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
+    'recording_activities': ('activity', 'target', 'evidence', 'reason'),
+    'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes', 'activity_scope'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
     'state_changes': ('object', 'from', 'to', 'seen_in'),
     'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason', 'judged_against', 'basis'),
@@ -307,6 +308,7 @@ TEXT = {
     'contacts_missing': ('hand', 'object', 'action', 'note', 'evidence'),
 }
 ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES, 'own_outcome': OUTCOMES,
+         'activity_scope': ('work', 'recording_control', 'uncertain'),
          'severity': ('low', 'medium', 'high'), 'contribution': ('advancing', 'wasteful', 'idle'),
          'relation': ('aligned', 'narrower', 'broader', 'different', 'unrelated'),
          'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST, 'basis': BASES}

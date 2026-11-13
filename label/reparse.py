@@ -156,6 +156,8 @@ def rebind(record: dict) -> None:
 
 def refresh_received(record: dict) -> dict:
     """Regrade a compatible raw reply, retaining human decisions and financial fields."""
+    if 'task_scope_review' in record:
+        raise ValueError('Cannot refresh a reviewed task-purpose projection; refresh its original source instead')
     raw = record.get('response_text')
     if not isinstance(raw, str):
         raise ValueError('saved reply has no complete retained response text')

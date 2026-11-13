@@ -117,8 +117,18 @@ def _subtasks(d: dict) -> list:
 
 def _steps(d: dict) -> list:
     """The timeline steps with usable times, in time order."""
-    return sorted((e for e in _list(d.get("event_labels")) if isinstance(e, dict) and _num(e.get("t_s")) is not None
+    return sorted((e for e in _list(d.get("event_labels")) if isinstance(e, dict)
+                   and e.get('activity_scope') != 'recording_control' and _num(e.get("t_s")) is not None
                    and _num(e.get("end_s")) is not None), key=lambda e: e["t_s"])
+
+
+def _capture_only_spans(d: dict, work: list) -> list:
+    """Confirmed capture intervals, retaining every overlapping interval of actual work."""
+    capture = [(a, b) for e in _list(d.get('event_labels')) if isinstance(e, dict)
+               and e.get('activity_scope') == 'recording_control'
+               for a, b in [(_num(e.get('t_s')), _num(e.get('end_s')))]
+               if a is not None and b is not None and b > a]
+    return _subtract(capture, work)
 
 
 def _mistakes(d: dict) -> tuple[list, list]:
@@ -175,7 +185,8 @@ def facts(d: dict) -> dict:
     active = _union(work)
     wasteful = _union(spans["wasteful"])
     # hesitation: stretches inside the work window where no arm advances or wastes, ie every arm waits
-    window = [(start, end)] if start is not None and end is not None and end > start else []
+    window = (_subtract([(start, end)], _capture_only_spans(d, work))
+              if start is not None and end is not None and end > start else [])
     hesitation = _union(_subtract(window, work)) if window else 0.0
     # progress toward this goal, from the steps that carry it, read within 0 to 1; a recording labelled in parts keeps
     # only each part's local progress (label/pieces.py), which says nothing about the whole goal, so there it is
@@ -202,7 +213,7 @@ def facts(d: dict) -> dict:
                          else _num(e.get("progress_in_part"))] if p is not None]
         tasks.append({"outcome": _verdict(t), "progress": max(own) if own else None})
     return {"tasks": tasks, "measured": bool(steps), "start_s": start, "goal_s": goal, "end_s": end, "active_s": active,
-            "wasteful_s": wasteful, "hesitation_s": hesitation, "window_s": (end - start) if window else None,
+            "wasteful_s": wasteful, "hesitation_s": hesitation, "window_s": _union(window) if window else None,
             "actions": sum(1 for e in steps if e.get("contribution") == "advancing"), "progress_reached": reached,
             "goal_progress": goal_progress,
             "outcome": _verdict(comp) if comp else None, "mistakes": mistakes, "any_mistakes": any_mistakes,
@@ -436,6 +447,8 @@ def subgoals(d: dict, f: dict) -> list:
     if f["start_s"] is None or not events:
         return []
     steps = _steps(d)
+    capture_only = _capture_only_spans(d, [(e['t_s'], e['end_s']) for e in steps
+                                          if e.get('contribution') in ('advancing', 'wasteful')])
     starts = [e["t_s"] for e in steps]
     longest = max((e["end_s"] - e["t_s"] for e in steps), default=0.0)
     failed_all = sorted((k for k in _list(d.get("key_events")) if isinstance(k, dict) and k.get("outcome") == "failure"
@@ -481,7 +494,9 @@ def subgoals(d: dict, f: dict) -> list:
         waste = clip([(e["t_s"], e["end_s"]) for e in near if e.get("contribution") == "wasteful"])
         active = _union(work)
         share = _union(waste) / active if active else 0.0
-        hes = _union(_subtract([(a, b)], work)) / (b - a)
+        window = _subtract([(a, b)], capture_only)
+        duration = _union(window)
+        hes = _union(_subtract(window, work)) / duration if duration else 0.0
         ms = mistakes[bisect.bisect_left(mistake_t, a):bisect.bisect_left(mistake_t, b)]
         failed = failed_all[bisect.bisect_left(failed_t, a):bisect.bisect_left(failed_t, b)]
         explained = bisect.bisect_left(any_mistake_t, b) - bisect.bisect_left(any_mistake_t, a)
@@ -489,7 +504,7 @@ def subgoals(d: dict, f: dict) -> list:
         clean = 10 * (1 - share) - sum(_points(m) for m in ms) - FAILED_ATTEMPT_POINTS * max(0, tried - explained)
         out.append({"start_s": a, "end_s": b, "label": label, "outcome": outcome, "goal": goal, "task": task,
                     "reached": outcome in ("success", "success_then_undone"),
-                    "duration_s": round(b - a, 2),
+                    "duration_s": round(duration, 2),
                     "cleanliness": _clamp(clean), "steady": _clamp(10 * (1 - 2 * hes)),
                     "wasteful_share": round(share, 3), "mistakes": [m["issue"] for m in ms],
                     "penalties": [{"mistake": m["issue"], "severity": m["severity"], "recovered": m["recovered"],
@@ -567,7 +582,7 @@ def score_board(records: dict) -> dict:
     fs = {f: _safe(facts, d, fallback=empty) for f, d in records.items()}
     unread = {f for f, d in records.items() if fs[f] is empty and d}
     groups = task_groups(records)
-    took_of = {f: (x["goal_s"] - x["start_s"]) if x["goal_s"] is not None and x["start_s"] is not None
+    took_of = {f: x['window_s'] if x["goal_s"] is not None and x["start_s"] is not None
                and x["goal_s"] > x["start_s"] else None for f, x in fs.items()}
     pp_of = {f: x["actions"] / x["progress_reached"] if x["progress_reached"] else None for f, x in fs.items()}
     subs_of = {f: _safe(subgoals, d, fs[f], fallback=[]) for f, d in records.items()}
