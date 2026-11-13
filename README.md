@@ -270,6 +270,24 @@ A capped run uses verified model rates or a saved OpenRouter pricing quote and r
 **Other checks**
 
 [`checks.timebase scan`](checks/timebase.py) detects MolmoAct2 episodes that play faster than real time, and [`apply`](checks/timebase.py) adds its measurements and flags without changing their clocks. A check that stops with an error is reported as errored, never as clean. Optional hand pose uses [`board/hand_pose/modal_app.py`](board/hand_pose/modal_app.py) and [`board/hands.py`](board/hands.py), runs separately from annotation, and falls under the licenses below.
+Canonical predicted hand geometry can be supplied with `"hands": {"geometry": "PATH"}` in the board manifest.
+The directory contains one `board-hand-geometry/1` manifest per episode label filename and its referenced JSON chunks.
+Each manifest declares an opaque `prediction_id`, `coordinates: {xy: "source_pixels", z: "camera_meters"}`,
+`clip: {w, h, times}`, joint `edges`, native `topology: {left, right}` triangle indices, and contiguous
+`chunks: [{start, end, file}]` with half-open frame ranges. Times are seconds for every decoded video frame.
+Source pixels are continuous image coordinates (top-left edge is `[0, 0]`, pixel centers are offset by `0.5`);
+Z is positive source-camera depth in meters, increasing away from the camera. Geometry must already use the source
+camera's calibrated projection, including lens distortion, and the source video's exact dimensions and timestamps.
+Each `board-hand-geometry-chunk/1` repeats `prediction_id` and `start`, with `frames` containing `left` and `right`
+hands or null. A hand holds native `joints` and `vertices` as `[x, y, z]` arrays. Both come from the same prediction
+and frame. Joint edges reference the supplied joint ordering; triangle faces reference native vertex ordering.
+Missing geometry stays unavailable. The viewer never interpolates, rescales anatomy, or creates mesh topology.
+Optional per-hand `presence` is preserved without thresholding. Chunk filenames must be generic JSON basenames.
+Export rejects unknown metadata fields. Keep private provenance outside these public assets.
+The canonical viewer offers Off, Skeleton and Mesh above head footage, loads only requested chunks, and retains
+at most three episodes and three chunks per episode. Mesh requires WebGL and uses filled triangles with depth testing.
+Static export rejects changed video dimensions or frame times and includes referenced chunks in its build identity.
+
 
 </details>
 

@@ -865,6 +865,26 @@ def build_hands(board: Path, spec: dict, qa_new: Path, episodes: dict) -> dict:
             remove_tree(d)
         d.mkdir()
     here = board.resolve()
+    if spec.get("geometry"):
+        src = Path(spec["geometry"])
+        if not src.is_absolute():
+            src = (here / src).resolve()
+        hands_overlay.geometry_bundle(src, [p.name for p in qa_new.glob("episode_*.json")])
+        written = size = 0
+        for label in sorted(qa_new.glob("episode_*.json")):
+            path = src / label.name
+            if not path.is_file():
+                continue
+            doc = json.loads(path.read_text())
+            if doc.get("format") != "board-hand-geometry/1":
+                raise ValueError("Expected canonical predicted hand geometry")
+            from itertools import chain
+            for name, chunk in chain([(label.name, doc)], hands_overlay.geometry_assets(doc, src)):
+                body = dumps(chunk, separators=(",", ":"))
+                (out / name).write_text(body)
+                size += len(body.encode())
+            written += 1
+        return {"written": written, "skipped": 0, "bytes": size, "format": "board-hand-geometry/1"}
     src, clips = (Path(p) if Path(p).is_absolute() else (here / p).resolve() for p in (spec["src"], spec["clips"]))
     res = hands_overlay.build(src, qa_new, clips, out)
     for sk in res["skipped"]:
