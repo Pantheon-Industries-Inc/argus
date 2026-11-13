@@ -7,7 +7,7 @@
 'use strict';
 const {src, piece} = require('./page_functions')(process.argv[2]);
 const stubs = 'const videoSrc = (e, c) => "api/video?id=" + e + "&cam=" + c; const posterAttr = () => "";';
-const T = new Function(stubs + piece('esc') + piece('episodeCams') + piece('cameraPresentation') + piece('cameraCaption') + piece('unshownCams') + piece('unshownCellsHtml') + piece('unshownNote')
+const T = new Function(stubs + piece('esc') + piece('isHlsSource') + piece('videoSourceAttr') + piece('episodeCams') + piece('cameraPresentation') + piece('cameraCaption') + piece('unshownCams') + piece('unshownCellsHtml') + piece('unshownNote')
   + 'return {unshownCams, unshownCellsHtml, unshownNote};')();
 
 let bad = 0;
