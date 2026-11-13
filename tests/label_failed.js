@@ -7,7 +7,7 @@
 // Prints nothing and exits 0 when every case holds; prints each failure and exits 1 otherwise.
 'use strict';
 const {src, piece} = require('./page_functions')(process.argv[2]);
-const T = new Function(piece('esc') + piece('fmtDur') + piece('partFailureReason') + piece('cmpFailHtml') + 'return {cmpFailHtml};')();
+const T = new Function('const BOARD={};'+piece('esc') + piece('fmtDur') + piece('partFailureReason') + piece('cmpFailHtml') + 'return {cmpFailHtml};')();
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };

@@ -106,7 +106,7 @@ def test_billing_refusal_reaches_viewer_without_exposing_private_error(outcome, 
     assert 'token=secret' not in json.dumps(split)
     program = """
 const {piece} = require('./tests/page_functions')('./board/serve.py');
-const render = new Function(piece('esc') + piece('fmtDur') + piece('cmpFailHtml')
+const render = new Function('const BOARD={};'+piece('esc') + piece('fmtDur') + piece('cmpFailHtml')
   + piece('noLabelsHtml') + 'return {cmpFailHtml, noLabelsHtml};')();
 const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
 console.log(JSON.stringify({card:render.cmpFailHtml(d._label_failed,'Astra',d._usage,true),

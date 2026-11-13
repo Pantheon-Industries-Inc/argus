@@ -681,7 +681,7 @@ def test_split_refusals_keep_each_dispatch_receipt_in_native_board_download(tmp_
         pytest.skip('no node')
     program = """
 const {piece} = require('./tests/page_functions')('./board/serve.py');
-const render = new Function('famName','famList',piece('esc')+piece('fmtDur')+piece('fmtT')
+const render = new Function('famName','famList','const BOARD={};'+piece('esc')+piece('fmtDur')+piece('fmtT')
   +piece('partFailureReason')+piece('cmpFailHtml')+piece('readerIssueRows')+piece('readerIssueEntries')
   +'return {cmpFailHtml,readerIssueRows};')(x=>x,()=> 'labelling');
 const d = JSON.parse(require('fs').readFileSync(0,'utf8'));
