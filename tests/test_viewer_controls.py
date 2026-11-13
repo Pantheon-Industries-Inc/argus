@@ -100,6 +100,18 @@ role:b.getAttribute('role'),single,multi:[visible('#coverage'),visible('.cv-name
             assert result['font']==result['reference']
             assert result['background']=='rgba(0, 0, 0, 0)'
             assert result['label']=='Hand pose' and result['role']=='slider'
+            assert js("[...document.querySelectorAll('#hp-mode [data-mode]')].map(e=>e.textContent)")==['Off','Skeleton','Mesh']
+            thumb=[]
+            for value in range(3):
+                thumb.append(js("""(() => {const b=document.getElementById('hp-mode');b.setAttribute('aria-valuenow','VALUE');
+const style=document.createElement('style');style.textContent='.hp-track::before{transition:none}';document.head.append(style);
+const t=document.querySelector('.hp-track'),s=getComputedStyle(t,'::before');
+return {x:new DOMMatrix(s.transform).m41,width:parseFloat(s.width),track:t.getBoundingClientRect().width,
+labels:[...t.children].map(e=>({width:e.getBoundingClientRect().width,color:getComputedStyle(e).color}))};})()""".replace('VALUE',str(value))))
+            assert thumb[0]['x']==0 and thumb[0]['x']<thumb[1]['x']<thumb[2]['x']
+            assert abs(thumb[2]['x']-2*thumb[0]['width'])<1
+            assert all(abs(t['width']*3-(t['track']-4))<1 for t in thumb)
+            assert all(max(e['width'] for e in t['labels'])-min(e['width'] for e in t['labels'])<1 for t in thumb), thumb
             assert result['single']==[False,False,False] and result['multi']==[True,True,True]
             for width in (390,280):
                 send('Emulation.setDeviceMetricsOverride',{'width':width,'height':900,'deviceScaleFactor':1,'mobile':False},sid)
