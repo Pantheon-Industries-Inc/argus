@@ -2716,6 +2716,7 @@ document.getElementById('ms-close').addEventListener('click', () => msDialog.clo
 msDialog.addEventListener('click', e => { if (e.target === msDialog) msDialog.close(); });
 // the name of the model whose labels an episode file holds: its display name, else its id without the provider
 function modelName(id) {
+  if (BOARD.model_attribution === false) return 'we';
   if (!id) return 'The model';
   return (BOARD.models || {})[id] || String(id).split('/').pop();
 }
@@ -7093,7 +7094,7 @@ function renderEp(d, opts) {
   // under the prompt
   const usage = d._usage || {};
   let promptMetaHtml = '';
-  if (usage.est_cost_usd != null) {
+  if (BOARD.model_attribution !== false && usage.est_cost_usd != null) {
     const bits = [`<span class="pm pm-green"><span class="pm-k">cost</span><b>$${Number(usage.est_cost_usd).toFixed(2)}`
       + `</b></span>`];
     if (usage.latency_s != null) bits.push(`<span class="pm pm-green"><span class="pm-k">generated in</span>`
@@ -7183,7 +7184,7 @@ function renderEp(d, opts) {
     + `<span class="gg-badge">dataset's task for the whole episode</span><span class="gg-text">${esc(x)}</span></div>`).join('');
   const stepsHtml = wholeHtml + (givenSteps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
     + `<div class="gs-list">${stepLines}</div></div>` : '');
-  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
+  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">Success `
     + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
   // what the chip names: the instruction, or with none the dataset's timed steps
   const claim = stepsOnly ? "the dataset's steps" : 'given goal';
@@ -7847,7 +7848,7 @@ function renderEp(d, opts) {
         : `goal frame ${comp.completed_at_s != null ? fmtT(comp.completed_at_s) : 'not reached'}`}</span></div>`;
   const outcomeKv = hasTasks ? (perfKv ? `<div class="info-block kv-block">${perfKv}</div>` : '')
     : (comp.success_predicate || comp.reason || (undone && comp.undone_by) || perfKv) ? `<div class="info-block kv-block">
-      ${comp.success_predicate ? `<div class="kv"><div class="kv-k">${esc(who)}'s success criterion</div><div `
+      ${comp.success_predicate ? `<div class="kv"><div class="kv-k">Success criterion</div><div `
         + `class="kv-v">${esc(comp.success_predicate)}</div></div>` : ''}
       ${comp.reason ? `<div class="kv"><div class="kv-k">What actually happened</div><div `
         + `class="kv-v">${esc(comp.reason)}</div></div>` : ''}
@@ -8985,6 +8986,8 @@ function noLabelsHtml(lf) {
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
 }
 function cmpFailHtml(c, who, usage, own) {
+  if (BOARD.model_attribution === false)
+    return '<div class="cmp-fail"><h4>Assessment unavailable</h4><p>No assessment is available for this episode.</p></div>';
   who = String(who || 'The model');
   who = who.charAt(0).toUpperCase() + who.slice(1);
   const cost = usage && usage.est_cost_usd != null
@@ -9066,6 +9069,7 @@ function shownName(n) {
 }
 // "<model>'s <noun>", with a qualifier after the noun in brackets, never "<model>, <qualifier>'s <noun>"
 function whoOwn(who, noun) {
+  if (BOARD.model_attribution === false) return `our ${noun}`;
   const [h, t] = nameParts(who);
   return `${esc(h)}&rsquo;s ${noun}${t ? ` (${esc(t)})` : ''}`;
 }
