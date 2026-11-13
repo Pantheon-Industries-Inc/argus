@@ -218,6 +218,7 @@
  "tests/test_tactile_spatial_evidence.py": 0.3,
  "tests/test_task_claims.py": 4.0,
  "tests/test_task_prompt.py": 0.3,
+ "tests/test_task_scope.py": 0.2,
  "tests/test_tasks_format.py": 6.0,
  "tests/test_timing_truth.py": 1.9,
  "tests/test_tools.py": 0.0,
