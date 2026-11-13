@@ -165,6 +165,13 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .vd-cam-row a:hover { color: var(--fg); border-color: var(--fg-3); }
 .vd-status { padding: 4px 14px 6px; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
 .vd-status:empty { display: none; }
+.cam-cell.cam-exo:has(.hp-modes:not([hidden])) { padding-top:40px; }
+.hp-modes { position:absolute; top:0; left:0; z-index:4; height:40px; display:flex; align-items:center; flex-wrap:wrap; gap:4px; padding:4px 0; }
+.hp-modes[hidden] { display:none; }
+.hp-modes button { cursor:pointer; padding:7px 12px; border:1px solid var(--border-strong); border-radius:var(--r-md); background:var(--surface); color:var(--fg-2); }
+.hp-modes button[aria-pressed="true"] { color:var(--surface); background:var(--fg); border-color:var(--fg-3); }
+.hp-modes button:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+.hp-status { font-size:12px; color:var(--fg-3); padding-left:8px; }
 .hp-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; cursor: pointer;
   transition: opacity 200ms ease, color 160ms ease, border-color 160ms ease; }
 .hp-btn[hidden] { display: none; }
@@ -2337,10 +2344,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
       </div>
       <p class="dl-lic" id="dl-lic" hidden></p>
       <div class="kp-exp off" id="kp-exp"><div class="kp-exp-in">
-        <p class="kp-lic"><span id="kp-size"></span>Non-commercial use only. Predicted by <a
-          href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank" rel="noreferrer">ACE-Ego-Hand</a>
-          (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noreferrer">CC BY-NC 4.0</a>),
-          which uses <a href="https://mano.is.tue.mpg.de/license.html" target="_blank" rel="noreferrer">MANO</a>.</p>
+        <p class="kp-lic"><span id="kp-size"></span>Predicted hand keypoints. See the download for license and attribution.</p>
       </div></div>
     </div></div></div>
   </aside>
@@ -2354,9 +2358,6 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
         id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div><div id="current-ep-why"></div><div id="current-ep-dictionary"></div></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
-          <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
-            title="Draw the joints of each hand over the video"><span class="hp-sw"
-            aria-hidden="true"></span>Hand pose</button>
           <a id="kp-dl" class="ep-head-dl" download hidden
             title="the model's 2D hand keypoints for every frame of this episode's video, as JSON, in a file of their own"
             >Hand keypoints</a>
@@ -2372,11 +2373,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
         </div>
-        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Hand keypoints for non-commercial use only. Predicted
-          by <a href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank"
-          rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
-          rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
-          target="_blank" rel="noreferrer">MANO</a>.</div></div>
+        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Predicted hand keypoints. See the download for license and attribution.</div></div>
         <div class="kp-note gap-fold off" id="hp-aligned"><div class="kp-note-in"></div></div>
       </div>
     </div>
@@ -2597,7 +2594,7 @@ function endRender() {
   document.getElementById('kp-note').classList.add('off');
   const aligned = document.getElementById('hp-aligned');
   aligned.classList.add('off'); aligned.querySelector('.kp-note-in').textContent = '';
-  hpBtn.hidden = true;
+  if (hpBtn) hpBtn.hidden = true;
   _vdEp = null; vdOpen(false); vdEl.hidden = true; vdMenu.innerHTML = '';
   // the band saying the labels are another model's folds away (its text stays while it folds, renderSourceBar)
   srcBar.classList.remove('on', 'cmp'); sbBack.tabIndex = -1; sbFit();
@@ -4333,8 +4330,11 @@ function captionHtml(rows) {
 // here touches the rail, the counts, the Episode JSON download or the JSON Lines export.
 // the switch: on for a first-time visitor, and whatever the visitor last chose after that (stored in this browser; a
 // browser that blocks storage gets the default on every load)
+let HP_MODE = 'skeleton';
 let HP_ON = true;
-try { HP_ON = localStorage.getItem('board.handPose') !== '0'; } catch (e) {}
+try { HP_MODE = localStorage.getItem('board.handOverlay') || (localStorage.getItem('board.handPose') === '0' ? 'off' : 'skeleton'); } catch (e) {}
+if (!['off', 'skeleton', 'mesh'].includes(HP_MODE)) HP_MODE = 'skeleton';
+HP_ON = HP_MODE !== 'off';
 const _hpCache = new Map();         // file -> Promise of the decoded keypoints (or null when there are none)
 const _hpData = new Map();          // file -> the decoded keypoints, once loaded
 const HP_B64 = new Int8Array(128).fill(-1);
@@ -4362,7 +4362,96 @@ function hpKnots(s, e, step) {
   if (e - 1 > s) k.push(e - 1);
   return k;
 }
+// BEGIN canonical hand geometry
+function hpGeometry(doc) {
+  const fail = () => { throw new Error('Invalid hand geometry'); };
+  const c = doc.clip, ts = c?.times;
+  if (doc.format !== 'board-hand-geometry/1' || !doc.prediction_id ||
+      doc.coordinates?.xy !== 'source_pixels' || doc.coordinates?.z !== 'camera_meters' ||
+      !(Number.isInteger(c.w) && c.w > 0 && Number.isInteger(c.h) && c.h > 0) || !Array.isArray(ts) || !ts.length ||
+      ts.some((t,i) => !Number.isFinite(t) || t < 0 || (i && t <= ts[i-1]))) fail();
+  if (!Array.isArray(doc.edges) || !doc.topology || !Array.isArray(doc.chunks)) fail();
+  for (const h of ['left','right']) if (!Array.isArray(doc.topology[h]) || doc.topology[h].some(t =>
+    !Array.isArray(t) || t.length !== 3 || t.some(v => !Number.isInteger(v) || v < 0))) fail();
+  if (doc.edges.some(e => !Array.isArray(e) || e.length !== 2 || e.some(v => !Number.isInteger(v) || v < 0))) fail();
+  let end = 0;
+  for (const ch of doc.chunks) {
+    if (ch.start !== end || !Number.isInteger(ch.end) || ch.end <= end || ch.end > ts.length ||
+        !/^[a-zA-Z0-9_-]+\.json$/.test(ch.file)) fail();
+    end = ch.end;
+  }
+  if (end !== ts.length) fail();
+  return {...doc, geometry:true, n:ts.length, w:c.w, h:c.h, times:ts, hands:{}, loaded:new Map(), pending:new Map(), failed:new Set()};
+}
+function hpChunkAt(data, i) { return data.chunks.find(c => i >= c.start && i < c.end); }
+function hpGeometryChunk(data, spec, doc) {
+  if (doc?.format !== 'board-hand-geometry-chunk/1' || doc.prediction_id !== data.prediction_id ||
+      doc.start !== spec.start || !Array.isArray(doc.frames) || doc.frames.length !== spec.end-spec.start)
+    throw new Error('Mismatched hand geometry');
+  for (const f of doc.frames) for (const h of ['left','right']) {
+    const hand = f[h]; if (!hand) continue;
+    for (const field of ['joints','vertices']) if (hand[field] != null && (!Array.isArray(hand[field]) ||
+      hand[field].some(p => !Array.isArray(p) || p.length !== 3 || p.some(v => !Number.isFinite(v)) || p[2] <= 0)))
+      throw new Error('Invalid hand coordinates');
+    if (hand.vertices && data.topology[h].some(t => t.some(v => v >= hand.vertices.length)))
+      throw new Error('Invalid native topology');
+    if (hand.joints && data.edges.some(e => e.some(v => v >= hand.joints.length)))
+      throw new Error('Invalid joint topology');
+  }
+  return doc;
+}
+function hpTriangles(frame, topology) {
+  const out = [];
+  for (const h of ['left','right']) {
+    const v = frame[h]?.vertices; if (!v) continue;
+    for (const face of topology[h]) {
+      const points = face.map(i => v[i]);
+      out.push({h,points,z:points.reduce((sum,p) => sum+p[2],0)/3});
+    }
+  }
+  return out.sort((a,b) => b.z-a.z);
+}
+function hpSurface() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl', {alpha:true,antialias:true,preserveDrawingBuffer:true});
+  if (!gl) return null;
+  const shader = (kind, source) => {
+    const sh = gl.createShader(kind); gl.shaderSource(sh,source); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error('Hand surface unavailable');
+    return sh;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(program,shader(gl.VERTEX_SHADER,
+    'attribute vec3 position; attribute vec3 color; varying vec3 c; void main(){gl_Position=vec4(position,1.0);c=color;}'));
+  gl.attachShader(program,shader(gl.FRAGMENT_SHADER,
+    'precision mediump float; varying vec3 c; void main(){gl_FragColor=vec4(c,1.0);}'));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) return null;
+  const buffer = gl.createBuffer();
+  return {canvas, draw(triangles,w,h,sourceW,sourceH) {
+    if (gl.isContextLost()) return null;
+    canvas.width=w; canvas.height=h;
+    gl.viewport(0,0,w,h); gl.useProgram(program); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    // Reciprocal camera depth interpolates in screen space and keeps near surfaces in front.
+    let near=Infinity,far=-Infinity;
+    for (const t of triangles) for (const p of t.points) { const z=-1/p[2];near=Math.min(near,z);far=Math.max(far,z); }
+    const span=Math.max(1e-9,far-near), vertices=[];
+    for (const t of triangles) {
+      const rgb=t.h==='left' ? [79/255,109/255,143/255] : [138/255,90/255,154/255];
+      for (const p of t.points) vertices.push(2*p[0]/sourceW-1,1-2*p[1]/sourceH,(-1/p[2]-near)/span*1.8-.9,...rgb);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER,buffer); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.DYNAMIC_DRAW);
+    for (const [name,offset] of [['position',0],['color',12]]) {
+      const loc=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,3,gl.FLOAT,false,24,offset);
+    }
+    gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);
+    return canvas;
+  }, dispose() { gl.deleteBuffer(buffer);gl.deleteProgram(program);gl.getExtension('WEBGL_lose_context')?.loseContext(); }};
+}
+// END canonical hand geometry
 function hpDecode(doc) {
+  if (doc.format === 'board-hand-geometry/1') return hpGeometry(doc);
   const n = doc.clip.frames, step = doc.step;
   // when each frame is shown: its timestamp, in seconds
   const tr = hpReader(doc.clip.pts), [tn, td] = doc.clip.tb, times = new Float64Array(n);
@@ -4410,7 +4499,7 @@ function hpAlignedText(a) {
 function loadHands(file) {
   return _hpCache.get(file) || remember(_hpCache, file, fetchJson(handsUrl(file))
     .then(doc => doc ? hpDecode(doc) : null)
-    .then(d => { if (d) _hpData.set(file, d); return d; }).catch(() => null));
+    .then(d => { if (d) { _hpData.set(file, d); while (_hpData.size > 3) { const oldest = _hpData.keys().next().value; _hpData.delete(oldest); _hpCache.delete(oldest); } } return d; }).catch(() => null));
 }
 // the frame on screen: rVFC's mediaTime is a frame's own timestamp (nearest); currentTime falls within one (the last
 // frame at or before it, allowing the browser's microsecond rounding)
@@ -4432,21 +4521,31 @@ function hpAlpha(spans, i, n) {
   }
   return 0;
 }
-const hpBtn = document.getElementById('hp-btn');
-hpBtn.setAttribute('aria-pressed', String(HP_ON));
-hpBtn.addEventListener('click', () => {
-  HP_ON = !HP_ON;
-  hpBtn.setAttribute('aria-pressed', String(HP_ON));
-  try { localStorage.setItem('board.handPose', HP_ON ? '1' : '0'); } catch (e) {}
-  if (window._hp) window._hp.set(HP_ON);
-});
+let hpBtn = null;
+function hpModes() {
+  return `<div id="hp-btn" class="hp-modes" role="group" aria-label="Predicted hands" hidden>
+    ${['off','skeleton','mesh'].map(m => `<button type="button" data-mode="${m}" aria-pressed="${HP_MODE === m}">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}
+    <span class="hp-status" role="status" aria-live="polite"></span></div>`;
+}
+function hpStatus(text) { const el = hpBtn?.querySelector('.hp-status'); if (el) el.textContent = text; }
 // wire the hand pose for the episode renderEp just laid out (its listeners go with the render's abort signal)
 function setupHandPose(vid, cell, isEgo, on, file) {
   window._hp = null;
+  hpBtn = document.getElementById('hp-btn');
+  if (!hpBtn) return;
+  hpBtn.querySelectorAll('button').forEach(btn => on(btn, 'click', () => {
+    HP_MODE = btn.dataset.mode; HP_ON = HP_MODE !== 'off';
+    hpBtn.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+    try { localStorage.setItem('board.handOverlay', HP_MODE); } catch (e) {}
+    if (data?.geometry) data.failed.clear();
+    surfaceFailed=false;
+    last = ''; hpStatus(''); set(HP_ON);
+  }));
   const cv = document.getElementById('hp-canvas');
   if (!BOARD.hands || !isEgo || !vid || !cell || !cv) { hpBtn.hidden = true; return; }
   hpBtn.hidden = false;
   const ctx = cv.getContext('2d');
+  let surface = null, surfaceFailed = false;
   let data = null, active = false, want = false, seen = true, rv = 0, raf = 0, last = '', frame = -1, box = null,
     hover = 0, hoverT = 0;
   // the same footage re-rendered (another annotation source keeps the playing video): no fade, the pose stays put
@@ -4479,12 +4578,57 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     frame = i;
     const al = {left: data.hands.left ? hpAlpha(data.hands.left.spans, i, data.n) : 0,
                 right: data.hands.right ? hpAlpha(data.hands.right.spans, i, data.n) : 0};
-    const key = `${i}|${al.left}|${al.right}|${box.key}`;
+    const key = `${HP_MODE}|${i}|${al.left}|${al.right}|${box.key}`;
     if (key === last) return;           // the same picture: nothing to do
     last = key;
     const sx = cv.width / data.w, sy = cv.height / data.h;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, cv.width, cv.height);
+    if (data.geometry) {
+      const spec = hpChunkAt(data,i), chunk = data.loaded.get(spec.file);
+      if (!chunk) {
+        if (data.failed.has(spec.file)) { hpStatus('Unavailable'); return; }
+        hpStatus('Loading');
+        if (!data.pending.has(spec.file)) {
+          const d = data;
+          const promise = fetchJson(handsUrl(spec.file)).then(doc => hpGeometryChunk(d,spec,doc)).then(doc => {
+            d.loaded.set(spec.file,doc);
+            while (d.loaded.size > 3) d.loaded.delete(d.loaded.keys().next().value);
+            if (alive() && active && data === d && HP_ON) { last=''; draw(nowFrame()); }
+          }).catch(() => { d.failed.add(spec.file); if (alive() && data === d) hpStatus('Unavailable'); })
+            .finally(() => d.pending.delete(spec.file));
+          d.pending.set(spec.file,promise);
+        }
+        return;
+      }
+      const f = chunk.frames[i-spec.start];
+      let available = false;
+      ctx.globalAlpha = 1;
+      if (HP_MODE === 'mesh') {
+        const triangles=hpTriangles(f,data.topology);
+        if (triangles.length && !surfaceFailed) {
+          try {
+            surface ||= hpSurface();
+            const image=surface?.draw(triangles,cv.width,cv.height,data.w,data.h);
+            if (image) { ctx.drawImage(image,0,0); available=true; }
+            else surfaceFailed=true;
+          } catch (e) { surface?.dispose(); surface=null; surfaceFailed=true; }
+        }
+      } else {
+        for (const h of ['left','right']) {
+          const js = f[h]?.joints; if (!js) continue;
+          available = true; ctx.strokeStyle = HP_COLOR[h]; ctx.fillStyle = HP_COLOR[h];
+          ctx.lineWidth = 2*box.dpr; ctx.beginPath();
+          for (const [a,b] of data.edges) { ctx.moveTo(js[a][0]*sx,js[a][1]*sy); ctx.lineTo(js[b][0]*sx,js[b][1]*sy); }
+          ctx.stroke();
+          for (const p of js) { ctx.beginPath(); ctx.arc(p[0]*sx,p[1]*sy,2*box.dpr,0,2*Math.PI); ctx.fill(); }
+        }
+      }
+      hpStatus(available || !f.left && !f.right ? '' : 'Unavailable');
+      return;
+    }
+    if (HP_MODE === 'mesh') { hpStatus('Unavailable'); return; }
+    hpStatus('');
     const lw = Math.max(1.4, Math.min(3, box.w / 480)) * box.dpr;   // thin: about 1.5 px on the board, 3 px full screen
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const h of ['left', 'right']) {
@@ -4533,7 +4677,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   function load() {
     loadHands(file).then(d => {
       if (!alive() || file !== _activeFile) return;
-      if (!d) { hpBtn.hidden = true; return; }    // no hand pose for this episode after all
+      if (!d) { hpStatus('Unavailable'); return; }    // no hand pose for this episode after all
+      if (d.geometry && vid.videoWidth && (d.w !== vid.videoWidth || d.h !== vid.videoHeight)) { hpStatus('Unavailable'); return; }
       data = d;
       const al = hpAlignedText(d.aligned), alEl = document.getElementById('hp-aligned');
       if (alEl) { alEl.querySelector('.kp-note-in').textContent = al; alEl.classList.toggle('off', !al); }
@@ -4548,10 +4693,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       if (instant) { cv.style.transition = 'none'; cv.classList.add('on'); void cv.offsetWidth;
         cv.style.transition = ''; }
       else requestAnimationFrame(() => { if (want) cv.classList.add('on'); });   // after the first picture: the fade
-    } else if (cv.classList.contains('on')) {
-      cv.classList.remove('on');     // the fade out; drawing stops when it ends (transitionend below)
     } else {
-      active = false; stop();        // switched off before it began to show: nothing to fade
+      cv.classList.remove('on'); active = false; stop(); hpStatus('');
     }
   }
   on(cv, 'transitionend', e => {
@@ -4583,7 +4726,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     ro.disconnect(); io.disconnect();
     document.removeEventListener('fullscreenchange', onFsHp);
     document.removeEventListener('webkitfullscreenchange', onFsHp);
-    clearTimeout(hoverT); stop();
+    clearTimeout(hoverT); stop(); surface?.dispose();
   });
   controls();
   window._hp = {set, get state() { return {active, frame, data: !!data, box}; }};
@@ -7564,6 +7707,7 @@ function renderEp(d, opts) {
       <div class="cam-row${isEgo ? ' cam-row-single' : (!hasTop ? ' cam-row-grippers' + (sideCams.length ? ''
         : ' cam-row-single') : '')}${mainIsScene ? ' cam-main-scene' : ''}">
         <div class="cam-cell cam-exo">
+          ${isEgo ? hpModes() : ''}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
           <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
             mainCam)}`}></video>${dpHtml(mainCam, dpViews)}

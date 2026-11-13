@@ -62,6 +62,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
+import itertools
+import math
+import re
 import subprocess
 from collections import Counter
 from fractions import Fraction
@@ -235,12 +239,134 @@ def frame_times(clip_block: dict) -> list:
     return out
 
 
+def validate_geometry(doc: dict) -> None:
+    """Validate the public source-camera geometry contract before copying any assets."""
+    def fail():
+        raise ValueError("Invalid canonical hand geometry")
+
+    def integer(v):
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+    def finite(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+    if (not isinstance(doc, dict) or doc.get("format") != "board-hand-geometry/1"
+            or set(doc) - {"format", "prediction_id", "coordinates", "clip", "edges", "topology", "chunks"}):
+        fail()
+    if not isinstance(doc.get("prediction_id"), str) or not doc["prediction_id"]:
+        fail()
+    if doc.get("coordinates") != {"xy": "source_pixels", "z": "camera_meters"}:
+        fail()
+    clip = doc.get("clip", {})
+    if not isinstance(clip, dict) or set(clip) - {"w", "h", "times"}:
+        fail()
+    times = clip.get("times")
+    if (not all(integer(clip.get(k)) and clip[k] > 0 for k in ("w", "h"))
+            or not isinstance(times, list) or not times
+            or any(not finite(t) or t < 0 for t in times)
+            or any(b <= a for a, b in zip(times, times[1:]))):
+        fail()
+    edges, topology, chunks = doc.get("edges"), doc.get("topology"), doc.get("chunks")
+    if not isinstance(edges, list) or any(not isinstance(e, list) or len(e) != 2
+                                         or not all(integer(v) for v in e) for e in edges):
+        fail()
+    if (not isinstance(topology, dict) or set(topology) - {"left", "right"}
+            or not isinstance(chunks, list)):
+        fail()
+    for hand in ("left", "right"):
+        faces = topology.get(hand)
+        if not isinstance(faces, list) or any(not isinstance(f, list) or len(f) != 3
+                                             or not all(integer(v) for v in f) for f in faces):
+            fail()
+    end = 0
+    for spec in chunks:
+        if (not isinstance(spec, dict) or set(spec) - {"start", "end", "file"}
+                or not integer(spec.get("start")) or spec.get("start") != end or not integer(spec.get("end"))
+                or spec["end"] <= end or spec["end"] > len(times)
+                or not isinstance(spec.get("file"), str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]+\.json", spec["file"])):
+            fail()
+        end = spec["end"]
+    if end != len(times):
+        fail()
+
+
+def geometry_assets(doc: dict, root: Path):
+    """Referenced generic geometry chunks only, validated against native frame and prediction identity."""
+    if doc.get("format") != "board-hand-geometry/1":
+        return
+    validate_geometry(doc)
+    for spec in doc["chunks"]:
+        name = spec["file"]
+        path = root / name
+        if not path.resolve().is_relative_to(root.resolve()):
+            raise ValueError("Geometry asset escapes its directory")
+        chunk = json.loads(path.read_text())
+        if (not isinstance(chunk, dict) or set(chunk) - {"format", "prediction_id", "start", "frames"}
+                or chunk.get("format") != "board-hand-geometry-chunk/1"
+                or chunk.get("prediction_id") != doc["prediction_id"]
+                or chunk.get("start") != spec["start"]
+                or not isinstance(chunk.get("frames"), list)
+                or len(chunk["frames"]) != spec["end"] - spec["start"]):
+            raise ValueError("Mismatched geometry chunk")
+        for frame in chunk["frames"]:
+            if not isinstance(frame, dict) or set(frame) - {"left", "right"}:
+                raise ValueError("Invalid geometry frame")
+            for side in ("left", "right"):
+                hand = frame.get(side)
+                if hand is None:
+                    continue
+                if not isinstance(hand, dict) or set(hand) - {"joints", "vertices", "presence"}:
+                    raise ValueError("Invalid geometry hand")
+                presence = hand.get("presence")
+                if presence is not None and (not isinstance(presence, (int, float)) or isinstance(presence, bool)
+                                             or not math.isfinite(presence) or not 0 <= presence <= 1):
+                    raise ValueError("Invalid hand presence probability")
+                for field, indices in (("joints", doc["edges"]), ("vertices", doc["topology"][side])):
+                    points = hand.get(field)
+                    if points is None:
+                        continue
+                    if not isinstance(points, list) or any(not isinstance(p, list) or len(p) != 3
+                            or any(not isinstance(v, (float, int)) or isinstance(v, bool)
+                                   or not math.isfinite(v) for v in p) or p[2] <= 0 for p in points):
+                        raise ValueError("Invalid source-camera coordinates")
+                    if any(v >= len(points) for face in indices for v in face):
+                        raise ValueError("Invalid native geometry topology")
+        yield name, chunk
+
+
+def geometry_bundle(root: Path, files: list[str]) -> dict:
+    """Check the complete public filename namespace before parallel copying can begin."""
+    assets = {}
+    for filename in files:
+        path = root / filename
+        if not path.is_file():
+            continue
+        doc = json.loads(path.read_text())
+        if doc.get("format") != "board-hand-geometry/1":
+            continue
+        for name, item in itertools.chain([(filename, doc)], geometry_assets(doc, root)):
+            digest = hashlib.sha256(dumps(item, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            if name in assets and assets[name] != digest:
+                raise ValueError("Conflicting hand geometry asset filename")
+            assets[name] = digest
+    return assets
+
+
 def for_copy(doc: dict, clip: Path) -> dict:
     """The same keypoints timed against another copy of the clip (the static build's web copy, whose timestamps
     ffmpeg re-bases to start at 0). Refused unless it has the same frames at the same size. Not board/clips.py
     retime, which puts a clip's own frames on screen at their capture times."""
     cl = probe_clip(clip)
     old = doc["clip"]
+    if doc.get("format") == "board-hand-geometry/1":
+        validate_geometry(doc)
+        times = frame_times(cl)
+        wanted = old["times"]
+        if ((cl["w"], cl["h"]) != (old["w"], old["h"]) or len(times) != len(wanted)
+                or any(abs(a - b) > 0.00002 for a, b in zip(times, wanted))):
+            raise ValueError("Geometry requires the same source pixels and frame timestamps")
+        return doc
     if (cl["frames"], cl["w"], cl["h"]) != (old["frames"], old["w"], old["h"]):
         raise ValueError(f"{clip} has {cl['frames']} frames at {cl['w']}x{cl['h']}, the keypoints "
                          f"{old['frames']} at {old['w']}x{old['h']}")
