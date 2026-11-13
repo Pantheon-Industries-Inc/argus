@@ -135,6 +135,10 @@ def test_terminal_position_is_a_prior_not_a_camera_keyword_classifier():
     assert terminal_task(record()['labels']['tasks'], 1, 121, sample_period_s=0.5)
     assert not terminal_task(record()['labels']['tasks'], 0, 121, sample_period_s=0.5)
     assert not terminal_task(record()['labels']['tasks'], 1, 150, sample_period_s=0.5)
+    source = record(); source['config'] = {'timesteps_s': [0.0, 0.5, 120.5, 121.0]}
+    out = apply_review(source, review(source, kind='work', target='task_object'), rig='ego_head')
+    assert out['task_scope_review']['decisions'][0]['terminal_capture_prior'] is True
+    assert out['labels']['tasks'] == source['labels']['tasks']
 
 
 def test_related_review_cannot_relabel_a_mixed_work_and_capture_step():
