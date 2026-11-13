@@ -4660,27 +4660,28 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   const alive = () => document.body.contains(cv);
   let disposed = false;
   const chunkRequests = new Map();
-  function cancelChunks(keep = new Set()) {
-    for (const [name, job] of chunkRequests) if (!keep.has(name)) {
+  function cancelChunks() {
+    for (const [name, job] of chunkRequests) {
       job.controller.abort(); chunkRequests.delete(name);
       if (job.data.pending.get(name) === job.promise) job.data.pending.delete(name);
     }
   }
   function bufferChunks(i) {
     const d = data, index = d.chunks.indexOf(hpChunkAt(d, i));
-    const ahead = d.chunks.slice(index, index + 3), keep = new Set(ahead.map(s => s.file));
-    cancelChunks(keep);
-    const retained = new Set(d.chunks.slice(Math.max(0, index - 2), index + 3).map(s => s.file));
+    const ahead = d.chunks.slice(index, index + 5), retained = new Set(ahead.map(s => s.file));
     for (const name of d.loaded.keys()) if (!retained.has(name)) d.loaded.delete(name);
-    // Current first, then two saved chunks ahead. Never hold a previous frame across a missing chunk.
+    // Keep three HTTP bodies moving across playback boundaries, current first. Only navigation cancels them.
     for (const spec of ahead) {
+      if (d.pending.size >= 3) break;
       if (d.loaded.has(spec.file) || d.pending.has(spec.file) || d.failed.has(spec.file)) continue;
       const controller = new AbortController(), job = {controller, data:d, promise:null};
       const promise = fetchJson(handsUrl(spec.file), {signal:controller.signal, priority:'high'}).then(doc => {
         if (controller.signal.aborted || disposed || data !== d || !active || !want) return;
+        const shown = vid.paused ? nowFrame() : frame;
+        const current = d.chunks.indexOf(hpChunkAt(d, shown));
+        if (!d.chunks.slice(current, current + 5).some(s => s.file === spec.file)) return;
         doc = hpGeometryChunk(d, spec, doc);
         d.loaded.set(spec.file, doc);
-        const shown = vid.paused ? nowFrame() : frame;
         if (hpChunkAt(d, shown)?.file === spec.file) { last = ''; draw(shown); }
       }).catch(() => {
         if (controller.signal.aborted || disposed) return;
@@ -4689,6 +4690,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       }).finally(() => {
         if (d.pending.get(spec.file) === promise) d.pending.delete(spec.file);
         if (chunkRequests.get(spec.file) === job) chunkRequests.delete(spec.file);
+        if (!controller.signal.aborted && !disposed && data === d && active && want)
+          bufferChunks(vid.paused ? nowFrame() : frame);
       });
       job.promise = promise; chunkRequests.set(spec.file, job); d.pending.set(spec.file, promise);
     }
