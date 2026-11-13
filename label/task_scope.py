@@ -49,6 +49,9 @@ def apply_review(result: dict, review: dict, *, rig: str) -> dict:
     if review.get('labels_sha256') != digest(labels):
         raise ValueError('Review belongs to different source labels')
     tasks = labels['tasks']
+    instants = (result.get('config') or {}).get('timesteps_s') or []
+    finite_instants = [t for t in instants if type(t) in (int, float) and math.isfinite(t)]
+    period = (result.get('annotation_policy') or {}).get('sample_every_s', 0.5)
     effective = {}
     for source in ('machine', 'human'):
         rows = review.get(source, [])
@@ -89,7 +92,9 @@ def apply_review(result: dict, review: dict, *, rig: str) -> dict:
                     if (any(type(v) not in (int, float) or not math.isfinite(v) for v in span)
                             or not tasks[i]['start_s'] <= a <= b <= tasks[i]['end_s']):
                         raise ValueError('Related annotation exceeds the reviewed capture task span')
-            effective[i] = {**copy.deepcopy(row), 'source': source}
+            prior = (terminal_task(tasks, i, max(finite_instants), sample_period_s=period)
+                     if finite_instants and type(period) in (int, float) and period > 0 else None)
+            effective[i] = {**copy.deepcopy(row), 'source': source, 'terminal_capture_prior': prior}
     out = copy.deepcopy(result)
     excluded = [i for i, row in effective.items() if row['kind'] == 'recording_control']
     if excluded:
