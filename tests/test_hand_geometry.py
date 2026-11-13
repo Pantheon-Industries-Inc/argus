@@ -1,0 +1,242 @@
+"""Canonical geometry contracts reject stale chunks and invalid native topology."""
+import subprocess
+from pathlib import Path
+
+
+def manifest(prediction="p1", chunk="part.json"):
+    return {"format":"board-hand-geometry/1", "prediction_id":prediction,
+            "coordinates":{"xy":"source_pixels","z":"camera_meters"},
+            "clip":{"w":100,"h":50,"times":[0]}, "edges":[[0,1]],
+            "topology":{"left":[[0,1,2]],"right":[]},
+            "chunks":[{"file":chunk,"start":0,"end":1}]}
+
+
+def test_geometry_contract():
+    html = Path('board/index.html').read_text()
+    source = html.split('// BEGIN canonical hand geometry')[1].split('// END canonical hand geometry')[0] if '// BEGIN canonical hand geometry' in html else ''
+    script = source + r'''
+const assert = require('node:assert/strict');
+const doc = {format:'board-hand-geometry/1', prediction_id:'p1', coordinates:{xy:'source_pixels',z:'camera_meters'},
+ clip:{w:100,h:50,times:[0,.04,.09]},edges:[[0,1]],topology:{left:[[0,1,2]],right:[]},
+ chunks:[{start:0,end:2,file:'part-0.json'},{start:2,end:3,file:'part-1.json'}]};
+const d = hpGeometry(doc);
+assert.equal(d.n,3);
+assert.equal(hpChunkAt(d,1).file,'part-0.json');
+assert.equal(hpChunkAt(d,2).file,'part-1.json');
+assert.throws(()=>hpGeometry({...doc,clip:{...doc.clip,times:[0,.09,.04]}}));
+assert.throws(()=>hpGeometry({...doc,chunks:[{start:0,end:3,file:'../private.json'}]}));
+const hand={joints:[[5,6,1],[8,9,1]],vertices:[[0,0,1],[10,0,1],[0,10,1]]};
+const chunk={format:'board-hand-geometry-chunk/1',prediction_id:'p1',start:0,frames:[{left:hand},{left:null}]};
+assert.equal(hpGeometryChunk(d,doc.chunks[0],chunk).frames[0].left.vertices.length,3);
+assert.throws(()=>hpGeometryChunk(d,doc.chunks[0],{...chunk,prediction_id:'old'}));
+assert.throws(()=>hpGeometryChunk(d,doc.chunks[0],{...chunk,frames:[{left:{...hand,vertices:[[0,0,1]]}},{}]}));
+assert.throws(()=>hpGeometryChunk(d,doc.chunks[0],{...chunk,frames:[{left:{...hand,joints:[[NaN,0,1]]}},{}]}));
+const tris=hpTriangles({left:hand},doc.topology);
+assert.equal(tris.length,1);
+assert.deepEqual(tris[0].points,hand.vertices);
+'''
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_geometry_web_copy_requires_identical_timing(monkeypatch):
+    import pytest
+    from board import hands
+    doc = manifest()
+    doc['clip']['times']=[0,.04,.09]
+    doc['chunks'][0]['end']=3
+    monkeypatch.setattr(hands, 'probe_clip', lambda _: {'w': 100, 'h': 50, 'frames': 3, 'tb': [1,100], 'dur': 4, 'pts': 'AAAC'})
+    # Supply decoded timestamps independently: web encodes must retain every source frame.
+    monkeypatch.setattr(hands, 'frame_times', lambda _: [0, .04, .09])
+    assert hands.for_copy(doc, Path('clip.mp4'))['clip']['times'] == [0, .04, .09]
+    monkeypatch.setattr(hands, 'frame_times', lambda _: [0, .04, .08])
+    with pytest.raises(ValueError):
+        hands.for_copy(doc, Path('clip.mp4'))
+
+
+def test_chunk_assets_reject_traversal_and_wrong_prediction(tmp_path):
+    import json
+    import pytest
+    from board.hands import geometry_assets
+    doc = manifest()
+    (tmp_path/'part.json').write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'old','start':0,'frames':[{}]}))
+    with pytest.raises(ValueError):
+        list(geometry_assets(doc,tmp_path))
+    doc['chunks'][0]['file']='../private.json'
+    with pytest.raises(ValueError):
+        list(geometry_assets(doc,tmp_path))
+
+
+def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path):
+    """Use the production overlay on actual decoded video in headless Chrome."""
+    import contextlib
+    import http.server
+    import json
+    import tempfile
+    import threading
+    import time
+    import pytest
+    from test_layout_fits import chrome, _devtools
+    import shutil
+    if not chrome() or not shutil.which('ffmpeg'):
+        pytest.skip('Chrome and ffmpeg required')
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=10:d=3',
+                    '-c:v','libx264','-pix_fmt','yuv420p',str(tmp_path/'clip.mp4')],check=True)
+    html=Path('board/index.html').read_text()
+    script=html.split('let HP_MODE =')[1].split('// ================= the recording')[0]
+    script='let HP_MODE ='+script
+    doc={'format':'board-hand-geometry/1','prediction_id':'fixture','coordinates':{'xy':'source_pixels','z':'camera_meters'},
+         'clip':{'w':160,'h':120,'times':[i/10 for i in range(30)]},'edges':[[0,1]],
+         'topology':{'left':[[0,1,2],[0,2,3]],'right':[]},
+         'chunks':[{'start':0,'end':15,'file':'chunk-a.json'},{'start':15,'end':30,'file':'chunk-b.json'}]}
+    (tmp_path/'episode.json').write_text(json.dumps(doc))
+    missing={**doc, 'chunks':[{'start':0,'end':30,'file':'absent-part.json'}]}
+    (tmp_path/'missing-episode.json').write_text(json.dumps(missing))
+    for name,start,x in [('chunk-a.json',0,10),('chunk-b.json',15,80)]:
+        frame={'left':{'joints':[[x,20,1],[x+20,40,1]],'vertices':[[x,20,1],[x+20,20,1],[x+20,40,1],[x,40,1]]}}
+        (tmp_path/name).write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'fixture',
+                                              'start':start,'frames':[frame]*15}))
+    import base64
+    video_url='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
+    prelude="""const STATIC=true, BOARD={hands:true,data:''}; let _activeFile='episode.json';
+window._epCleanup=[]; const siteFile=x=>x;
+function fetchJson(url){return fetch(url.replace('hands/','')).then(r=>r.ok?r.json():null);}
+function remember(c,k,p){c.set(k,p);return p;}
+const on=(e,k,f)=>e.addEventListener(k,f);
+"""
+    tail="""document.getElementById('controls').innerHTML=hpModes();
+const vid=document.querySelector('video');
+vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile));
+"""
+    (tmp_path/'index.html').write_text('''<style>#cell{position:relative;width:320px;height:280px}video{position:absolute;top:40px;width:320px;height:240px}.hp-canvas{position:absolute;pointer-events:none}.hp-modes{display:flex}</style>
+<div id="controls"></div><div id="hp-aligned"><div class="kp-note-in"></div></div>
+<div id="cell"><video src="VIDEO_URL" muted playsinline></video><canvas id="hp-canvas"></canvas></div><script>'''+prelude+script+tail+'</script>')
+    (tmp_path/'index.html').write_text((tmp_path/'index.html').read_text().replace('VIDEO_URL',video_url))
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(tmp_path),**kwargs)
+        def log_message(self,*args): pass
+    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Quiet)
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    with tempfile.TemporaryDirectory() as profile:
+        send,close=_devtools(chrome(),['--headless=new','--no-sandbox','--autoplay-policy=no-user-gesture-required',f'--user-data-dir={profile}','about:blank'])
+        try:
+            target=send('Target.createTarget',{'url':f'http://127.0.0.1:{server.server_port}/index.html'})['targetId']
+            sid=send('Target.attachToTarget',{'targetId':target,'flatten':True})['sessionId']
+            def js(code):
+                result=send('Runtime.evaluate',{'expression':code,'returnByValue':True,'awaitPromise':True},sid,deadline=time.monotonic()+20)
+                assert 'exceptionDetails' not in result,result
+                return result.get('result',{}).get('value')
+            for _ in range(100):
+                if js("!!window._hp && window._hp.state.data"):break
+                time.sleep(.05)
+            assert js('window._hp.state.data')
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==0
+            js("document.querySelector('[data-mode=mesh]').click()")
+            for _ in range(100):
+                if js("document.querySelector('.hp-status').textContent === ''"):break
+                time.sleep(.02)
+            assert js("document.querySelector('[data-mode=mesh]').getAttribute('aria-pressed')")=='true'
+            assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")>0
+            assert js("""(() => { const surface=hpSurface(); const image=surface.draw([
+              {h:'right',points:[[0,0,1],[100,0,10],[0,100,10]]},
+              {h:'left',points:[[0,0,2],[100,0,2],[0,100,2]]}],100,100,100,100);
+              const c=document.createElement('canvas');c.width=100;c.height=100;
+              const ctx=c.getContext('2d');ctx.drawImage(image,0,0);
+              const near=ctx.getImageData(5,5,1,1).data[0],far=ctx.getImageData(80,5,1,1).data[0];
+              surface.dispose();return near>120 && far<100;})()""")
+            js("vid.currentTime=2")
+            for _ in range(100):
+                if js('window._hp.state.frame>=20') and js("document.querySelector('.hp-status').textContent === ''"):break
+                time.sleep(.02)
+            assert js('window._hp.state.frame')==20, js('JSON.stringify({state:window._hp.state,time:vid.currentTime,seeking:vid.seeking,ready:vid.readyState,error:vid.error,status:document.querySelector(".hp-status").textContent})')
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==1
+            assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")==0
+            js("vid.play(); document.querySelector('[data-mode=off]').click()")
+            assert js('window._hp.state.active') is False
+            assert js('vid.paused') is False
+            assert js("document.querySelector('canvas').getContext('2d').getImageData(170,60,1,1).data[3]")==0
+            js("document.querySelector('[data-mode=skeleton]').click()")
+            assert js('window._hp.state.active') is True
+            js("document.getElementById('cell').style.width='195px';vid.style.width='195px'")
+            assert js('window._hp.state.data') is True
+            # Second episode setup must discard the first episode's frame and canvas state.
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json')")
+            assert js('window._hp.state.active') is True
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; const nativeContext=HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:nativeContext.call(this,kind,...args)}; setupHandPose(vid,document.getElementById('cell'),true,on,'episode.json'); document.querySelector('[data-mode=mesh]').click()")
+            assert js("document.querySelector('.hp-status').textContent")=='Unavailable'
+            js("HTMLCanvasElement.prototype.getContext=nativeContext; document.querySelector('[data-mode=skeleton]').click()")
+            assert js('window._hp.state.active') is True
+            js("window._epCleanup.forEach(f=>f()); window._epCleanup=[]; _activeFile='missing-episode.json'; setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile); vid.currentTime=0;vid.play()")
+            for _ in range(100):
+                if js("document.querySelector('.hp-status').textContent === 'Unavailable'"):break
+                time.sleep(.02)
+            time.sleep(.4)
+            assert js('vid.currentTime') > .2
+            assert js('vid.paused') is False
+            assert js("document.querySelector('.hp-status').textContent")=='Unavailable'
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('absent-part.json')).length")==1
+        finally:
+            close()
+            server.shutdown();server.server_close()
+
+
+def test_board_build_copies_canonical_geometry_without_inference(tmp_path):
+    import json
+    from board.build import build_hands
+    board=tmp_path/'board';board.mkdir()
+    qa=board/'qa.new';qa.mkdir()
+    (qa/'episode_000000.json').write_text('{}')
+    src=tmp_path/'geometry';src.mkdir()
+    doc=manifest('p')
+    (src/'episode_000000.json').write_text(json.dumps(doc))
+    (src/'part.json').write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'p','start':0,'frames':[{}]}))
+    result=build_hands(board,{'geometry':str(src)},qa,{})
+    assert result['written']==1
+    assert json.loads((board/'hands.new'/'part.json').read_text())['prediction_id']=='p'
+    assert not list((board/'hand_keypoints.new').iterdir())
+
+
+def test_public_geometry_validation_rejects_bad_units_timing_bounds_and_values(tmp_path):
+    import copy
+    import json
+    import pytest
+    from board.hands import geometry_assets, validate_geometry
+    valid=manifest()
+    variants=[]
+    d=copy.deepcopy(valid);d["private_checkpoint_path"]="private";variants.append(d)
+    d=copy.deepcopy(valid);d['coordinates']['z']='millimeters';variants.append(d)
+    d=copy.deepcopy(valid);d['clip']['times']=[0,float('nan')];variants.append(d)
+    d=copy.deepcopy(valid);d['clip']['times']=[.1,0];variants.append(d)
+    d=copy.deepcopy(valid);d['chunks']=[{'start':0,'end':1,'file':'part.json'},{'start':0,'end':1,'file':'part.json'}];variants.append(d)
+    d=copy.deepcopy(valid);d['chunks'][0]['end']=2;variants.append(d)
+    for doc in variants:
+        with pytest.raises(ValueError): validate_geometry(doc)
+    hand={'joints':[[0,0,1],[1,1,1]],'vertices':[[0,0,1],[1,0,1],[0,1,1]]}
+    chunk={'format':'board-hand-geometry-chunk/1','prediction_id':'p1','start':0,'frames':[{'left':hand}]}
+    (tmp_path/'part.json').write_text(json.dumps(chunk))
+    assert len(list(geometry_assets(valid,tmp_path)))==1
+    for field,value in [('vertices',[[0,0,1]]),('vertices',[[0,0,float('nan')],[1,0,1],[0,1,1]]),('joints',[[0,0,-1],[1,0,1]])]:
+        bad=copy.deepcopy(chunk);bad['frames'][0]['left'][field]=value
+        (tmp_path/'part.json').write_text(json.dumps(bad))
+        with pytest.raises(ValueError):list(geometry_assets(valid,tmp_path))
+    chunk['frames']=[];(tmp_path/'part.json').write_text(json.dumps(chunk))
+    with pytest.raises(ValueError):list(geometry_assets(valid,tmp_path))
+
+
+def test_two_episode_chunk_collision_refuses_mixed_prediction(tmp_path):
+    import json
+    import pytest
+    from board.hands import geometry_bundle
+    for name,pred in [('episode_000001.json','p1'),('episode_000002.json','p2')]:
+        (tmp_path/name).write_text(json.dumps(manifest(pred)))
+    (tmp_path/'part.json').write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'p1','start':0,'frames':[{}]}))
+    with pytest.raises(ValueError):geometry_bundle(tmp_path,['episode_000001.json','episode_000002.json'])
+
+
+def test_identical_shared_chunks_reuse_public_filename(tmp_path):
+    import json
+    from board.hands import geometry_bundle
+    for name in ['episode_000001.json','episode_000002.json']:
+        (tmp_path/name).write_text(json.dumps(manifest()))
+    (tmp_path/'part.json').write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'p1','start':0,'frames':[{}]}))
+    assert set(geometry_bundle(tmp_path,['episode_000001.json','episode_000002.json']))=={'episode_000001.json','episode_000002.json','part.json'}
