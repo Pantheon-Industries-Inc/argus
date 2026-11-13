@@ -178,12 +178,21 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-btn[aria-pressed="true"] { color: var(--fg); border-color: var(--fg-3); }
 .hp-btn[aria-pressed="true"] .hp-sw { background: var(--fg); border-color: var(--fg); }
 .hp-btn[aria-pressed="true"] .hp-sw::after { transform: translateX(10px); background: var(--surface); }
-.hp-mode .hp-sw { width:32px; }
+.hp-mode { padding:4px 6px; gap:6px; flex-wrap:wrap; }
 .hp-mode:not([aria-valuenow="0"]) { color:var(--fg); border-color:var(--fg-3); }
-.hp-mode:not([aria-valuenow="0"]) .hp-sw { background:var(--fg); border-color:var(--fg); }
-.hp-mode:not([aria-valuenow="0"]) .hp-sw::after { background:var(--surface); }
-.hp-mode[aria-valuenow="1"] .hp-sw::after { transform:translateX(10px); }
-.hp-mode[aria-valuenow="2"] .hp-sw::after { transform:translateX(20px); }
+.hp-track { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); flex:none;
+  width:168px; padding:2px; box-sizing:border-box; border-radius:var(--r-md);
+  background:var(--surface); touch-action:none; user-select:none; }
+.hp-track::before { content:""; position:absolute; top:2px; bottom:2px; left:2px;
+  width:calc((100% - 4px)/3); border-radius:calc(var(--r-md) - 2px); background:var(--fg);
+  transition:transform 160ms ease; }
+.hp-mode[aria-valuenow="1"] .hp-track::before { transform:translateX(100%); }
+.hp-mode[aria-valuenow="2"] .hp-track::before { transform:translateX(200%); }
+.hp-segment { position:relative; z-index:1; padding:5px 2px; text-align:center; color:var(--fg-2); }
+.hp-mode[aria-valuenow="0"] [data-mode="off"],
+.hp-mode[aria-valuenow="1"] [data-mode="skeleton"],
+.hp-mode[aria-valuenow="2"] [data-mode="mesh"] { color:var(--surface); }
+.hp-mode .hp-status:not(:empty) { flex-basis:100%; text-align:right; }
 .cam-cell > .hp-mode { position:absolute; top:calc(var(--fx-top, 0px) + 8px);
   right:calc(var(--fx-right, 0px) + 42px); z-index:6; background:var(--surface); }
 /* the hand pose, drawn on a canvas laid exactly over the displayed image (placed in JS). It sits above the video and
@@ -2372,8 +2381,9 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <span id="hp-mode-home" hidden></span>
           <button id="hp-mode" class="ep-head-dl hp-btn hp-mode" type="button" role="slider" hidden
             aria-labelledby="hp-mode-label" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1"
-            aria-valuetext="Skeleton" title="Change hand pose display"><span class="hp-sw" aria-hidden="true"></span><span
-            id="hp-mode-label">Hand pose</span><span id="hp-mode-value">Skeleton</span><span
+            aria-valuetext="Skeleton" title="Change hand pose display"><span id="hp-mode-label">Hand pose</span><span
+            class="hp-track" aria-hidden="true"><span class="hp-segment" data-mode="off">Off</span><span
+            class="hp-segment" data-mode="skeleton">Skeleton</span><span class="hp-segment" data-mode="mesh">Mesh</span></span><span
             id="hp-status" class="hp-status" role="status" aria-live="polite"></span></button>
           <a id="kp-dl" class="ep-head-dl" download hidden
             title="the model's 2D hand keypoints for every frame of this episode's video, as JSON, in a file of their own"
@@ -4567,7 +4577,6 @@ const hpLegacyLicense = hpLicenseEls.map(el => el?.innerHTML || '');
 function hpModeValue() {
   const i = ['off','skeleton','mesh'].indexOf(HP_MODE), text = HP_MODE[0].toUpperCase() + HP_MODE.slice(1);
   hpModesEl.setAttribute('aria-valuenow', String(i)); hpModesEl.setAttribute('aria-valuetext', text);
-  document.getElementById('hp-mode-value').textContent = text;
 }
 hpModeValue();
 function hpStatus(text) { document.getElementById('hp-status').textContent = text; }
@@ -4596,10 +4605,34 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     surfaceFailed=false;
     last = ''; hpStatus(''); set(HP_MODE !== 'off');
   };
-  on(hpModesEl, 'click', () => choose((['off','skeleton','mesh'].indexOf(HP_MODE) + 1) % 3));
+  const track = hpModesEl.querySelector('.hp-track');
+  let drag = null;
+  const selectAt = x => {
+    const r = track.getBoundingClientRect();
+    const i = Math.max(0, Math.min(2, Math.floor((x - r.left) / r.width * 3)));
+    if (i !== ['off','skeleton','mesh'].indexOf(HP_MODE)) choose(i);
+  };
+  on(hpModesEl, 'click', e => {
+    const segment = e.target.closest('[data-mode]');
+    if (segment) choose(['off','skeleton','mesh'].indexOf(segment.dataset.mode));
+  });
+  on(hpModesEl, 'pointerdown', e => {
+    if (!track.contains(e.target) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault(); hpModesEl.focus(); drag = e.pointerId;
+    if (hpModesEl.hasPointerCapture(drag) || e.isTrusted) hpModesEl.setPointerCapture(drag);
+    selectAt(e.clientX);
+  });
+  on(hpModesEl, 'pointermove', e => { if (drag === e.pointerId) selectAt(e.clientX); });
+  on(hpModesEl, 'pointerup', e => {
+    if (drag !== e.pointerId) return;
+    selectAt(e.clientX);
+    if (hpModesEl.hasPointerCapture(drag)) hpModesEl.releasePointerCapture(drag);
+    drag = null;
+  });
+  on(hpModesEl, 'pointercancel', () => { drag = null; });
   on(hpModesEl, 'keydown', e => {
     const i = ['off','skeleton','mesh'].indexOf(HP_MODE);
-    const next = {ArrowLeft:Math.max(0,i-1), ArrowRight:Math.min(2,i+1), Home:0, End:2}[e.key];
+    const next = {ArrowLeft:Math.max(0,i-1), ArrowDown:Math.max(0,i-1), ArrowRight:Math.min(2,i+1), ArrowUp:Math.min(2,i+1), Home:0, End:2}[e.key];
     if (next !== undefined) { e.preventDefault(); choose(next); }
   });
   const cv = document.getElementById('hp-canvas');
