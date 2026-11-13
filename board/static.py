@@ -623,10 +623,13 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
         if compare is not None and (compare / name).exists():
             h.update(hashlib.sha1((compare / name).read_bytes()).digest())
     if hands is not None:
+        hands_overlay.geometry_bundle(hands, files)
         for f in files:
             hp = hands / f
             if hp.exists():
                 h.update(f"hands|{f}|".encode() + hp.read_bytes())
+                for name, chunk in hands_overlay.geometry_assets(json.loads(hp.read_text()), hands):
+                    h.update(name.encode() + dumps(chunk, sort_keys=True).encode())
     for f in files:
         if dictionary_job is not None:
             current = sa.current_label(json.loads((qa / f).read_text()), dictionary_job, f)
@@ -773,6 +776,7 @@ def cmd_site(a):
                 dumps(public_json(recs), separators=(",", ":")))
     hands_res = None
     if hands is not None:
+        hands_overlay.geometry_bundle(hands, [e["rec"]["file"] for e in eps])
         # the hand pose files, each re-timed against the web copy the static page plays (the copy keeps the clip's
         # timestamps, and board/hands.py for_copy refuses a copy whose frames or size differ); an episode whose web copy is not made
         # yet gets none until the next build
@@ -787,6 +791,8 @@ def cmd_site(a):
                 return f, "no web copy of the clip yet"
             try:
                 doc = hands_overlay.for_copy(json.loads((hands / f).read_text()), mp4)
+                for name, chunk in hands_overlay.geometry_assets(doc, hands):
+                    (stage / "data/hands" / name).write_text(dumps(public_json(chunk), separators=(",", ":")))
             except (ValueError, RuntimeError) as err:
                 return f, str(err)[:200]
             (stage / "data/hands" / site_file(f)).write_text(dumps(public_json(doc), separators=(",", ":")))
