@@ -51,6 +51,7 @@ from checks.results import stored_number
 REACHED = ("success", "success_then_undone")
 NOT_REACHED = ("failure", "partial", "unclear")
 OTHER_TASK = ("different", "unrelated")
+FULL_PROGRESS = 1.0 - 1e-9  # numerical tolerance, not a rounded percentage of completion
 
 
 def _levels(steps: list[dict]) -> list[tuple[float, float]]:
@@ -112,7 +113,7 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
     # restarts at each sub-task, so its first task reaches 1.0 long before its annotated goal holds
     steps = (label.get('timeline') or []) if progress_toward_verdict(label) else []
     peak = max((p for p in (stored_number(s.get("progress")) for s in steps) if p is not None), default=None)
-    if outcome in NOT_REACHED and peak is not None and peak >= 0.99:
+    if outcome in NOT_REACHED and peak is not None and peak >= FULL_PROGRESS:
         out.append({"rule": "progress_vs_outcome",
                     "note": f"The outcome is {outcome}, but the timeline's progress reaches {peak:.0%}, the level kept "
                             f"for the moment the goal is reached."})
@@ -123,7 +124,7 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
                             f"{done:.1f} s; for a success they are the same frame."})
     if outcome == "success" and done is not None and steps:
         lv = _levels(steps)
-        first_full = next((t for t, p in lv if p >= 0.99), None)
+        first_full = next((t for t, p in lv if p >= FULL_PROGRESS), None)
         at_goal = ([p for t, p in lv if t <= done + 0.05] or [0.0])[-1]
         GAP = 3.0   # seconds; within this the timeline and the goal frame differ only by where a step ends
         mism = any(str((i or {}).get("category") or (i or {}).get("family") or "").replace("-", "_") == "instruction_mismatch"

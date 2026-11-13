@@ -265,6 +265,8 @@ def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig,
     if rig == "ego_head":
         columns += ["hands_visible", "hands_wearing"]
     columns += ["notes"]
+    if rig == "ego_head":
+        columns += ["activity_scope"]
     for text in (recorded, video):
         offered = json.loads(re.search(r'"timeline_columns": (\[[^\]]+\])', text).group(1))
         assert offered == columns
