@@ -36,12 +36,12 @@ const DS_SHORT={}, dsLabel=x=>x;
 eval(piece('renderDatasetHeadings'));
 renderDatasetHeadings([{d:'Example'}]);
 assert.equal(elements.body.classList['single-dataset'],true);
-assert.equal(coverageEl.classList['duplicate-name'],true);
+assert.equal(elements.body.classList['duplicate-dataset-heading'],true);
 renderDatasetHeadings([{d:'Example'},{d:'Another'}]);
 assert.equal(elements.body.classList['single-dataset'],false);
-assert.equal(coverageEl.classList['duplicate-name'],false);
+assert.equal(elements.body.classList['duplicate-dataset-heading'],false);
 renderDatasetHeadings([{d:'Different dataset'}]);
-assert.equal(coverageEl.classList['duplicate-name'],false);
+assert.equal(elements.body.classList['duplicate-dataset-heading'],false);
 '''
     subprocess.run(['node', '-e', script], check=True)
 
@@ -74,17 +74,17 @@ def test_hand_modes_share_canonical_button_font_without_a_camera_padding_bar():
 const buttons=[...document.querySelectorAll('.hp-modes button')];
 const reference=getComputedStyle(document.getElementById('reference'));
 const visible=selector=>!!document.querySelector(selector).getClientRects().length;
-const single=[visible('.cv-name'),visible('#rd-name')];
+const single=[visible('#coverage'),visible('.cv-name'),visible('#rd-name')];
 renderDatasetHeadings([{d:'Example'},{d:'Another'}]);
 return {fonts:buttons.map(b=>getComputedStyle(b).font),reference:reference.font,
  padding:getComputedStyle(document.getElementById('cell')).paddingTop,
  background:getComputedStyle(buttons[1]).backgroundColor,
- selected:buttons.map(b=>b.getAttribute('aria-pressed')),single,multi:[visible('.cv-name'),visible('#rd-name')]};})()''', 'returnByValue':True}, sid, deadline=time.monotonic()+15)['result']['value']
+ selected:buttons.map(b=>b.getAttribute('aria-pressed')),single,multi:[visible('#coverage'),visible('.cv-name'),visible('#rd-name')]};})()''', 'returnByValue':True}, sid, deadline=time.monotonic()+15)['result']['value']
             assert result['fonts'] == [result['reference']] * 3
             assert result['padding'] == '0px'
             assert result['background'] == 'rgba(0, 0, 0, 0)'
             assert result['selected'] == ['false', 'true', 'false']
-            assert result['single'] == [False, False]
-            assert result['multi'] == [True, True]
+            assert result['single'] == [False, False, False]
+            assert result['multi'] == [True, True, True]
         finally:
             close()
