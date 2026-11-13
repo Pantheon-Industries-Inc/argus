@@ -2588,7 +2588,8 @@ let ALL_EPS = [];
 // are the names the build gives them (index.json lists and site_names, compare/index.json site_names), never the
 // identifiers themselves, which can hold any character. Relative bases keep a
 // static build working under any sub-path and from any origin. BOARD.models names the pinned models
-// (configs/models.json) by model id.
+// (configs/models.json) by model id. BOARD.hands_data optionally supplies a separate data base
+// for hands/ files, defaulting to BOARD.data; both bases end with a slash.
 const BOARD = __BOARD_CONFIG__;
 const STATIC = BOARD.mode === 'static';
 
@@ -4397,7 +4398,7 @@ const HP_B64 = new Int8Array(128).fill(-1);
 const HP_COLOR = {left: '#4f6d8f', right: '#8a5a9a'};    // the board's left and right (--arm-left, --arm-right)
 const HP_FADE = 4;                  // frames over which a hand fades in where it appears and out where it goes
 function handsUrl(file) {
-  return STATIC ? BOARD.data + 'hands/' + encodeURIComponent(siteFile(file)) : 'api/hands?file=' + encodeURIComponent(file);
+  return STATIC ? (BOARD.hands_data ?? BOARD.data) + 'hands/' + encodeURIComponent(siteFile(file)) : 'api/hands?file=' + encodeURIComponent(file);
 }
 // Base64 VLQ integers (board/hands.py documents the format)
 function hpReader(s) {
