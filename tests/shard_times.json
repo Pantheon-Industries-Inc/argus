@@ -87,6 +87,7 @@
  "tests/test_grip_evidence.py": 0.9,
  "tests/test_grouping_cap.py": 5.2,
  "tests/test_habit_generic.py": 1.7,
+ "tests/test_hand_pose_modal_image.py": 0.2,
  "tests/test_hand_pose_readout.py": 0.0,
  "tests/test_hand_pose_sync.py": 0.3,
  "tests/test_hdf_declared_contracts.py": 2.0,
