@@ -178,12 +178,12 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-btn[aria-pressed="true"] { color: var(--fg); border-color: var(--fg-3); }
 .hp-btn[aria-pressed="true"] .hp-sw { background: var(--fg); border-color: var(--fg); }
 .hp-btn[aria-pressed="true"] .hp-sw::after { transform: translateX(10px); background: var(--surface); }
-.hp-mode { padding:0; gap:0; flex-wrap:wrap; background:var(--surface); }
+.hp-mode { padding:0; gap:0; flex-wrap:wrap; max-width:100%; background:var(--surface); }
 .hp-mode #hp-mode-label { align-self:stretch; display:flex; align-items:center; padding:0 8px;
   background:var(--bg); border-right:1px solid var(--border); border-radius:6px 0 0 6px; }
 .hp-mode:not([aria-valuenow="0"]) { color:var(--fg); border-color:var(--fg-3); }
 .hp-track { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); flex:none;
-  width:168px; margin:3px; padding:2px; box-sizing:border-box; border-radius:4px;
+  width:204px; margin:3px; padding:2px; box-sizing:border-box; border-radius:4px;
   outline:1px solid var(--border-strong); background:var(--bg); touch-action:none; user-select:none; }
 .hp-track::before { content:""; position:absolute; top:2px; bottom:2px; left:2px;
   width:calc((100% - 4px)/3); border-radius:calc(var(--r-md) - 2px); background:var(--fg);
@@ -197,6 +197,12 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-mode[aria-valuenow="1"] [data-mode="skeleton"],
 .hp-mode[aria-valuenow="2"] [data-mode="mesh"] { color:var(--surface); }
 .hp-mode .hp-status:not(:empty) { flex-basis:100%; padding:4px 8px; text-align:right; }
+@media (max-width:320px) {
+  .hp-mode { flex-direction:column; align-items:stretch; }
+  .hp-mode #hp-mode-label { justify-content:center; padding:6px 8px; border-right:0;
+    border-bottom:1px solid var(--border); border-radius:6px 6px 0 0; }
+  .hp-track { align-self:center; }
+}
 .cam-cell > .hp-mode { position:absolute; top:calc(var(--fx-top, 0px) + 8px);
   right:calc(var(--fx-right, 0px) + 42px); z-index:6; background:var(--surface); }
 /* the hand pose, drawn on a canvas laid exactly over the displayed image (placed in JS). It sits above the video and
