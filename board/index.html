@@ -444,7 +444,8 @@ aside.rail {
 .cv-name { font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .cv-cell:hover .cv-name { color: var(--fg-2); }
 .cv-cell.on .cv-name { color: var(--fg); font-weight: 600; }
-.single-dataset #rd-name, .coverage.duplicate-name .cv-name { display:none; }
+.single-dataset { --cov-h:0px; --top-h:var(--header-h); }
+.single-dataset #coverage, .duplicate-dataset-heading #rd-name { display:none; }
 .cv-num { font: 500 11.5px/1 var(--mono); color: var(--fg-3); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .cv-cell.on .cv-num { color: var(--fg-2); }
@@ -4038,7 +4039,7 @@ function renderDatasetHeadings(per) {
   const repeated = single && [...document.querySelectorAll('.page-head h1,.page-head .ph-board')]
     .some(el => normalize(el.textContent) === name);
   document.body.classList.toggle('single-dataset', single);
-  coverageEl.classList.toggle('duplicate-name', repeated);
+  document.body.classList.toggle('duplicate-dataset-heading', repeated);
 }
 function renderCoverage(ds, shown) {
   if (!ALL_EPS.length) { renderDatasetHeadings([]); coverageEl.innerHTML = ''; return; }
