@@ -41,6 +41,7 @@
   --arm-left:  #4f6d8f;
   --arm-right: #8a5a9a;
 
+  --page-pad: 16px;
   --header-h: 44px;   /* the page header: title and board name */
   --cov-h: 62px;
   --rail-w: 240px;    /* the episode rail's column; the board totals above it take the same width */
@@ -74,7 +75,7 @@ body {
 code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 /* ---------- header: the page title and the board's name ---------- */
-.page-head { display: flex; align-items: center; gap: 12px; height: var(--header-h); padding: 0 18px;
+.page-head { display: flex; align-items: center; gap: 12px; height: var(--header-h); padding: 0 var(--page-pad);
   background: var(--bg); box-shadow: 0 1px 0 var(--border); position: sticky; top: 0; z-index: 11; }
 .page-head h1 { margin: 0; font: 600 15px/1.2 var(--sans); color: var(--fg); letter-spacing: -0.005em; }
 .ph-board { font: 500 12px/1.2 var(--mono); color: var(--fg-3); overflow-wrap: anywhere; }
@@ -165,6 +166,8 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .vd-cam-row a:hover { color: var(--fg); border-color: var(--fg-3); }
 .vd-status { padding: 4px 14px 6px; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
 .vd-status:empty { display: none; }
+.hp-status { font:400 12px/1.3 var(--sans); color:var(--fg-3); }
+.hp-status:empty { display:none; }
 .hp-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; cursor: pointer;
   transition: opacity 200ms ease, color 160ms ease, border-color 160ms ease; }
 .hp-btn[hidden] { display: none; }
@@ -176,6 +179,34 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-btn[aria-pressed="true"] { color: var(--fg); border-color: var(--fg-3); }
 .hp-btn[aria-pressed="true"] .hp-sw { background: var(--fg); border-color: var(--fg); }
 .hp-btn[aria-pressed="true"] .hp-sw::after { transform: translateX(10px); background: var(--surface); }
+.hp-mode { padding:0; gap:0; flex-wrap:wrap; max-width:100%; background:var(--surface); }
+.hp-mode #hp-mode-label { align-self:stretch; display:flex; align-items:center; padding:0 8px;
+  background:var(--bg); border-right:1px solid var(--border); border-radius:6px 0 0 6px; }
+.hp-mode:not([aria-valuenow="0"]) { color:var(--fg); border-color:var(--fg-3); }
+.hp-track { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); flex:none;
+  width:204px; margin:3px; padding:2px; box-sizing:border-box; border-radius:4px;
+  outline:1px solid var(--border-strong); background:var(--bg); touch-action:none; user-select:none; }
+.hp-track::before { content:""; position:absolute; top:2px; bottom:2px; left:2px;
+  width:calc((100% - 4px)/3); border-radius:calc(var(--r-md) - 2px); background:var(--fg);
+  transition:transform 160ms ease; }
+.hp-mode[aria-valuenow="1"] .hp-track::before { transform:translateX(100%); }
+.hp-mode[aria-valuenow="2"] .hp-track::before { transform:translateX(200%); }
+.hp-segment { position:relative; z-index:1; padding:5px 2px; text-align:center; color:var(--fg-2); }
+.hp-segment + .hp-segment::before { content:""; position:absolute; left:0; top:2px; bottom:2px;
+  border-left:1px solid var(--border-strong); }
+.hp-mode[aria-valuenow="0"] [data-mode="off"],
+.hp-mode[aria-valuenow="1"] [data-mode="skeleton"],
+.hp-mode[aria-valuenow="2"] [data-mode="mesh"] { color:var(--surface); }
+.hp-mode .hp-status { position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+@media (max-width:320px) {
+  .hp-mode { flex-direction:column; align-items:stretch; }
+  .hp-mode #hp-mode-label { justify-content:center; padding:6px 8px; border-right:0;
+    border-bottom:1px solid var(--border); border-radius:6px 6px 0 0; }
+  .hp-track { align-self:center; }
+}
+.cam-cell > .hp-mode { position:absolute; top:calc(var(--fx-top, 0px) + 8px);
+  right:calc(var(--fx-right, 0px) + 42px); z-index:6; background:var(--surface); }
 /* the hand pose, drawn on a canvas laid exactly over the displayed image (placed in JS). It sits above the video and
    below every note on it; while the player's own controls show, the strip they cover is dimmed so their text stays
    readable. */
@@ -300,7 +331,7 @@ main {
 /* ---------- episode rail (persistent picker) ---------- */
 aside.rail {
   background: var(--bg); border-right: 1px solid var(--border);
-  --rail-pad: 10px; padding: 12px var(--rail-pad);
+  --rail-pad: var(--page-pad); padding: 12px var(--rail-pad);
   position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h));
   /* sticky makes the rail its own stacking context; it sits above the main column so the filter menu, which is
      wider than the rail, is drawn over the video instead of under it */
@@ -439,6 +470,8 @@ aside.rail {
 .cv-name { font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .cv-cell:hover .cv-name { color: var(--fg-2); }
 .cv-cell.on .cv-name { color: var(--fg); font-weight: 600; }
+.single-dataset { --cov-h:0px; --top-h:var(--header-h); }
+.single-dataset #coverage, .duplicate-dataset-heading #rd-name { display:none; }
 .cv-num { font: 500 11.5px/1 var(--mono); color: var(--fg-3); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .cv-cell.on .cv-num { color: var(--fg-2); }
@@ -2254,7 +2287,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .cv-num { font-size: 11px; }
   .cv-num .u { display: inline; }
   main { display: block; height: auto; }
-  aside.rail { position: static; height: auto; overflow: visible; --rail-pad: 16px; padding: 14px var(--rail-pad); border-right: 0;
+  aside.rail { position: static; height: auto; overflow: visible; --rail-pad: var(--page-pad); padding: 14px var(--rail-pad); border-right: 0;
     border-bottom: 1px solid var(--border-strong); }
   #ep-list { max-height: 46vh; }
   .if-menu { width: min(340px, calc(100vw - 32px)); }
@@ -2337,10 +2370,10 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
       </div>
       <p class="dl-lic" id="dl-lic" hidden></p>
       <div class="kp-exp off" id="kp-exp"><div class="kp-exp-in">
-        <p class="kp-lic"><span id="kp-size"></span>Non-commercial use only. Predicted by <a
+        <p class="kp-lic"><span id="kp-size"></span><span id="kp-attribution">Non-commercial use only. Predicted by <a
           href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank" rel="noreferrer">ACE-Ego-Hand</a>
           (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noreferrer">CC BY-NC 4.0</a>),
-          which uses <a href="https://mano.is.tue.mpg.de/license.html" target="_blank" rel="noreferrer">MANO</a>.</p>
+          which uses <a href="https://mano.is.tue.mpg.de/license.html" target="_blank" rel="noreferrer">MANO</a>.</span></p>
       </div></div>
     </div></div></div>
   </aside>
@@ -2357,6 +2390,13 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
             title="Draw the joints of each hand over the video"><span class="hp-sw"
             aria-hidden="true"></span>Hand pose</button>
+          <span id="hp-mode-home" hidden></span>
+          <button id="hp-mode" class="ep-head-dl hp-btn hp-mode" type="button" role="slider" hidden
+            aria-labelledby="hp-mode-label" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1"
+            aria-valuetext="Skeleton" title="Change hand pose display"><span id="hp-mode-label">Hand pose</span><span
+            class="hp-track" aria-hidden="true"><span class="hp-segment" data-mode="off">Off</span><span
+            class="hp-segment" data-mode="skeleton">Skeleton</span><span class="hp-segment" data-mode="mesh">Mesh</span></span><span
+            id="hp-status" class="hp-status" role="status" aria-live="polite"></span></button>
           <a id="kp-dl" class="ep-head-dl" download hidden
             title="the model's 2D hand keypoints for every frame of this episode's video, as JSON, in a file of their own"
             >Hand keypoints</a>
@@ -2548,7 +2588,8 @@ let ALL_EPS = [];
 // are the names the build gives them (index.json lists and site_names, compare/index.json site_names), never the
 // identifiers themselves, which can hold any character. Relative bases keep a
 // static build working under any sub-path and from any origin. BOARD.models names the pinned models
-// (configs/models.json) by model id.
+// (configs/models.json) by model id. BOARD.hands_data optionally supplies a separate data base
+// for hands/ files, defaulting to BOARD.data; both bases end with a slash.
 const BOARD = __BOARD_CONFIG__;
 const STATIC = BOARD.mode === 'static';
 
@@ -2597,7 +2638,8 @@ function endRender() {
   document.getElementById('kp-note').classList.add('off');
   const aligned = document.getElementById('hp-aligned');
   aligned.classList.add('off'); aligned.querySelector('.kp-note-in').textContent = '';
-  hpBtn.hidden = true;
+  if (hpBtn) hpBtn.hidden = true;
+  hpModesEl.hidden = true; hpModeHome.after(hpModesEl);
   _vdEp = null; vdOpen(false); vdEl.hidden = true; vdMenu.innerHTML = '';
   // the band saying the labels are another model's folds away (its text stays while it folds, renderSourceBar)
   srcBar.classList.remove('on', 'cmp'); sbBack.tabIndex = -1; sbFit();
@@ -2674,6 +2716,7 @@ document.getElementById('ms-close').addEventListener('click', () => msDialog.clo
 msDialog.addEventListener('click', e => { if (e.target === msDialog) msDialog.close(); });
 // the name of the model whose labels an episode file holds: its display name, else its id without the provider
 function modelName(id) {
+  if (BOARD.model_attribution === false) return 'we';
   if (!id) return 'The model';
   return (BOARD.models || {})[id] || String(id).split('/').pop();
 }
@@ -2782,9 +2825,9 @@ function fmtBytes(b) {
   return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + ' MB'
     : Math.max(1, Math.round(b / 1e3)) + ' KB';
 }
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
   try {
-    const r = await fetch(url, STATIC ? {} : {cache: 'no-store'});
+    const r = await fetch(url, {...(STATIC ? {} : {cache: 'no-store'}), ...options});
     return r.ok ? await r.json() : null;
   } catch (e) { return null; }
 }
@@ -2801,6 +2844,63 @@ function videoSrc(eidEnc, cam) {
   return BOARD.media + ((rec._media || {})[mediaKey(cam)] || '');
 }
 // the camera's first frame as the video's poster attribute, or nothing where a static build has no such frame
+function isHlsSource(url) { return String(url).split(/[?#]/, 1)[0].toLowerCase().endsWith('.m3u8'); }
+function videoSourceAttr(url) { return `${isHlsSource(url) ? 'data-hls-src' : 'src'}="${esc(url)}"`; }
+// hls.js 1.6.19 is Apache-2.0, loaded only when a camera supplies an HLS playlist.
+let _hlsLibrary = null;
+function loadHlsLibrary() {
+  if (!_hlsLibrary) _hlsLibrary = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.6.19/dist/hls.min.js';
+    script.integrity = 'sha384-eIepVstlIv9sSqP0mAsB37yZCJzcs0Y9qhxne7qDj9mO6EneOgR3uvZy28Xn6XqH';
+    script.crossOrigin = 'anonymous';
+    script.onload = () => window.Hls ? resolve(window.Hls) : reject(new Error('HLS player unavailable'));
+    script.onerror = () => { _hlsLibrary = null; script.remove(); reject(new Error('HLS player unavailable')); };
+    document.head.appendChild(script);
+  });
+  return _hlsLibrary;
+}
+function retainVideoSource(video) { video?._hlsTransport?.release(); }
+function attachVideoSource(video, url, signal) {
+  if (signal?.aborted) return Promise.resolve(false);
+  const old = video._hlsTransport;
+  if (old?.url === url) { old.bind(signal); return old.ready; }
+  old?.dispose();
+  if (!isHlsSource(url)) {
+    if (video.getAttribute('src') !== url) video.src = url;
+    return Promise.resolve(true);
+  }
+  let owner = null;
+  const state = {url, hls:null, disposed:false};
+  state.release = () => { owner?.removeEventListener('abort', state.dispose); owner = null; };
+  state.dispose = () => {
+    if (state.disposed) return;
+    state.disposed = true; state.release();
+    if (state.hls) state.hls.destroy();
+    else { video.pause(); video.removeAttribute('src'); video.load(); }
+    if (video._hlsTransport === state) delete video._hlsTransport;
+  };
+  state.bind = next => { state.release(); owner = next; owner?.addEventListener('abort', state.dispose, {once:true}); };
+  video._hlsTransport = state; state.bind(signal);
+  const native = () => {
+    if (state.disposed) return false;
+    if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; return true; }
+    video.dispatchEvent(new Event('error')); return false;
+  };
+  state.ready = loadHlsLibrary().then(Hls => {
+    if (state.disposed) return false;
+    if (!Hls.isSupported()) return native();
+    state.hls = new Hls({maxBufferLength:8, maxMaxBufferLength:12, backBufferLength:4, maxBufferSize:6*1024*1024});
+    state.hls.attachMedia(video); state.hls.loadSource(url);
+    return true;
+  }).catch(native);
+  return state.ready;
+}
+function attachVideoSources(root, signal) {
+  for (const video of root.querySelectorAll('video[data-hls-src]'))
+    attachVideoSource(video, video.dataset.hlsSrc, signal);
+}
+
 function posterAttr(eidEnc, cam) {
   const src = posterSrc(_activeFile, eidEnc, cam);
   return src ? ` poster="${esc(src)}"` : '';
@@ -3182,7 +3282,7 @@ function unshownCellsHtml(d, eidEnc, kept) {
         <div class="cam-cell cam-wrist cam-unshown${['sensor', 'tactile'].includes(cameraPresentation(d, u.view, u.name)) ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(u.name || u.view)}, not shown to the model${u.clock_alignment === 'unverified' ? '; independent clock' : ''}</span>
           <video id="video-${esc(u.view)}"${u.clock_alignment === 'unverified' ? ' data-unsynced="true" controls' : ''} preload="auto" muted playsinline${kept ? ''
-            : ` src="${esc(videoSrc(eidEnc, u.view))}"${posterAttr(eidEnc, u.view)}`} `
+            : ` ${videoSourceAttr(videoSrc(eidEnc, u.view))}${posterAttr(eidEnc, u.view)}`} `
             + `onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('');
 }
@@ -4022,8 +4122,17 @@ function coverageBar(key, sec, hours) {
     + `aria-valuenow="${Math.round(now * 100)}" aria-label="Share of the target labelled">`
     + `<i style="width:${(was * 100).toFixed(2)}%" data-to="${(now * 100).toFixed(2)}%"></i></span>`;
 }
+function renderDatasetHeadings(per) {
+  const single = per.length === 1;
+  const normalize = value => value.trim().toLocaleLowerCase();
+  const name = single ? normalize(DS_SHORT[per[0].d] || dsLabel(per[0].d)) : '';
+  const repeated = single && [...document.querySelectorAll('.page-head h1,.page-head .ph-board')]
+    .some(el => normalize(el.textContent) === name);
+  document.body.classList.toggle('single-dataset', single);
+  document.body.classList.toggle('duplicate-dataset-heading', repeated);
+}
 function renderCoverage(ds, shown) {
-  if (!ALL_EPS.length) { coverageEl.innerHTML = ''; return; }
+  if (!ALL_EPS.length) { renderDatasetHeadings([]); coverageEl.innerHTML = ''; return; }
   // every dataset of the board keeps its tab; the numbers are the labeller's (a model that labelled none of a
   // dataset's episodes leaves its tab dimmed)
   const src = railEps();
@@ -4035,6 +4144,7 @@ function renderCoverage(ds, shown) {
     const t = TARGETS[d];
     return { d, n: eps.length, sec: sumDur(eps), t: t && t.episodes > 0 && t.hours > 0 ? t : null };
   });
+  renderDatasetHeadings(per);
   const shownSec = sumDur(shown);
   const cur = per.find(p => p.d === ds) || { n: 0, sec: 0 };
   const narrowed = shown.length !== cur.n;
@@ -4333,8 +4443,11 @@ function captionHtml(rows) {
 // here touches the rail, the counts, the Episode JSON download or the JSON Lines export.
 // the switch: on for a first-time visitor, and whatever the visitor last chose after that (stored in this browser; a
 // browser that blocks storage gets the default on every load)
+let HP_MODE = 'skeleton';
 let HP_ON = true;
-try { HP_ON = localStorage.getItem('board.handPose') !== '0'; } catch (e) {}
+try { HP_MODE = localStorage.getItem('board.handOverlay') || 'skeleton';
+  HP_ON = localStorage.getItem('board.handPose') !== '0'; } catch (e) {}
+if (!['off', 'skeleton', 'mesh'].includes(HP_MODE)) HP_MODE = 'skeleton';
 const _hpCache = new Map();         // file -> Promise of the decoded keypoints (or null when there are none)
 const _hpData = new Map();          // file -> the decoded keypoints, once loaded
 const HP_B64 = new Int8Array(128).fill(-1);
@@ -4343,7 +4456,7 @@ const HP_B64 = new Int8Array(128).fill(-1);
 const HP_COLOR = {left: '#4f6d8f', right: '#8a5a9a'};    // the board's left and right (--arm-left, --arm-right)
 const HP_FADE = 4;                  // frames over which a hand fades in where it appears and out where it goes
 function handsUrl(file) {
-  return STATIC ? BOARD.data + 'hands/' + encodeURIComponent(siteFile(file)) : 'api/hands?file=' + encodeURIComponent(file);
+  return STATIC ? (BOARD.hands_data ?? BOARD.data) + 'hands/' + encodeURIComponent(siteFile(file)) : 'api/hands?file=' + encodeURIComponent(file);
 }
 // Base64 VLQ integers (board/hands.py documents the format)
 function hpReader(s) {
@@ -4362,7 +4475,96 @@ function hpKnots(s, e, step) {
   if (e - 1 > s) k.push(e - 1);
   return k;
 }
+// BEGIN canonical hand geometry
+function hpGeometry(doc) {
+  const fail = () => { throw new Error('Invalid hand geometry'); };
+  const c = doc.clip, ts = c?.times;
+  if (doc.format !== 'board-hand-geometry/1' || !doc.prediction_id ||
+      doc.coordinates?.xy !== 'source_pixels' || doc.coordinates?.z !== 'camera_meters' ||
+      !(Number.isInteger(c.w) && c.w > 0 && Number.isInteger(c.h) && c.h > 0) || !Array.isArray(ts) || !ts.length ||
+      ts.some((t,i) => !Number.isFinite(t) || t < 0 || (i && t <= ts[i-1]))) fail();
+  if (!Array.isArray(doc.edges) || !doc.topology || !Array.isArray(doc.chunks)) fail();
+  for (const h of ['left','right']) if (!Array.isArray(doc.topology[h]) || doc.topology[h].some(t =>
+    !Array.isArray(t) || t.length !== 3 || t.some(v => !Number.isInteger(v) || v < 0))) fail();
+  if (doc.edges.some(e => !Array.isArray(e) || e.length !== 2 || e.some(v => !Number.isInteger(v) || v < 0))) fail();
+  let end = 0;
+  for (const ch of doc.chunks) {
+    if (ch.start !== end || !Number.isInteger(ch.end) || ch.end <= end || ch.end > ts.length ||
+        !/^[a-zA-Z0-9_-]+\.json$/.test(ch.file)) fail();
+    end = ch.end;
+  }
+  if (end !== ts.length) fail();
+  return {...doc, geometry:true, n:ts.length, w:c.w, h:c.h, times:ts, hands:{}, loaded:new Map(), pending:new Map(), failed:new Set()};
+}
+function hpChunkAt(data, i) { return data.chunks.find(c => i >= c.start && i < c.end); }
+function hpGeometryChunk(data, spec, doc) {
+  if (doc?.format !== 'board-hand-geometry-chunk/1' || doc.prediction_id !== data.prediction_id ||
+      doc.start !== spec.start || !Array.isArray(doc.frames) || doc.frames.length !== spec.end-spec.start)
+    throw new Error('Mismatched hand geometry');
+  for (const f of doc.frames) for (const h of ['left','right']) {
+    const hand = f[h]; if (!hand) continue;
+    for (const field of ['joints','vertices']) if (hand[field] != null && (!Array.isArray(hand[field]) ||
+      hand[field].some(p => !Array.isArray(p) || p.length !== 3 || p.some(v => !Number.isFinite(v)) || p[2] <= 0)))
+      throw new Error('Invalid hand coordinates');
+    if (hand.vertices && data.topology[h].some(t => t.some(v => v >= hand.vertices.length)))
+      throw new Error('Invalid native topology');
+    if (hand.joints && data.edges.some(e => e.some(v => v >= hand.joints.length)))
+      throw new Error('Invalid joint topology');
+  }
+  return doc;
+}
+function hpTriangles(frame, topology) {
+  const out = [];
+  for (const h of ['left','right']) {
+    const v = frame[h]?.vertices; if (!v) continue;
+    for (const face of topology[h]) {
+      const points = face.map(i => v[i]);
+      out.push({h,points,z:points.reduce((sum,p) => sum+p[2],0)/3});
+    }
+  }
+  return out.sort((a,b) => b.z-a.z);
+}
+function hpSurface() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl', {alpha:true,antialias:true,preserveDrawingBuffer:true});
+  if (!gl) return null;
+  const shader = (kind, source) => {
+    const sh = gl.createShader(kind); gl.shaderSource(sh,source); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error('Hand surface unavailable');
+    return sh;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(program,shader(gl.VERTEX_SHADER,
+    'attribute vec3 position; attribute vec3 color; varying vec3 c; void main(){gl_Position=vec4(position,1.0);c=color;}'));
+  gl.attachShader(program,shader(gl.FRAGMENT_SHADER,
+    'precision mediump float; varying vec3 c; void main(){gl_FragColor=vec4(c,1.0);}'));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) return null;
+  const buffer = gl.createBuffer();
+  return {canvas, draw(triangles,w,h,sourceW,sourceH) {
+    if (gl.isContextLost()) return null;
+    canvas.width=w; canvas.height=h;
+    gl.viewport(0,0,w,h); gl.useProgram(program); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    // Reciprocal camera depth interpolates in screen space and keeps near surfaces in front.
+    let near=Infinity,far=-Infinity;
+    for (const t of triangles) for (const p of t.points) { const z=-1/p[2];near=Math.min(near,z);far=Math.max(far,z); }
+    const span=Math.max(1e-9,far-near), vertices=[];
+    for (const t of triangles) {
+      const rgb=t.h==='left' ? [79/255,109/255,143/255] : [138/255,90/255,154/255];
+      for (const p of t.points) vertices.push(2*p[0]/sourceW-1,1-2*p[1]/sourceH,(-1/p[2]-near)/span*1.8-.9,...rgb);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER,buffer); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.DYNAMIC_DRAW);
+    for (const [name,offset] of [['position',0],['color',12]]) {
+      const loc=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,3,gl.FLOAT,false,24,offset);
+    }
+    gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);
+    return canvas;
+  }, dispose() { gl.deleteBuffer(buffer);gl.deleteProgram(program);gl.getExtension('WEBGL_lose_context')?.loseContext(); }};
+}
+// END canonical hand geometry
 function hpDecode(doc) {
+  if (doc.format === 'board-hand-geometry/1') return hpGeometry(doc);
   const n = doc.clip.frames, step = doc.step;
   // when each frame is shown: its timestamp, in seconds
   const tr = hpReader(doc.clip.pts), [tn, td] = doc.clip.tb, times = new Float64Array(n);
@@ -4408,9 +4610,9 @@ function hpAlignedText(a) {
       : `, and the last keypoint ${d === 1 ? 'frame is' : `${d} frames are`} left out.`);
 }
 function loadHands(file) {
-  return _hpCache.get(file) || remember(_hpCache, file, fetchJson(handsUrl(file))
+  return _hpCache.get(file) || remember(_hpCache, file, fetchJson(handsUrl(file), {priority:'high'})
     .then(doc => doc ? hpDecode(doc) : null)
-    .then(d => { if (d) _hpData.set(file, d); return d; }).catch(() => null));
+    .then(d => { if (d) { _hpData.set(file, d); while (_hpData.size > 3) { const oldest = _hpData.keys().next().value; _hpData.delete(oldest); _hpCache.delete(oldest); } } return d; }).catch(() => null));
 }
 // the frame on screen: rVFC's mediaTime is a frame's own timestamp (nearest); currentTime falls within one (the last
 // frame at or before it, allowing the browser's microsecond rounding)
@@ -4440,19 +4642,119 @@ hpBtn.addEventListener('click', () => {
   try { localStorage.setItem('board.handPose', HP_ON ? '1' : '0'); } catch (e) {}
   if (window._hp) window._hp.set(HP_ON);
 });
+const hpModesEl = document.getElementById('hp-mode'), hpModeHome = document.getElementById('hp-mode-home');
+const hpLicenseEls = ['#kp-attribution', '#kp-note .kp-note-in'].map(s => document.querySelector(s));
+const hpLegacyLicense = hpLicenseEls.map(el => el?.innerHTML || '');
+function hpModeValue() {
+  const i = ['off','skeleton','mesh'].indexOf(HP_MODE), text = HP_MODE[0].toUpperCase() + HP_MODE.slice(1);
+  hpModesEl.setAttribute('aria-valuenow', String(i)); hpModesEl.setAttribute('aria-valuetext', text);
+}
+hpModeValue();
+function hpStatus(text) { document.getElementById('hp-status').textContent = text; }
+function hpKeypointsTitle(kp, geometry = BOARD.hand_geometry || _hpData.get(_activeFile)?.geometry) {
+  return `The model's 2D keypoints of both hands on all ${Number(kp.frames).toLocaleString()} frames of this `
+    + `episode's video, in the dataset's own pixels and frame times (JSON, ${fmtBytes(kp.bytes)}).`
+    + (geometry ? '' : ' Non-commercial use only.');
+}
+function hpPresentation(data) {
+  const geometry = !!data?.geometry;
+  hpBtn.hidden = geometry;
+  if (hpModesEl) hpModesEl.hidden = !geometry;
+  hpLicenseEls.forEach((el, i) => { if (el) el.innerHTML = geometry
+    ? 'Predicted hand keypoints. See the download for license and attribution.' : hpLegacyLicense[i]; });
+  const kp = KP_INDEX && KP_INDEX[_activeFile], link = document.getElementById('kp-dl');
+  if (kp && link) link.title = hpKeypointsTitle(kp, geometry || BOARD.hand_geometry);
+}
 // wire the hand pose for the episode renderEp just laid out (its listeners go with the render's abort signal)
 function setupHandPose(vid, cell, isEgo, on, file) {
   window._hp = null;
+  hpPresentation(null);
+  const choose = i => {
+    HP_MODE = ['off','skeleton','mesh'][i]; hpModeValue();
+    try { localStorage.setItem('board.handOverlay', HP_MODE); } catch (e) {}
+    if (data?.geometry) data.failed.clear();
+    surfaceFailed=false;
+    last = ''; hpStatus(''); set(HP_MODE !== 'off');
+  };
+  const track = hpModesEl.querySelector('.hp-track');
+  let drag = null;
+  const selectAt = x => {
+    const r = track.getBoundingClientRect();
+    const i = Math.max(0, Math.min(2, Math.floor((x - r.left) / r.width * 3)));
+    if (i !== ['off','skeleton','mesh'].indexOf(HP_MODE)) choose(i);
+  };
+  on(hpModesEl, 'click', e => {
+    const segment = e.target.closest('[data-mode]');
+    if (segment) choose(['off','skeleton','mesh'].indexOf(segment.dataset.mode));
+  });
+  on(hpModesEl, 'pointerdown', e => {
+    if (!track.contains(e.target) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault(); hpModesEl.focus(); drag = e.pointerId;
+    if (hpModesEl.hasPointerCapture(drag) || e.isTrusted) hpModesEl.setPointerCapture(drag);
+    selectAt(e.clientX);
+  });
+  on(hpModesEl, 'pointermove', e => { if (drag === e.pointerId) selectAt(e.clientX); });
+  on(hpModesEl, 'pointerup', e => {
+    if (drag !== e.pointerId) return;
+    selectAt(e.clientX);
+    if (hpModesEl.hasPointerCapture(drag)) hpModesEl.releasePointerCapture(drag);
+    drag = null;
+  });
+  on(hpModesEl, 'pointercancel', () => { drag = null; });
+  on(hpModesEl, 'keydown', e => {
+    const i = ['off','skeleton','mesh'].indexOf(HP_MODE);
+    const next = {ArrowLeft:Math.max(0,i-1), ArrowDown:Math.max(0,i-1), ArrowRight:Math.min(2,i+1), ArrowUp:Math.min(2,i+1), Home:0, End:2}[e.key];
+    if (next !== undefined) { e.preventDefault(); choose(next); }
+  });
   const cv = document.getElementById('hp-canvas');
   if (!BOARD.hands || !isEgo || !vid || !cell || !cv) { hpBtn.hidden = true; return; }
   hpBtn.hidden = false;
   const ctx = cv.getContext('2d');
+  let surface = null, surfaceFailed = false;
   let data = null, active = false, want = false, seen = true, rv = 0, raf = 0, last = '', frame = -1, box = null,
     hover = 0, hoverT = 0;
   // the same footage re-rendered (another annotation source keeps the playing video): no fade, the pose stays put
   const sameVideo = window._hpVid === vid;
   window._hpVid = vid;
   const alive = () => document.body.contains(cv);
+  let disposed = false;
+  const chunkRequests = new Map();
+  function cancelChunks() {
+    for (const [name, job] of chunkRequests) {
+      job.controller.abort(); chunkRequests.delete(name);
+      if (job.data.pending.get(name) === job.promise) job.data.pending.delete(name);
+    }
+  }
+  function bufferChunks(i) {
+    const d = data, index = d.chunks.indexOf(hpChunkAt(d, i));
+    const ahead = d.chunks.slice(index, index + 12), retained = new Set(ahead.map(s => s.file));
+    for (const name of d.loaded.keys()) if (!retained.has(name)) d.loaded.delete(name);
+    // Keep three HTTP bodies moving across playback boundaries, current first. Only navigation cancels them.
+    for (const spec of ahead) {
+      if (d.pending.size >= 3) break;
+      if (d.loaded.has(spec.file) || d.pending.has(spec.file) || d.failed.has(spec.file)) continue;
+      const controller = new AbortController(), job = {controller, data:d, promise:null};
+      const promise = fetchJson(handsUrl(spec.file), {signal:controller.signal, priority:'high'}).then(doc => {
+        if (controller.signal.aborted || disposed || data !== d || !active || !want) return;
+        const shown = vid.paused ? nowFrame() : frame;
+        const current = d.chunks.indexOf(hpChunkAt(d, shown));
+        if (!d.chunks.slice(current, current + 12).some(s => s.file === spec.file)) return;
+        doc = hpGeometryChunk(d, spec, doc);
+        d.loaded.set(spec.file, doc);
+        if (hpChunkAt(d, shown)?.file === spec.file) { last = ''; draw(shown); }
+      }).catch(() => {
+        if (controller.signal.aborted || disposed) return;
+        d.failed.add(spec.file);
+        if (alive() && data === d && hpChunkAt(d, nowFrame())?.file === spec.file) hpStatus('Unavailable');
+      }).finally(() => {
+        if (d.pending.get(spec.file) === promise) d.pending.delete(spec.file);
+        if (chunkRequests.get(spec.file) === job) chunkRequests.delete(spec.file);
+        if (!controller.signal.aborted && !disposed && data === d && active && want)
+          bufferChunks(vid.paused ? nowFrame() : frame);
+      });
+      job.promise = promise; chunkRequests.set(spec.file, job); d.pending.set(spec.file, promise);
+    }
+  }
   // lay the canvas over the image the video actually shows (object-fit: contain), in the cell's coordinates
   function place() {
     if (!vid.videoWidth || !vid.videoHeight || !vid.clientWidth || !vid.clientHeight) return false;
@@ -4477,14 +4779,49 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     if (!data || !active || !box) return;
     i = Math.max(0, Math.min(data.n - 1, i));
     frame = i;
+    if (data.geometry) bufferChunks(i);
     const al = {left: data.hands.left ? hpAlpha(data.hands.left.spans, i, data.n) : 0,
                 right: data.hands.right ? hpAlpha(data.hands.right.spans, i, data.n) : 0};
-    const key = `${i}|${al.left}|${al.right}|${box.key}`;
+    const key = `${HP_MODE}|${i}|${al.left}|${al.right}|${box.key}`;
     if (key === last) return;           // the same picture: nothing to do
     last = key;
     const sx = cv.width / data.w, sy = cv.height / data.h;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, cv.width, cv.height);
+    if (data.geometry) {
+      const spec = hpChunkAt(data,i), chunk = data.loaded.get(spec.file);
+      if (!chunk) {
+        if (data.failed.has(spec.file)) { hpStatus('Unavailable'); return; }
+        hpStatus('Loading');
+        return;
+      }
+      const f = chunk.frames[i-spec.start];
+      let available = false;
+      ctx.globalAlpha = 1;
+      if (HP_MODE === 'mesh') {
+        const triangles=hpTriangles(f,data.topology);
+        if (triangles.length && !surfaceFailed) {
+          try {
+            surface ||= hpSurface();
+            const image=surface?.draw(triangles,cv.width,cv.height,data.w,data.h);
+            if (image) { ctx.drawImage(image,0,0); available=true; }
+            else surfaceFailed=true;
+          } catch (e) { surface?.dispose(); surface=null; surfaceFailed=true; }
+        }
+      } else {
+        for (const h of ['left','right']) {
+          const js = f[h]?.joints; if (!js) continue;
+          available = true; ctx.strokeStyle = HP_COLOR[h]; ctx.fillStyle = HP_COLOR[h];
+          ctx.lineWidth = 2*box.dpr; ctx.beginPath();
+          for (const [a,b] of data.edges) { ctx.moveTo(js[a][0]*sx,js[a][1]*sy); ctx.lineTo(js[b][0]*sx,js[b][1]*sy); }
+          ctx.stroke();
+          for (const p of js) { ctx.beginPath(); ctx.arc(p[0]*sx,p[1]*sy,2*box.dpr,0,2*Math.PI); ctx.fill(); }
+        }
+      }
+      hpStatus(available || !f.left && !f.right ? '' : 'Unavailable');
+      return;
+    }
+    hpStatus('');
     const lw = Math.max(1.4, Math.min(3, box.w / 480)) * box.dpr;   // thin: about 1.5 px on the board, 3 px full screen
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const h of ['left', 'right']) {
@@ -4532,9 +4869,12 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   // the keypoints are fetched the first time the switch is on for this episode, never before
   function load() {
     loadHands(file).then(d => {
-      if (!alive() || file !== _activeFile) return;
-      if (!d) { hpBtn.hidden = true; return; }    // no hand pose for this episode after all
+      if (disposed || !alive() || file !== _activeFile) return;
+      if (!d) { hpBtn.hidden = true; hpStatus('Unavailable'); return; }
+      if (d.geometry && vid.videoWidth && (d.w !== vid.videoWidth || d.h !== vid.videoHeight)) { hpStatus('Unavailable'); return; }
       data = d;
+      hpPresentation(d); placeControl();
+      want = d.geometry ? HP_MODE !== 'off' : HP_ON;
       const al = hpAlignedText(d.aligned), alEl = document.getElementById('hp-aligned');
       if (alEl) { alEl.querySelector('.kp-note-in').textContent = al; alEl.classList.toggle('off', !al); }
       if (want) set(true);
@@ -4548,10 +4888,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       if (instant) { cv.style.transition = 'none'; cv.classList.add('on'); void cv.offsetWidth;
         cv.style.transition = ''; }
       else requestAnimationFrame(() => { if (want) cv.classList.add('on'); });   // after the first picture: the fade
-    } else if (cv.classList.contains('on')) {
-      cv.classList.remove('on');     // the fade out; drawing stops when it ends (transitionend below)
     } else {
-      active = false; stop();        // switched off before it began to show: nothing to fade
+      cv.classList.remove('on'); active = false; cancelChunks(); stop(); hpStatus('');
     }
   }
   on(cv, 'transitionend', e => {
@@ -4559,7 +4897,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   });
   on(vid, 'play', () => { controls(); watch(); });
   on(vid, 'pause', () => { controls(); if (active) draw(nowFrame()); });
-  on(vid, 'seeked', () => { if (active) draw(nowFrame()); });
+  on(vid, 'seeking', () => { if (active) { cancelChunks(); stop(); } });
+  on(vid, 'seeked', () => { if (active) { draw(nowFrame()); watch(); } });
   on(vid, 'loadedmetadata', () => { if (place() && active) draw(frame >= 0 ? frame : nowFrame()); });
   const pointer = () => {
     hover = 1; controls(); clearTimeout(hoverT);
@@ -4576,19 +4915,26 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     if (seen && active) { draw(nowFrame()); watch(); }
   });
   io.observe(vid);
-  const onFsHp = () => requestAnimationFrame(() => { if (place() && active) draw(frame >= 0 ? frame : nowFrame()); });
+  const placeControl = () => {
+    const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+    if (data?.geometry && fullscreen === cell) cell.appendChild(hpModesEl);
+    else hpModeHome.after(hpModesEl);
+  };
+  const onFsHp = () => { placeControl(); requestAnimationFrame(() => { if (place() && active) draw(frame >= 0 ? frame : nowFrame()); }); };
   document.addEventListener('fullscreenchange', onFsHp);
   document.addEventListener('webkitfullscreenchange', onFsHp);
   window._epCleanup.push(() => {
     ro.disconnect(); io.disconnect();
     document.removeEventListener('fullscreenchange', onFsHp);
     document.removeEventListener('webkitfullscreenchange', onFsHp);
-    clearTimeout(hoverT); stop();
+    disposed = true; cancelChunks(); clearTimeout(hoverT); stop(); surface?.dispose();
+    hpModeHome.after(hpModesEl);
   });
   controls();
   window._hp = {set, get state() { return {active, frame, data: !!data, box}; }};
-  if (_hpData.has(file)) data = _hpData.get(file);
-  if (HP_ON) set(true, sameVideo && !!data);
+  if (_hpData.has(file)) { data = _hpData.get(file); hpPresentation(data); }
+  placeControl();
+  if (data?.geometry ? HP_MODE !== 'off' : HP_ON || BOARD.hand_geometry) set(true, sameVideo && !!data);
 }
 
 // ================= the recording's other signals and depth (board/sensors.py) =================
@@ -5547,7 +5893,7 @@ function gripFindingDetailHtml(f) {
   if (!f) return '';
   return `<div class="grip-selected-head"><strong>${f.generic ? genericSensorHeadlineHtml(f.headline, f.anatomical) : gripFingerHtml(f.headline)}</strong><span>${fmtT(f.start)} to ${fmtT(f.end)}</span></div>
     <p class="grip-adds">${esc(f.detail)}</p>
-    <details class="grip-reasoning"><summary>${f.generic ? 'Reasoning' : "Astra's reasoning"}</summary>
+    <details class="grip-reasoning"><summary>${f.generic || typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'Reasoning' : "Astra's reasoning"}</summary>
       ${f.quotedTimeOffset ? `<p>Times quoted below start at 0s in the excerpt. Add ${fmtT(f.quotedTimeOffset)} to locate them in the video.</p>` : ''}
       ${f.observation ? `<div><span class="grip-field-label">Recorded evidence</span><p>${esc(f.observation)}</p></div>` : ''}
       ${f.claim ? `<div><span class="grip-field-label">Interpretation</span><p>${esc(f.claim)}</p></div>` : ''}
@@ -5705,7 +6051,7 @@ function gripMethodHtml(G) {
   if (!G) return '';
   if (G.generic) return genericSensorMethodHtml(G);
   return `<details class="se-method grip-method"><summary>Method and limits</summary>
-        <p>Astra interpreted the mapped tactile recording together with video and estimated hand pose. Existing annotations and uploader descriptions were excluded. ${esc(G.control_summary || 'The matched video-and-pose control produced no additional grip-loading findings.')} This is an exploratory comparison, not an accuracy estimate.</p>
+        <p>${typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'We' : 'Astra'} interpreted the mapped tactile recording together with video and estimated hand pose. Existing annotations and uploader descriptions were excluded. ${esc(G.control_summary || 'The matched video-and-pose control produced no additional grip-loading findings.')} This is an exploratory comparison, not an accuracy estimate.</p>
         <p>Relative response is uncalibrated. ADC is the sensor's electrical reading. No squeeze percentage or physical force units are established. The reference is the first three samples, not a mechanically unloaded glove.</p>
         <p>Finger names follow the upstream OpenTouch layout; this recording's hardware revision is unverified. Glove bending, contact relocation and repeated pose estimates can affect interpretations.</p>
         <p>Regional traces exclude every cell that ever reads zero. Local patch traces retain other samples of those cells, with censored samples left blank. Negative trace values mean lower response relative to the initial reference. Regional ADC magnitudes cannot be compared as physical force between fingers.</p>
@@ -5729,7 +6075,7 @@ function sensorEvidenceHtml(E, depth) {
       <button type="button" data-evidence-t="${w.start_s}" data-evidence-pause="true" title="Inspect warning at ${fmtT(w.start_s)}">${fmtT(w.start_s)} to ${fmtT(w.end_s)}</button></div>
       <p>${esc(w.detail)}</p></div>`).join('')}</div>` : ''}
     ${insights.length ? `<div class="grip-panel-head"><strong>${E.grip.generic ? 'Sensor findings' : 'Tactile findings'} <span class="grip-count">${insights.length}</span></strong>
-      <span class="grip-model">${E.grip.generic && !/astra/i.test((E.grip.provenance || {}).model || '') ? 'Model annotation' : 'Astra annotation'}</span></div>
+      <span class="grip-model">${typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'Assessment' : E.grip.generic && !/astra/i.test((E.grip.provenance || {}).model || '') ? 'Model annotation' : 'Astra annotation'}</span></div>
       <div class="grip-findings-list" aria-label="${E.grip.generic ? 'Sensor findings' : 'Grip findings'}">${insights.map((f, i) => `<button type="button" data-grip-finding="${i}" data-evidence-t="${f.t}" data-evidence-pause="true" aria-pressed="${i === 0}">
         <span class="grip-finding-name">${f.generic ? genericSensorHeadlineHtml(f.headline, f.anatomical) : gripFingerHtml(f.headline)}</span><span class="grip-finding-meta"><span>${fmtT(f.start)} to ${fmtT(f.end)}</span><span>${esc(f.visual)}</span></span></button>`).join('')}</div>
       <div id="sensor-evidence-now" class="grip-selected">${gripFindingDetailHtml(insights[0])}</div>
@@ -6688,6 +7034,10 @@ function setupPresentedVideoClock(video, on, render, pending) {
 function renderEp(d, opts) {
   opts = opts || {};
   const meta = d._meta || {};
+  const keep = opts.keepVideo && document.getElementById('video')?.dataset.view === episodeCams(d).main ? {
+    video: document.getElementById('video'),
+    side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
+  if (keep) for (const video of [keep.video, ...keep.side.map(([, el]) => el)]) retainVideoSource(video);
   // the video's listeners, and what loads to fill this draw in, belong to this render: a re-render (another source,
   // the same footage) drops them all
   endRender();
@@ -6701,9 +7051,6 @@ function renderEp(d, opts) {
   // dataset's own labels are shown, and one line stands in for every section the model would have answered
   const noLabels = !cmpInfo && !!d._label_failed;
   // switching source keeps the playing footage: the same video elements move into the new layout
-  const keep = opts.keepVideo && document.getElementById('video')?.dataset.view === episodeCams(d).main ? {
-    video: document.getElementById('video'),
-    side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
   // a new episode: stop the old episode's videos now, so their downloads end instead of running on until the detached
   // elements are collected and competing with the new episode's footage (a fast visitor left several loading at once)
   if (!keep) {
@@ -6741,16 +7088,14 @@ function renderEp(d, opts) {
   if (kp) {
     kpA.href = keypointsDownloadUrl(_activeFile);
     kpA.setAttribute('download', _activeFile.replace(/\.json$/, '') + '.hand_keypoints.json');
-    kpA.title = `The model's 2D keypoints of both hands on all ${Number(kp.frames).toLocaleString()} frames of this `
-      + `episode's video, in the dataset's own pixels and frame times (JSON, ${fmtBytes(kp.bytes)}). Non-commercial `
-      + `use only.`;
+    kpA.title = hpKeypointsTitle(kp);
   }
 
   // what the label call cost and took, as the harness recorded it (the provider's billed cost when it reports one),
   // under the prompt
   const usage = d._usage || {};
   let promptMetaHtml = '';
-  if (usage.est_cost_usd != null) {
+  if (BOARD.model_attribution !== false && usage.est_cost_usd != null) {
     const bits = [`<span class="pm pm-green"><span class="pm-k">cost</span><b>$${Number(usage.est_cost_usd).toFixed(2)}`
       + `</b></span>`];
     if (usage.latency_s != null) bits.push(`<span class="pm pm-green"><span class="pm-k">generated in</span>`
@@ -6840,7 +7185,7 @@ function renderEp(d, opts) {
     + `<span class="gg-badge">dataset's task for the whole episode</span><span class="gg-text">${esc(x)}</span></div>`).join('');
   const stepsHtml = wholeHtml + (givenSteps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
     + `<div class="gs-list">${stepLines}</div></div>` : '');
-  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
+  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">Success `
     + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
   // what the chip names: the instruction, or with none the dataset's timed steps
   const claim = stepsOnly ? "the dataset's steps" : 'given goal';
@@ -7509,7 +7854,7 @@ function renderEp(d, opts) {
         : `goal frame ${comp.completed_at_s != null ? fmtT(comp.completed_at_s) : 'not reached'}`}</span></div>`;
   const outcomeKv = hasTasks ? (perfKv ? `<div class="info-block kv-block">${perfKv}</div>` : '')
     : (comp.success_predicate || comp.reason || (undone && comp.undone_by) || perfKv) ? `<div class="info-block kv-block">
-      ${comp.success_predicate ? `<div class="kv"><div class="kv-k">${esc(who)}'s success criterion</div><div `
+      ${comp.success_predicate ? `<div class="kv"><div class="kv-k">Success criterion</div><div `
         + `class="kv-v">${esc(comp.success_predicate)}</div></div>` : ''}
       ${comp.reason ? `<div class="kv"><div class="kv-k">What actually happened</div><div `
         + `class="kv-v">${esc(comp.reason)}</div></div>` : ''}
@@ -7565,7 +7910,7 @@ function renderEp(d, opts) {
         : ' cam-row-single') : '')}${mainIsScene ? ' cam-main-scene' : ''}">
         <div class="cam-cell cam-exo">
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
-          <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
+          <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` ${videoSourceAttr(videoUrl)}${posterAttr(eidEnc,
             mainCam)}`}></video>${dpHtml(mainCam, dpViews)}
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
@@ -7595,8 +7940,8 @@ function renderEp(d, opts) {
         <div class="cam-cell cam-wrist${['sensor', 'tactile'].includes(c.role) ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(camLabel(v))}</span>
           <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
-            ? ' controls' : ''}${keep ? '' : ` src="${esc(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
-            : videoSrc(eidEnc, v))}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
+            ? ' controls' : ''}${keep ? '' : ` ${videoSourceAttr(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
+            : videoSrc(eidEnc, v))}${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
             dpViews)}
         </div>`;
         }).join('')}
@@ -7632,6 +7977,7 @@ function renderEp(d, opts) {
     for (const [id, el] of [['video', keep.video], ...keep.side]) {
       const fresh = document.getElementById(id);
       if (fresh && el) fresh.replaceWith(el);
+      else el?._hlsTransport?.dispose();
     }
   }
 
@@ -7690,6 +8036,7 @@ function renderEp(d, opts) {
   `;
 
   // wire interactions
+  attachVideoSources(leftCol, window._epAbort.signal);
   const vid = document.getElementById('video');
   const ph  = document.getElementById('playhead');
   const tl  = document.getElementById('timeline');
@@ -8645,6 +8992,8 @@ function noLabelsHtml(lf) {
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
 }
 function cmpFailHtml(c, who, usage, own) {
+  if (BOARD.model_attribution === false)
+    return '<div class="cmp-fail"><h4>Assessment unavailable</h4><p>No assessment is available for this episode.</p></div>';
   who = String(who || 'The model');
   who = who.charAt(0).toUpperCase() + who.slice(1);
   const cost = usage && usage.est_cost_usd != null
@@ -8726,6 +9075,7 @@ function shownName(n) {
 }
 // "<model>'s <noun>", with a qualifier after the noun in brackets, never "<model>, <qualifier>'s <noun>"
 function whoOwn(who, noun) {
+  if (BOARD.model_attribution === false) return `our ${noun}`;
   const [h, t] = nameParts(who);
   return `${esc(h)}&rsquo;s ${noun}${t ? ` (${esc(t)})` : ''}`;
 }

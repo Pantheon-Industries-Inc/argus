@@ -623,10 +623,13 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
         if compare is not None and (compare / name).exists():
             h.update(hashlib.sha1((compare / name).read_bytes()).digest())
     if hands is not None:
+        hands_overlay.geometry_bundle(hands, files)
         for f in files:
             hp = hands / f
             if hp.exists():
                 h.update(f"hands|{f}|".encode() + hp.read_bytes())
+                for name, chunk in hands_overlay.geometry_assets(json.loads(hp.read_text()), hands):
+                    h.update(name.encode() + dumps(chunk, sort_keys=True).encode())
     for f in files:
         if dictionary_job is not None:
             current = sa.current_label(json.loads((qa / f).read_text()), dictionary_job, f)
@@ -773,6 +776,7 @@ def cmd_site(a):
                 dumps(public_json(recs), separators=(",", ":")))
     hands_res = None
     if hands is not None:
+        hands_overlay.geometry_bundle(hands, [e["rec"]["file"] for e in eps])
         # the hand pose files, each re-timed against the web copy the static page plays (the copy keeps the clip's
         # timestamps, and board/hands.py for_copy refuses a copy whose frames or size differ); an episode whose web copy is not made
         # yet gets none until the next build
@@ -784,17 +788,23 @@ def cmd_site(a):
             e, mp4 = job
             f = e["rec"]["file"]
             if not mp4.exists():
-                return f, "no web copy of the clip yet"
+                return f, "no web copy of the clip yet", False
             try:
                 doc = hands_overlay.for_copy(json.loads((hands / f).read_text()), mp4)
+                for name, chunk in hands_overlay.geometry_assets(doc, hands):
+                    if getattr(a, "compact_hand_geometry", False):
+                        from board.hand_geometry_transport import compact_geometry
+                        chunk = compact_geometry(chunk)
+                    (stage / "data/hands" / name).write_text(dumps(public_json(chunk), separators=(",", ":")))
             except (ValueError, RuntimeError) as err:
-                return f, str(err)[:200]
+                return f, str(err)[:200], False
             (stage / "data/hands" / site_file(f)).write_text(dumps(public_json(doc), separators=(",", ":")))
-            return f, None
+            return f, None, doc.get("format") == "board-hand-geometry/1"
         with cf.ThreadPoolExecutor(8) as ex:
             res = list(ex.map(one, todo))
-        hands_res = {"dir": str(hands), "files": sum(1 for _, err in res if err is None),
-                     "skipped": {f: err for f, err in res if err is not None}}
+        hands_res = {"dir": str(hands), "files": sum(1 for _, err, _ in res if err is None),
+                     "skipped": {f: err for f, err, _ in res if err is not None},
+                     "geometry_files": sum(1 for _, err, geometry in res if err is None and geometry)}
     kp_res = None
     if keypoints is not None:
         # the downloads, with private access fields withheld: they are in the dataset video's own pixels and times, not the web copy's.
@@ -831,6 +841,8 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files, sensors files and keypoint downloads only when the build
     # has them (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
+           "model_attribution": not getattr(a, "hide_model_attribution", False),
+           "hand_geometry": bool(hands_res and hands_res["files"] and hands_res["geometry_files"] == hands_res["files"]),
            "keypoints": bool(kp_res and kp_res["files"]), "sensors": bool(sn_res and sn_res["files"]),
            "labels_license": sa.labels_license(a.board), "targets": sa.targets(a.board),
            "grids": grid_count > 0}
@@ -903,6 +915,10 @@ def main():
     ap.add_argument("--clips", type=Path, required=True, help="the clips folder board clips wrote")
     ap.add_argument("--compare", type=Path, default=None, help="other models' labels (default BOARD/compare)")
     ap.add_argument("--hands", type=Path, default=None, help="hand pose files (default BOARD/hands)")
+    ap.add_argument("--hide-model-attribution", action="store_true",
+                    help="site: owner assessment copy without model names, comparisons or call metadata")
+    ap.add_argument("--compact-hand-geometry", action="store_true",
+                    help="site: round display geometry within 0.0005 pixel XY and 0.0000005 meter Z; native files and downloads stay exact")
     ap.add_argument("--keypoints", type=Path, default=None,
                     help="hand keypoint downloads (default BOARD/hand_keypoints)")
     ap.add_argument("--sensors", type=Path, default=None, help="sensors files (default BOARD/sensors)")
