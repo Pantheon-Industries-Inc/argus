@@ -98,9 +98,13 @@ return {font:s.font,reference:getComputedStyle(document.getElementById('referenc
 background:s.backgroundColor,label:document.getElementById(b.getAttribute('aria-labelledby')).textContent,
 role:b.getAttribute('role'),single,multi:[visible('#coverage'),visible('.cv-name'),visible('#rd-name')]};})()""")
             assert result['font']==result['reference']
-            assert result['background']=='rgba(0, 0, 0, 0)'
+            assert result['background']=='rgb(255, 255, 255)'
             assert result['label']=='Hand pose' and result['role']=='slider'
             assert js("[...document.querySelectorAll('#hp-mode [data-mode]')].map(e=>e.textContent)")==['Off','Skeleton','Mesh']
+            boundaries=js("""(() => {const t=document.querySelector('.hp-track'),label=document.getElementById('hp-mode-label');
+return {track:getComputedStyle(t).outlineStyle,label:getComputedStyle(label).borderRightStyle,
+dividers:[...t.children].slice(1).map(e=>getComputedStyle(e,'::before').borderLeftStyle)};})()""")
+            assert boundaries=={'track':'solid','label':'solid','dividers':['solid','solid']}
             thumb=[]
             for value in range(3):
                 thumb.append(js("""(() => {const b=document.getElementById('hp-mode');b.setAttribute('aria-valuenow','VALUE');
