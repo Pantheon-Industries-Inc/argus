@@ -59,7 +59,9 @@ def test_navigation_outrunning_requests(tmp_path, monkeypatch):
     assert gone["left"] == [], gone["left"]
     # and the first episode had filled in the header, so the check is not passing on an empty draw
     assert gone["drawn_a"]["drawn"] == gone["a"]
-    assert {"current-ep-raw", "current-ep-src", "current-ep-reader", "hp-btn", "vd", "ms-btn", "dl-json"} <= set(
+    # Overlay controls now belong to the video pane and clear with its contents.
+    assert gone["drawn_a"]["overlay_modes"] and not gone["overlay_modes"]
+    assert {"current-ep-raw", "current-ep-src", "current-ep-reader", "left-col", "vd", "ms-btn", "dl-json"} <= set(
         gone["drawn_a"]["differs"])
     # random clicks, tabs, labellers, comparisons and Backs, each outrunning randomly late responses: the page always
     # ends showing what its URL says (the page before this fix ended wrong in 8 of these 25), with the drawn episode's
