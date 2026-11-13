@@ -109,6 +109,7 @@ const vid=document.querySelector('video');
 vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile));
 """
     (tmp_path/'index.html').write_text('''<style>#cell{position:relative;width:320px;height:280px}video{position:absolute;top:40px;width:320px;height:240px}.hp-canvas{position:absolute;pointer-events:none}.hp-modes{display:flex}</style>
+<button id="hp-btn" class="ep-head-dl hp-btn" aria-pressed="true"><span class="hp-sw"></span>Hand pose</button>
 <div id="controls"></div><div id="hp-aligned"><div class="kp-note-in"></div></div>
 <div id="cell"><video src="VIDEO_URL" muted playsinline></video><canvas id="hp-canvas"></canvas></div><script>'''+prelude+script+tail+'</script>')
     (tmp_path/'index.html').write_text((tmp_path/'index.html').read_text().replace('VIDEO_URL',video_url))
@@ -175,6 +176,18 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
             assert js('vid.paused') is False
             assert js("document.querySelector('.hp-status').textContent")=='Unavailable'
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('absent-part.json')).length")==1
+            # An optional mesh preference must never replace or disable legacy controls.
+            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];_activeFile='legacy.json';HP_MODE='mesh';HP_ON=true;_hpData.set(_activeFile,{n:30,w:160,h:120,times:Array.from({length:30},(_,i)=>i/10),edges:[[0,1]],hands:{left:{xy:new Float32Array(30*42).fill(20),spans:[[0,30]]}}});setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
+            assert js("document.getElementById('hp-btn').hidden") is False
+            assert js("document.getElementById('hp-modes').hidden") is True
+            assert js('window._hp.state.active') is True
+            js("document.getElementById('hp-btn').click()")
+            assert js('window._hp.state.active') is False
+            assert js("localStorage.getItem('board.handPose')")=='0'
+            js("window._epCleanup.forEach(f=>f());window._epCleanup=[];_activeFile='legacy-unfetched.json';setupHandPose(vid,document.getElementById('cell'),true,on,_activeFile)")
+            assert js("document.getElementById('hp-btn').hidden") is False
+            assert js("document.getElementById('hp-modes').hidden") is True
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('legacy-unfetched.json')).length")==0
         finally:
             close()
             server.shutdown();server.server_close()

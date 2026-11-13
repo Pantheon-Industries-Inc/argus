@@ -788,19 +788,20 @@ def cmd_site(a):
             e, mp4 = job
             f = e["rec"]["file"]
             if not mp4.exists():
-                return f, "no web copy of the clip yet"
+                return f, "no web copy of the clip yet", False
             try:
                 doc = hands_overlay.for_copy(json.loads((hands / f).read_text()), mp4)
                 for name, chunk in hands_overlay.geometry_assets(doc, hands):
                     (stage / "data/hands" / name).write_text(dumps(public_json(chunk), separators=(",", ":")))
             except (ValueError, RuntimeError) as err:
-                return f, str(err)[:200]
+                return f, str(err)[:200], False
             (stage / "data/hands" / site_file(f)).write_text(dumps(public_json(doc), separators=(",", ":")))
-            return f, None
+            return f, None, doc.get("format") == "board-hand-geometry/1"
         with cf.ThreadPoolExecutor(8) as ex:
             res = list(ex.map(one, todo))
-        hands_res = {"dir": str(hands), "files": sum(1 for _, err in res if err is None),
-                     "skipped": {f: err for f, err in res if err is not None}}
+        hands_res = {"dir": str(hands), "files": sum(1 for _, err, _ in res if err is None),
+                     "skipped": {f: err for f, err, _ in res if err is not None},
+                     "geometry_files": sum(1 for _, err, geometry in res if err is None and geometry)}
     kp_res = None
     if keypoints is not None:
         # the downloads, with private access fields withheld: they are in the dataset video's own pixels and times, not the web copy's.
@@ -837,6 +838,7 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files, sensors files and keypoint downloads only when the build
     # has them (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
+           "hand_geometry": bool(hands_res and hands_res["files"] and hands_res["geometry_files"] == hands_res["files"]),
            "keypoints": bool(kp_res and kp_res["files"]), "sensors": bool(sn_res and sn_res["files"]),
            "labels_license": sa.labels_license(a.board), "targets": sa.targets(a.board),
            "grids": grid_count > 0}
