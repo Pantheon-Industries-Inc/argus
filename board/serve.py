@@ -1842,7 +1842,8 @@ def read_header(path: Path | None) -> str | None:
 
 def render_index(title: str, board: dict, name: str = "", header: str | None = None) -> str:
     """The page with its title, the board's name and its data source filled in. `board` is {"mode": "api"} for this
-    server, or {"mode": "static", "data": <base>, "media": <base>} for a static build (board/static.py); "compare":
+    server, or {"mode": "static", "data": <base>, "media": <base>} for a static build (board/static.py). Optional
+    "hands_data" sets a separate data base for hands/ files, defaulting to "data"; bases end with a slash. "compare":
     true, "hands": true, "sensors": true and "keypoints": true tell the page the board has other models' labels, hand
     pose drawings, sensors files or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model
     under a site's own name in place of its name in configs/models.json. `header` is a site's own header, for a board
