@@ -165,13 +165,11 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .vd-cam-row a:hover { color: var(--fg); border-color: var(--fg-3); }
 .vd-status { padding: 4px 14px 6px; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
 .vd-status:empty { display: none; }
-.cam-cell.cam-exo:has(.hp-modes:not([hidden])) { padding-top:40px; }
-.hp-modes { position:absolute; top:0; left:0; z-index:4; height:40px; display:flex; align-items:center; flex-wrap:wrap; gap:4px; padding:4px 0; }
+.hp-modes { flex:none; align-self:stretch; display:flex; align-items:center; flex-wrap:wrap; gap:8px;
+  padding:0 0 8px; background:var(--surface); }
 .hp-modes[hidden] { display:none; }
-.hp-modes button { cursor:pointer; padding:7px 12px; border:1px solid var(--border-strong); border-radius:var(--r-md); background:var(--surface); color:var(--fg-2); }
-.hp-modes button[aria-pressed="true"] { color:var(--surface); background:var(--fg); border-color:var(--fg-3); }
 .hp-modes button:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
-.hp-status { font-size:12px; color:var(--fg-3); padding-left:8px; }
+.hp-status { font:400 12px/1.3 var(--sans); color:var(--fg-3); }
 .hp-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; cursor: pointer;
   transition: opacity 200ms ease, color 160ms ease, border-color 160ms ease; }
 .hp-btn[hidden] { display: none; }
@@ -446,6 +444,7 @@ aside.rail {
 .cv-name { font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .cv-cell:hover .cv-name { color: var(--fg-2); }
 .cv-cell.on .cv-name { color: var(--fg); font-weight: 600; }
+.single-dataset #rd-name, .coverage.duplicate-name .cv-name { display:none; }
 .cv-num { font: 500 11.5px/1 var(--mono); color: var(--fg-3); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .cv-cell.on .cv-num { color: var(--fg-2); }
@@ -576,6 +575,7 @@ aside.left .cam-cell {
 aside.left .cam-cell.cam-exo {
   grid-column: 1 / span 2;  /* exo full width on top row */
 }
+aside.left .cam-cell.cam-exo:has(.hp-modes:not([hidden])) { flex-direction:column; }
 aside.left .cam-cell video {
   display: block;
   width: 100%;
@@ -639,6 +639,8 @@ aside.left .grip-strip .state-toast.active { position: static; order: 3; transfo
   object-fit: contain; }
 .cam-cell.cam-exo:-webkit-full-screen { background: #000; width: 100vw; height: 100vh; }
 .cam-cell.cam-exo:-webkit-full-screen video { max-height: 100vh; width: 100%; height: 100%; object-fit: contain; }
+.cam-cell.cam-exo:fullscreen:has(.hp-modes:not([hidden])) video,
+.cam-cell.cam-exo:-webkit-full-screen:has(.hp-modes:not([hidden])) video { flex:1; min-height:0; height:0; max-height:none; }
 /* each camera's label sits 8px in from the image's corner, the same line as the chips over the main camera's image */
 /* the line under the cameras that names the ones the model was not shown, and why */
 aside.left .unshown-note { margin: 0; padding: 6px 12px 8px; background: #000; font-family: var(--mono);
@@ -2344,7 +2346,10 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
       </div>
       <p class="dl-lic" id="dl-lic" hidden></p>
       <div class="kp-exp off" id="kp-exp"><div class="kp-exp-in">
-        <p class="kp-lic"><span id="kp-size"></span>Predicted hand keypoints. See the download for license and attribution.</p>
+        <p class="kp-lic"><span id="kp-size"></span><span id="kp-attribution">Non-commercial use only. Predicted by <a
+          href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank" rel="noreferrer">ACE-Ego-Hand</a>
+          (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noreferrer">CC BY-NC 4.0</a>),
+          which uses <a href="https://mano.is.tue.mpg.de/license.html" target="_blank" rel="noreferrer">MANO</a>.</span></p>
       </div></div>
     </div></div></div>
   </aside>
@@ -2358,6 +2363,9 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
         id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div><div id="current-ep-why"></div><div id="current-ep-dictionary"></div></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
+          <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
+            title="Draw the joints of each hand over the video"><span class="hp-sw"
+            aria-hidden="true"></span>Hand pose</button>
           <a id="kp-dl" class="ep-head-dl" download hidden
             title="the model's 2D hand keypoints for every frame of this episode's video, as JSON, in a file of their own"
             >Hand keypoints</a>
@@ -2373,7 +2381,11 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
         </div>
-        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Predicted hand keypoints. See the download for license and attribution.</div></div>
+        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Hand keypoints for non-commercial use only. Predicted
+          by <a href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank"
+          rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
+          rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
+          target="_blank" rel="noreferrer">MANO</a>.</div></div>
         <div class="kp-note gap-fold off" id="hp-aligned"><div class="kp-note-in"></div></div>
       </div>
     </div>
@@ -4019,8 +4031,17 @@ function coverageBar(key, sec, hours) {
     + `aria-valuenow="${Math.round(now * 100)}" aria-label="Share of the target labelled">`
     + `<i style="width:${(was * 100).toFixed(2)}%" data-to="${(now * 100).toFixed(2)}%"></i></span>`;
 }
+function renderDatasetHeadings(per) {
+  const single = per.length === 1;
+  const normalize = value => value.trim().toLocaleLowerCase();
+  const name = single ? normalize(DS_SHORT[per[0].d] || dsLabel(per[0].d)) : '';
+  const repeated = single && [...document.querySelectorAll('.page-head h1,.page-head .ph-board')]
+    .some(el => normalize(el.textContent) === name);
+  document.body.classList.toggle('single-dataset', single);
+  coverageEl.classList.toggle('duplicate-name', repeated);
+}
 function renderCoverage(ds, shown) {
-  if (!ALL_EPS.length) { coverageEl.innerHTML = ''; return; }
+  if (!ALL_EPS.length) { renderDatasetHeadings([]); coverageEl.innerHTML = ''; return; }
   // every dataset of the board keeps its tab; the numbers are the labeller's (a model that labelled none of a
   // dataset's episodes leaves its tab dimmed)
   const src = railEps();
@@ -4032,6 +4053,7 @@ function renderCoverage(ds, shown) {
     const t = TARGETS[d];
     return { d, n: eps.length, sec: sumDur(eps), t: t && t.episodes > 0 && t.hours > 0 ? t : null };
   });
+  renderDatasetHeadings(per);
   const shownSec = sumDur(shown);
   const cur = per.find(p => p.d === ds) || { n: 0, sec: 0 };
   const narrowed = shown.length !== cur.n;
@@ -4332,9 +4354,9 @@ function captionHtml(rows) {
 // browser that blocks storage gets the default on every load)
 let HP_MODE = 'skeleton';
 let HP_ON = true;
-try { HP_MODE = localStorage.getItem('board.handOverlay') || (localStorage.getItem('board.handPose') === '0' ? 'off' : 'skeleton'); } catch (e) {}
+try { HP_MODE = localStorage.getItem('board.handOverlay') || 'skeleton';
+  HP_ON = localStorage.getItem('board.handPose') !== '0'; } catch (e) {}
 if (!['off', 'skeleton', 'mesh'].includes(HP_MODE)) HP_MODE = 'skeleton';
-HP_ON = HP_MODE !== 'off';
 const _hpCache = new Map();         // file -> Promise of the decoded keypoints (or null when there are none)
 const _hpData = new Map();          // file -> the decoded keypoints, once loaded
 const HP_B64 = new Int8Array(128).fill(-1);
@@ -4521,25 +4543,42 @@ function hpAlpha(spans, i, n) {
   }
   return 0;
 }
-let hpBtn = null;
+const hpBtn = document.getElementById('hp-btn');
+hpBtn.setAttribute('aria-pressed', String(HP_ON));
+hpBtn.addEventListener('click', () => {
+  HP_ON = !HP_ON;
+  hpBtn.setAttribute('aria-pressed', String(HP_ON));
+  try { localStorage.setItem('board.handPose', HP_ON ? '1' : '0'); } catch (e) {}
+  if (window._hp) window._hp.set(HP_ON);
+});
+let hpModesEl = null;
+const hpLicenseEls = ['#kp-attribution', '#kp-note .kp-note-in'].map(s => document.querySelector(s));
+const hpLegacyLicense = hpLicenseEls.map(el => el?.innerHTML || '');
 function hpModes() {
-  return `<div id="hp-btn" class="hp-modes" role="group" aria-label="Predicted hands" hidden>
-    ${['off','skeleton','mesh'].map(m => `<button type="button" data-mode="${m}" aria-pressed="${HP_MODE === m}">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}
+  return `<div id="hp-modes" class="hp-modes" role="group" aria-label="Predicted hands" hidden>
+    ${['off','skeleton','mesh'].map(m => `<button class="ep-head-dl hp-btn" type="button" data-mode="${m}" aria-pressed="${HP_MODE === m}">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}
     <span class="hp-status" role="status" aria-live="polite"></span></div>`;
 }
-function hpStatus(text) { const el = hpBtn?.querySelector('.hp-status'); if (el) el.textContent = text; }
+function hpStatus(text) { const el = hpModesEl?.querySelector('.hp-status'); if (el) el.textContent = text; }
+function hpPresentation(data) {
+  const geometry = !!data?.geometry;
+  hpBtn.hidden = geometry;
+  if (hpModesEl) hpModesEl.hidden = !geometry;
+  hpLicenseEls.forEach((el, i) => { if (el) el.innerHTML = geometry
+    ? 'Predicted hand keypoints. See the download for license and attribution.' : hpLegacyLicense[i]; });
+}
 // wire the hand pose for the episode renderEp just laid out (its listeners go with the render's abort signal)
 function setupHandPose(vid, cell, isEgo, on, file) {
   window._hp = null;
-  hpBtn = document.getElementById('hp-btn');
-  if (!hpBtn) return;
-  hpBtn.querySelectorAll('button').forEach(btn => on(btn, 'click', () => {
-    HP_MODE = btn.dataset.mode; HP_ON = HP_MODE !== 'off';
-    hpBtn.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  hpModesEl = document.getElementById('hp-modes');
+  hpPresentation(null);
+  hpModesEl?.querySelectorAll('button').forEach(btn => on(btn, 'click', () => {
+    HP_MODE = btn.dataset.mode;
+    hpModesEl.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
     try { localStorage.setItem('board.handOverlay', HP_MODE); } catch (e) {}
     if (data?.geometry) data.failed.clear();
     surfaceFailed=false;
-    last = ''; hpStatus(''); set(HP_ON);
+    last = ''; hpStatus(''); set(HP_MODE !== 'off');
   }));
   const cv = document.getElementById('hp-canvas');
   if (!BOARD.hands || !isEgo || !vid || !cell || !cv) { hpBtn.hidden = true; return; }
@@ -4594,7 +4633,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
           const promise = fetchJson(handsUrl(spec.file)).then(doc => hpGeometryChunk(d,spec,doc)).then(doc => {
             d.loaded.set(spec.file,doc);
             while (d.loaded.size > 3) d.loaded.delete(d.loaded.keys().next().value);
-            if (alive() && active && data === d && HP_ON) { last=''; draw(nowFrame()); }
+            if (alive() && active && data === d && want) { last=''; draw(nowFrame()); }
           }).catch(() => { d.failed.add(spec.file); if (alive() && data === d) hpStatus('Unavailable'); })
             .finally(() => d.pending.delete(spec.file));
           d.pending.set(spec.file,promise);
@@ -4627,7 +4666,6 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       hpStatus(available || !f.left && !f.right ? '' : 'Unavailable');
       return;
     }
-    if (HP_MODE === 'mesh') { hpStatus('Unavailable'); return; }
     hpStatus('');
     const lw = Math.max(1.4, Math.min(3, box.w / 480)) * box.dpr;   // thin: about 1.5 px on the board, 3 px full screen
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -4677,9 +4715,11 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   function load() {
     loadHands(file).then(d => {
       if (!alive() || file !== _activeFile) return;
-      if (!d) { hpStatus('Unavailable'); return; }    // no hand pose for this episode after all
+      if (!d) { hpBtn.hidden = true; hpStatus('Unavailable'); return; }
       if (d.geometry && vid.videoWidth && (d.w !== vid.videoWidth || d.h !== vid.videoHeight)) { hpStatus('Unavailable'); return; }
       data = d;
+      hpPresentation(d);
+      want = d.geometry ? HP_MODE !== 'off' : HP_ON;
       const al = hpAlignedText(d.aligned), alEl = document.getElementById('hp-aligned');
       if (alEl) { alEl.querySelector('.kp-note-in').textContent = al; alEl.classList.toggle('off', !al); }
       if (want) set(true);
@@ -4730,8 +4770,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   });
   controls();
   window._hp = {set, get state() { return {active, frame, data: !!data, box}; }};
-  if (_hpData.has(file)) data = _hpData.get(file);
-  if (HP_ON) set(true, sameVideo && !!data);
+  if (_hpData.has(file)) { data = _hpData.get(file); hpPresentation(data); }
+  if (data?.geometry ? HP_MODE !== 'off' : HP_ON || BOARD.hand_geometry) set(true, sameVideo && !!data);
 }
 
 // ================= the recording's other signals and depth (board/sensors.py) =================

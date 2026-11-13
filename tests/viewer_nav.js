@@ -174,11 +174,11 @@ const shown = P => ({active: P.ctx.__nav.active(), drawn: P.ctx.__nav.drawn(), s
     P.ctx.history.replaceState(null, '', '?ep=' + encodeURIComponent(a.file));
     await P.ctx.loadEpisodes(); await P.settle();
     const drawnA = {drawn: P.ctx.__nav.drawn(),
-      overlay_modes: P.doc.getElementById('left-col').innerHTML.includes('id="hp-btn"'), differs: diff(P.state(), R.state()).map(x => x.id)};
+      overlay_modes: P.doc.getElementById('left-col').innerHTML.includes('id="hp-modes"'), differs: diff(P.state(), R.state()).map(x => x.id)};
     await P.ctx.setDataset(b.dataset, b.file); await P.settle();
     out.failed_after_drawn = {a: a.file, b: b.file, drawn_a: drawnA, reference_error: shown(R).error,
       error: shown(P).error, drawn: P.ctx.__nav.drawn(),
-      overlay_modes: P.doc.getElementById('left-col').innerHTML.includes('id="hp-btn"'), left: diff(P.state(), R.state())};
+      overlay_modes: P.doc.getElementById('left-col').innerHTML.includes('id="hp-modes"'), left: diff(P.state(), R.state())};
     done(P); done(R);
   }
 
