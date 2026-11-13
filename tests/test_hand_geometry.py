@@ -37,6 +37,25 @@ assert.equal(handsUrl('private/episode.json'),'api/hands?file=private%2Fepisode.
     subprocess.run(['node', '-e', script, json.dumps(board)], check=True)
 
 
+def test_hand_header_priority_preserves_legacy_api_fetch_options():
+    subprocess.run(['node', '-e', r"""
+const assert=require('node:assert/strict'),{piece}=require('./tests/page_functions')();
+const STATIC=false,BOARD={},_hpCache=new Map(),_hpData=new Map();
+const hpDecode=doc=>doc,remember=(cache,key,promise)=>(cache.set(key,promise),promise);
+const requests=[];
+const fetch=async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({n:1})};};
+eval(piece('handsUrl')+piece('fetchJson')+piece('loadHands'));
+(async()=>{assert.deepEqual(await loadHands('private/episode.json'),{n:1});
+assert.equal(requests.length,1);
+assert.equal(requests[0].url,'api/hands?file=private%2Fepisode.json');
+assert.equal(requests[0].options.cache,'no-store');
+assert.equal(requests[0].options.priority,'high');
+assert.deepEqual(await loadHands('private/episode.json'),{n:1});
+assert.equal(requests.length,1);
+})().catch(error=>{console.error(error);process.exit(1);});
+"""], check=True)
+
+
 def test_geometry_contract():
     html = Path('board/index.html').read_text()
     source = html.split('// BEGIN canonical hand geometry')[1].split('// END canonical hand geometry')[0] if '// BEGIN canonical hand geometry' in html else ''
@@ -131,11 +150,14 @@ def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path, hands_data):
     prelude="const STATIC=true, BOARD="+json.dumps({'hands':True,'data':'metadata/',**({'hands_data':hands_data} if hands_data else {})})+""", KP_INDEX=null; let _activeFile='episode.json';
 window._epCleanup=[]; const EP_SITE={'episode.json':'safe-episode.json'};
 const siteFile=file=>EP_SITE[file] || file;
-function fetchJson(url,options={}){return fetch(url,options).then(r=>r.ok?r.json():null);}
+const handFetches=[],nativeFetch=window.fetch.bind(window);
+window.fetch=(url,options={})=>{handFetches.push({url,priority:options.priority,abortable:options.signal instanceof AbortSignal});return nativeFetch(url,options);};
+PRODUCTION_FETCH_JSON
 function remember(c,k,p){c.set(k,p);return p;}
 let testAbort=new AbortController(); const on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
 function selectMode(mode){document.getElementById('hp-mode').dispatchEvent(new KeyboardEvent('keydown',{key:{off:'Home',skeleton:'ArrowRight',mesh:'End'}[mode]}));}
 """
+    prelude=prelude.replace('PRODUCTION_FETCH_JSON', 'async function fetchJson('+html.split('async function fetchJson(',1)[1].split('function episodeDownloadUrl',1)[0])
     import re
     mode = re.search(r'<button id="hp-mode"[\s\S]*?</button>', html).group()
     tail="""
@@ -168,6 +190,10 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
             assert js('window._hp.state.data')
             assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/safe-episode.json')).map(e=>new URL(e.name).pathname)")==[f'/{asset_base}hands/safe-episode.json']
             assert js("_hpData.get(_activeFile).pending.has('chunk-b.json') || _hpData.get(_activeFile).loaded.has('chunk-b.json')") is True
+            assert js("handFetches.map(r=>({file:r.url.split('/').pop(),priority:r.priority,abortable:r.abortable}))")==[
+                {'file':'safe-episode.json','priority':'high','abortable':False},
+                {'file':'chunk-a.json','priority':'high','abortable':True},
+                {'file':'chunk-b.json','priority':'high','abortable':True}]
             js("selectMode('mesh')")
             for _ in range(100):
                 if js("document.querySelector('.hp-status').textContent === ''"):break
