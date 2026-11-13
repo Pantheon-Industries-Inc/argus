@@ -141,9 +141,16 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
                 if js("document.querySelector('.hp-status').textContent === ''"):break
                 time.sleep(.02)
             assert js("document.getElementById('hp-mode').getAttribute('aria-valuetext')")=='Mesh'
-            for expected in ('Off','Skeleton','Mesh'):
-                js("document.getElementById('hp-mode').click()")
+            assert js("[...document.querySelectorAll('#hp-mode [data-mode]')].map(e=>e.textContent)")==['Off','Skeleton','Mesh']
+            for mode, expected in (('off','Off'),('skeleton','Skeleton'),('mesh','Mesh')):
+                js(f"document.querySelector('#hp-mode [data-mode={mode}]').click()")
                 assert js("document.getElementById('hp-mode').getAttribute('aria-valuetext')")==expected
+            track=js("""(() => {const r=document.querySelector('#hp-mode .hp-track').getBoundingClientRect();
+return {left:r.left+1,right:r.right-1,y:r.top+r.height/2};})()""")
+            send('Input.dispatchMouseEvent',{'type':'mousePressed','x':track['left'],'y':track['y'],'button':'left','clickCount':1},sid)
+            send('Input.dispatchMouseEvent',{'type':'mouseMoved','x':track['right'],'y':track['y'],'buttons':1},sid)
+            send('Input.dispatchMouseEvent',{'type':'mouseReleased','x':track['right'],'y':track['y'],'button':'left','clickCount':1},sid)
+            assert js("document.getElementById('hp-mode').getAttribute('aria-valuenow')")=='2'
             assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")>0
             assert js("""(() => { const surface=hpSurface(); const image=surface.draw([
               {h:'right',points:[[0,0,1],[100,0,10],[0,100,10]]},
