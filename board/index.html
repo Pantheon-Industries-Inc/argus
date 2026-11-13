@@ -2865,6 +2865,8 @@ function cameraCaption(d, view) {
   const name = (d.camera_labels && i >= 0 && d.camera_labels[i])
     || unshownCams(d).find(u => u.view === view)?.name || view;
   if (['sensor', 'tactile'].includes(cameraPresentation(d, view))) return name;
+  if (name === 'left_wrist') return 'Left wrist';
+  if (name === 'right_wrist') return 'Right wrist';
   if ((d.camera_mounting || {})[view] === 'wrist') return `${name} wrist`;
   return view === 'left' || view === 'right' ? `${name} camera` : name;
 }
@@ -3171,8 +3173,8 @@ function setAsideHtml(d) {
 }
 // The cameras the model is not shown (board/build.py unshown_cameras: more extra cameras than it is shown, a stereo
 // camera's second eye, every camera but one on a head rig, an infrared, thermal or mask video). Each plays in a cell
-// of its own among supporting cameras by role, synced as a side camera, named as not shown to the model, and one line under the
-// cameras says why for each. Nothing is drawn for an episode the model was shown whole.
+// of its own among supporting cameras by role, synced as a side camera. Captions identify the camera;
+// model-input provenance belongs in the existing reader details.
 function unshownCams(d) {
   return (Array.isArray(d.unshown_cameras) ? d.unshown_cameras : []).filter(u => u && u.view);
 }
@@ -3180,19 +3182,16 @@ function unshownCams(d) {
 function unshownCellsHtml(d, eidEnc, kept) {
   return unshownCams(d).map(u => `
         <div class="cam-cell cam-wrist cam-unshown${['sensor', 'tactile'].includes(cameraPresentation(d, u.view, u.name)) ? ' cam-tactile' : ''}">
-          <span class="cam-label">${esc(u.name || u.view)}, not shown to the model${u.clock_alignment === 'unverified' ? '; independent clock' : ''}</span>
+          <span class="cam-label">${esc(cameraCaption(d, u.view))}</span>
           <video id="video-${esc(u.view)}"${u.clock_alignment === 'unverified' ? ' data-unsynced="true" controls' : ''} preload="auto" muted playsinline${kept ? ''
             : ` src="${esc(videoSrc(eidEnc, u.view))}"${posterAttr(eidEnc, u.view)}`} `
             + `onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('');
 }
 function unshownNote(d) {
-  const us = unshownCams(d);
-  if (!us.length) return '';
-  const each = us.map(u => `${esc(u.name || u.view)}${u.why ? ` (${esc(u.why)})` : ''}`);
-  const list = each.length > 1 ? `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}` : each[0];
-  return `<p class="unshown-note">Not shown to the model: ${list}.`
-    + (us.some(u => u.clock_alignment === 'unverified') ? ' Cameras on their own clock have their own controls and are left out of synchronized downloads.' : '') + '</p>';
+  return unshownCams(d).some(u => u.clock_alignment === 'unverified')
+    ? '<p class="unshown-note">Cameras on their own clock have their own controls and are left out of synchronized downloads.</p>'
+    : '';
 }
 // next to a session's success count: how many parts of a long recording have no labels (label/pieces.py stitch_run)
 function partsGapHtml(d) {
@@ -7143,15 +7142,10 @@ function renderEp(d, opts) {
   // cameras this episode actually has (FastUMI: grippers only, no top camera). The main player shows
   // the top camera when there is one, else the first gripper camera; side cells show the rest.
   const {views: camViews, main: mainCam} = episodeCams(d);
-  const camNameOf = v => {
-    const i = camViews.indexOf(v);
-    return (d.camera_labels && i >= 0 && d.camera_labels[i]) || unshownCams(d).find(u => u.view === v)?.name || v;
-  };
   const hasTop = sceneFirstLayout(d);
   const sideCams = episodeCams(d).side;
   const supportCams = supportingCameras(d);
-  const camLabel = v => unshownCams(d).some(u => u.view === v) ? `${camNameOf(v)}, not shown to the model`
-    : cameraCaption(d, v);
+  const camLabel = v => cameraCaption(d, v);
   // the side cells' video ids: the two mounted cameras keep theirs, any other camera is video-<its view>
   const sideId = v => v === 'left' ? 'video-wl' : v === 'right' ? 'video-wr' : `video-${v}`;
   const videoUrl = videoSrc(eidEnc, mainCam);
