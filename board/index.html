@@ -4725,7 +4725,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   }
   function bufferChunks(i) {
     const d = data, index = d.chunks.indexOf(hpChunkAt(d, i));
-    const ahead = d.chunks.slice(index, index + 5), retained = new Set(ahead.map(s => s.file));
+    const ahead = d.chunks.slice(index, index + 12), retained = new Set(ahead.map(s => s.file));
     for (const name of d.loaded.keys()) if (!retained.has(name)) d.loaded.delete(name);
     // Keep three HTTP bodies moving across playback boundaries, current first. Only navigation cancels them.
     for (const spec of ahead) {
@@ -4736,7 +4736,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
         if (controller.signal.aborted || disposed || data !== d || !active || !want) return;
         const shown = vid.paused ? nowFrame() : frame;
         const current = d.chunks.indexOf(hpChunkAt(d, shown));
-        if (!d.chunks.slice(current, current + 5).some(s => s.file === spec.file)) return;
+        if (!d.chunks.slice(current, current + 12).some(s => s.file === spec.file)) return;
         doc = hpGeometryChunk(d, spec, doc);
         d.loaded.set(spec.file, doc);
         if (hpChunkAt(d, shown)?.file === spec.file) { last = ''; draw(shown); }
