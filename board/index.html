@@ -197,7 +197,8 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-mode[aria-valuenow="0"] [data-mode="off"],
 .hp-mode[aria-valuenow="1"] [data-mode="skeleton"],
 .hp-mode[aria-valuenow="2"] [data-mode="mesh"] { color:var(--surface); }
-.hp-mode .hp-status:not(:empty) { flex-basis:100%; padding:4px 8px; text-align:right; }
+.hp-mode .hp-status { position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 @media (max-width:320px) {
   .hp-mode { flex-direction:column; align-items:stretch; }
   .hp-mode #hp-mode-label { justify-content:center; padding:6px 8px; border-right:0;
@@ -2822,9 +2823,9 @@ function fmtBytes(b) {
   return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + ' MB'
     : Math.max(1, Math.round(b / 1e3)) + ' KB';
 }
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
   try {
-    const r = await fetch(url, STATIC ? {} : {cache: 'no-store'});
+    const r = await fetch(url, {...(STATIC ? {} : {cache: 'no-store'}), ...options});
     return r.ok ? await r.json() : null;
   } catch (e) { return null; }
 }
@@ -4656,6 +4657,41 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   const sameVideo = window._hpVid === vid;
   window._hpVid = vid;
   const alive = () => document.body.contains(cv);
+  let disposed = false;
+  const chunkRequests = new Map();
+  function cancelChunks(keep = new Set()) {
+    for (const [name, job] of chunkRequests) if (!keep.has(name)) {
+      job.controller.abort(); chunkRequests.delete(name);
+      if (job.data.pending.get(name) === job.promise) job.data.pending.delete(name);
+    }
+  }
+  function bufferChunks(i) {
+    const d = data, index = d.chunks.indexOf(hpChunkAt(d, i));
+    const ahead = d.chunks.slice(index, index + 3), keep = new Set(ahead.map(s => s.file));
+    cancelChunks(keep);
+    const retained = new Set(d.chunks.slice(Math.max(0, index - 2), index + 3).map(s => s.file));
+    for (const name of d.loaded.keys()) if (!retained.has(name)) d.loaded.delete(name);
+    // Current first, then two saved chunks ahead. Never hold a previous frame across a missing chunk.
+    for (const spec of ahead) {
+      if (d.loaded.has(spec.file) || d.pending.has(spec.file) || d.failed.has(spec.file)) continue;
+      const controller = new AbortController(), job = {controller, data:d, promise:null};
+      const promise = fetchJson(handsUrl(spec.file), {signal:controller.signal}).then(doc => {
+        if (controller.signal.aborted || disposed || data !== d || !active || !want) return;
+        doc = hpGeometryChunk(d, spec, doc);
+        d.loaded.set(spec.file, doc);
+        const shown = vid.paused ? nowFrame() : frame;
+        if (hpChunkAt(d, shown)?.file === spec.file) { last = ''; draw(shown); }
+      }).catch(() => {
+        if (controller.signal.aborted || disposed) return;
+        d.failed.add(spec.file);
+        if (alive() && data === d && hpChunkAt(d, nowFrame())?.file === spec.file) hpStatus('Unavailable');
+      }).finally(() => {
+        if (d.pending.get(spec.file) === promise) d.pending.delete(spec.file);
+        if (chunkRequests.get(spec.file) === job) chunkRequests.delete(spec.file);
+      });
+      job.promise = promise; chunkRequests.set(spec.file, job); d.pending.set(spec.file, promise);
+    }
+  }
   // lay the canvas over the image the video actually shows (object-fit: contain), in the cell's coordinates
   function place() {
     if (!vid.videoWidth || !vid.videoHeight || !vid.clientWidth || !vid.clientHeight) return false;
@@ -4680,6 +4716,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     if (!data || !active || !box) return;
     i = Math.max(0, Math.min(data.n - 1, i));
     frame = i;
+    if (data.geometry) bufferChunks(i);
     const al = {left: data.hands.left ? hpAlpha(data.hands.left.spans, i, data.n) : 0,
                 right: data.hands.right ? hpAlpha(data.hands.right.spans, i, data.n) : 0};
     const key = `${HP_MODE}|${i}|${al.left}|${al.right}|${box.key}`;
@@ -4693,16 +4730,6 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       if (!chunk) {
         if (data.failed.has(spec.file)) { hpStatus('Unavailable'); return; }
         hpStatus('Loading');
-        if (!data.pending.has(spec.file)) {
-          const d = data;
-          const promise = fetchJson(handsUrl(spec.file)).then(doc => hpGeometryChunk(d,spec,doc)).then(doc => {
-            d.loaded.set(spec.file,doc);
-            while (d.loaded.size > 3) d.loaded.delete(d.loaded.keys().next().value);
-            if (alive() && active && data === d && want) { last=''; draw(nowFrame()); }
-          }).catch(() => { d.failed.add(spec.file); if (alive() && data === d) hpStatus('Unavailable'); })
-            .finally(() => d.pending.delete(spec.file));
-          d.pending.set(spec.file,promise);
-        }
         return;
       }
       const f = chunk.frames[i-spec.start];
@@ -4779,7 +4806,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   // the keypoints are fetched the first time the switch is on for this episode, never before
   function load() {
     loadHands(file).then(d => {
-      if (!alive() || file !== _activeFile) return;
+      if (disposed || !alive() || file !== _activeFile) return;
       if (!d) { hpBtn.hidden = true; hpStatus('Unavailable'); return; }
       if (d.geometry && vid.videoWidth && (d.w !== vid.videoWidth || d.h !== vid.videoHeight)) { hpStatus('Unavailable'); return; }
       data = d;
@@ -4799,7 +4826,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
         cv.style.transition = ''; }
       else requestAnimationFrame(() => { if (want) cv.classList.add('on'); });   // after the first picture: the fade
     } else {
-      cv.classList.remove('on'); active = false; stop(); hpStatus('');
+      cv.classList.remove('on'); active = false; cancelChunks(); stop(); hpStatus('');
     }
   }
   on(cv, 'transitionend', e => {
@@ -4807,7 +4834,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   });
   on(vid, 'play', () => { controls(); watch(); });
   on(vid, 'pause', () => { controls(); if (active) draw(nowFrame()); });
-  on(vid, 'seeked', () => { if (active) draw(nowFrame()); });
+  on(vid, 'seeking', () => { if (active) { cancelChunks(); stop(); } });
+  on(vid, 'seeked', () => { if (active) { draw(nowFrame()); watch(); } });
   on(vid, 'loadedmetadata', () => { if (place() && active) draw(frame >= 0 ? frame : nowFrame()); });
   const pointer = () => {
     hover = 1; controls(); clearTimeout(hoverT);
@@ -4836,7 +4864,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     ro.disconnect(); io.disconnect();
     document.removeEventListener('fullscreenchange', onFsHp);
     document.removeEventListener('webkitfullscreenchange', onFsHp);
-    clearTimeout(hoverT); stop(); surface?.dispose();
+    disposed = true; cancelChunks(); clearTimeout(hoverT); stop(); surface?.dispose();
     hpModeHome.after(hpModesEl);
   });
   controls();
