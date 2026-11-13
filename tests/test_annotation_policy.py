@@ -16,16 +16,18 @@ def test_model_policy_controls_real_request_cadence_and_resume_identity(tmp_path
     ctx['annotation_policy'] = policy.resolve(ctx, model=policy.SOL61)
     path.write_text(json.dumps(ctx))
     request = episode.build_request(ep, cell_w=128)
-    assert request['sampling'] == f'{rig}-every-1s'
-    assert 'one every 1 s' in request['prompt']
+    default_period = '0.5' if rig == 'ego_head' else '1'
+    assert request['sampling'] == f'{rig}-every-{default_period}s'
+    assert f'one every {default_period} s' in request['prompt']
     default = harness.input_identity(ep, model=policy.SOL61, reasoning='high', max_tokens=100,
                                      cell_w=128, example_dir=None)
-    ctx['annotation_policy'] = policy.resolve(ctx, sample_fps=2)
+    dense_fps = 4 if rig == 'ego_head' else 2
+    ctx['annotation_policy'] = policy.resolve(ctx, sample_fps=dense_fps)
     path.write_text(json.dumps(ctx))
     dense = episode.build_request(ep, cell_w=128)
-    assert dense['sampling'] == f'{rig}-every-0.5s'
+    assert dense['sampling'] == f"{rig}-every-{'0.25' if rig == 'ego_head' else '0.5'}s"
     assert len(dense['timesteps']) > len(request['timesteps'])
-    assert ctx['annotation_policy']['part_max_s'] == 330
+    assert ctx['annotation_policy']['part_max_s'] == (165 if rig == 'ego_head' else 330)
     changed = harness.input_identity(ep, model=policy.SOL61, reasoning='high', max_tokens=100,
                                      cell_w=128, example_dir=None)
     assert not harness.same_input_identity(default, changed)
