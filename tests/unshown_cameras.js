@@ -1,6 +1,5 @@
 // The cameras the model is not shown, on the episode page (board/serve.py unshownCellsHtml, unshownNote): each plays in
-// a cell of its own beside the other cameras, named as not shown to the model, and one line under the cameras says why
-// for each. A board file without any draws nothing.
+// a cell of its own beside the other cameras, labelled by camera name. Model-input provenance stays in details.
 //
 //   node tests/unshown_cameras.js [PAGE_SOURCE]     (default board/serve.py)
 //
@@ -8,7 +7,7 @@
 'use strict';
 const {src, piece} = require('./page_functions')(process.argv[2]);
 const stubs = 'const videoSrc = (e, c) => "api/video?id=" + e + "&cam=" + c; const posterAttr = () => "";';
-const T = new Function(stubs + piece('esc') + piece('cameraPresentation') + piece('unshownCams') + piece('unshownCellsHtml') + piece('unshownNote')
+const T = new Function(stubs + piece('esc') + piece('episodeCams') + piece('cameraPresentation') + piece('cameraCaption') + piece('unshownCams') + piece('unshownCellsHtml') + piece('unshownNote')
   + 'return {unshownCams, unshownCellsHtml, unshownNote};')();
 
 let bad = 0;
@@ -25,9 +24,18 @@ check((cells.match(/class="cam-cell cam-wrist cam-unshown"/g) || []).length === 
 check(['unshown1', 'unshown2'].every(view => cells.includes(`id="video-${view}"`)
   && cells.includes(`src="api/video?id=ep1&amp;cam=${view}"`)),
   'each side camera retains its own source with the query escaped for HTML');
-check(cells.includes('cam_ir, not shown to the model') && cells.includes('cam &lt;low&gt;, not shown to the model'),
-  'each is named as not shown to the model');
-const note = T.unshownNote(d);
-check(note.includes('cam_ir') && note.includes('an infrared video') && note.includes('cam &lt;low&gt;')
-  && note.includes('more extra cameras than the model is shown'), 'one line says why for each');
+check(cells.includes('>cam_ir</span>') && cells.includes('>cam &lt;low&gt;</span>')
+  && !cells.includes('not shown to the model'), 'captions show camera names without model-input status');
+check(T.unshownNote(d) === '', 'synchronized cameras do not repeat model-input details below the video');
+const wrists = {camera_views: ['exo'], unshown_cameras: [
+  {view: 'unshown1', name: 'left_wrist'}, {view: 'unshown2', name: 'right_wrist'}]};
+const wristCells = T.unshownCellsHtml(wrists, 'ep1');
+check(wristCells.includes('>Left wrist</span>') && wristCells.includes('>Right wrist</span>'),
+  'known wrist camera IDs have readable labels');
+const independent = {unshown_cameras: [{view: 'unshown1', name: 'wrist', clock_alignment: 'unverified'}]};
+check(T.unshownCellsHtml(independent, 'ep1').includes('data-unsynced="true" controls'),
+  'independent camera clocks retain their own controls');
+check(T.unshownNote(independent).includes('own clock'), 'independent clock behavior stays visible');
+check(!src.includes('`${camNameOf(v)}, not shown to the model`'),
+  'the main camera caption does not reintroduce model-input status');
 process.exit(bad ? 1 : 0);
