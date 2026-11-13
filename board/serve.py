@@ -1846,11 +1846,15 @@ def render_index(title: str, board: dict, name: str = "", header: str | None = N
     "hands_data" sets a separate data base for hands/ files, defaulting to "data"; bases end with a slash. "compare":
     true, "hands": true, "sensors": true and "keypoints": true tell the page the board has other models' labels, hand
     pose drawings, sensors files or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model
-    under a site's own name in place of its name in configs/models.json. `header` is a site's own header, for a board
+    under a site's own name in place of its name in configs/models.json. "model_attribution": false uses an owner's
+    assessment copy and hides model comparison and call metadata; the default keeps internal attribution.
+    `header` is a site's own header, for a board
     served as part of a site: its markup takes the place of the page's title bar and its <style> blocks go into the
     page's head (a header of another height sets --header-h, which the page's sticky offsets read)."""
-    cfg = public_json({**board, "models": {**model_names(), **(board.get("models") or {})},
-                       "reasoning": reasoning_effort()})
+    attributed = board.get("model_attribution") is not False
+    cfg = public_json({**board, "models": {**model_names(), **(board.get("models") or {})} if attributed else {},
+                       "reasoning": reasoning_effort() if attributed else None,
+                       **({"compare": False} if not attributed else {})})
     page = INDEX_HTML
     if board.get("hand_geometry"):
         note = 'Predicted hand keypoints. See the download for license and attribution.'
