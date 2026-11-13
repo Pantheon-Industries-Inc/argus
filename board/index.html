@@ -4551,7 +4551,7 @@ function hpAlignedText(a) {
       : `, and the last keypoint ${d === 1 ? 'frame is' : `${d} frames are`} left out.`);
 }
 function loadHands(file) {
-  return _hpCache.get(file) || remember(_hpCache, file, fetchJson(handsUrl(file))
+  return _hpCache.get(file) || remember(_hpCache, file, fetchJson(handsUrl(file), {priority:'high'})
     .then(doc => doc ? hpDecode(doc) : null)
     .then(d => { if (d) { _hpData.set(file, d); while (_hpData.size > 3) { const oldest = _hpData.keys().next().value; _hpData.delete(oldest); _hpCache.delete(oldest); } } return d; }).catch(() => null));
 }
@@ -4676,7 +4676,7 @@ function setupHandPose(vid, cell, isEgo, on, file) {
     for (const spec of ahead) {
       if (d.loaded.has(spec.file) || d.pending.has(spec.file) || d.failed.has(spec.file)) continue;
       const controller = new AbortController(), job = {controller, data:d, promise:null};
-      const promise = fetchJson(handsUrl(spec.file), {signal:controller.signal}).then(doc => {
+      const promise = fetchJson(handsUrl(spec.file), {signal:controller.signal, priority:'high'}).then(doc => {
         if (controller.signal.aborted || disposed || data !== d || !active || !want) return;
         doc = hpGeometryChunk(d, spec, doc);
         d.loaded.set(spec.file, doc);
