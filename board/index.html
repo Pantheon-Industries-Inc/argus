@@ -5893,7 +5893,7 @@ function gripFindingDetailHtml(f) {
   if (!f) return '';
   return `<div class="grip-selected-head"><strong>${f.generic ? genericSensorHeadlineHtml(f.headline, f.anatomical) : gripFingerHtml(f.headline)}</strong><span>${fmtT(f.start)} to ${fmtT(f.end)}</span></div>
     <p class="grip-adds">${esc(f.detail)}</p>
-    <details class="grip-reasoning"><summary>${f.generic ? 'Reasoning' : "Astra's reasoning"}</summary>
+    <details class="grip-reasoning"><summary>${f.generic || typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'Reasoning' : "Astra's reasoning"}</summary>
       ${f.quotedTimeOffset ? `<p>Times quoted below start at 0s in the excerpt. Add ${fmtT(f.quotedTimeOffset)} to locate them in the video.</p>` : ''}
       ${f.observation ? `<div><span class="grip-field-label">Recorded evidence</span><p>${esc(f.observation)}</p></div>` : ''}
       ${f.claim ? `<div><span class="grip-field-label">Interpretation</span><p>${esc(f.claim)}</p></div>` : ''}
@@ -6051,7 +6051,7 @@ function gripMethodHtml(G) {
   if (!G) return '';
   if (G.generic) return genericSensorMethodHtml(G);
   return `<details class="se-method grip-method"><summary>Method and limits</summary>
-        <p>Astra interpreted the mapped tactile recording together with video and estimated hand pose. Existing annotations and uploader descriptions were excluded. ${esc(G.control_summary || 'The matched video-and-pose control produced no additional grip-loading findings.')} This is an exploratory comparison, not an accuracy estimate.</p>
+        <p>${typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'We' : 'Astra'} interpreted the mapped tactile recording together with video and estimated hand pose. Existing annotations and uploader descriptions were excluded. ${esc(G.control_summary || 'The matched video-and-pose control produced no additional grip-loading findings.')} This is an exploratory comparison, not an accuracy estimate.</p>
         <p>Relative response is uncalibrated. ADC is the sensor's electrical reading. No squeeze percentage or physical force units are established. The reference is the first three samples, not a mechanically unloaded glove.</p>
         <p>Finger names follow the upstream OpenTouch layout; this recording's hardware revision is unverified. Glove bending, contact relocation and repeated pose estimates can affect interpretations.</p>
         <p>Regional traces exclude every cell that ever reads zero. Local patch traces retain other samples of those cells, with censored samples left blank. Negative trace values mean lower response relative to the initial reference. Regional ADC magnitudes cannot be compared as physical force between fingers.</p>
@@ -6075,7 +6075,7 @@ function sensorEvidenceHtml(E, depth) {
       <button type="button" data-evidence-t="${w.start_s}" data-evidence-pause="true" title="Inspect warning at ${fmtT(w.start_s)}">${fmtT(w.start_s)} to ${fmtT(w.end_s)}</button></div>
       <p>${esc(w.detail)}</p></div>`).join('')}</div>` : ''}
     ${insights.length ? `<div class="grip-panel-head"><strong>${E.grip.generic ? 'Sensor findings' : 'Tactile findings'} <span class="grip-count">${insights.length}</span></strong>
-      <span class="grip-model">${E.grip.generic && !/astra/i.test((E.grip.provenance || {}).model || '') ? 'Model annotation' : 'Astra annotation'}</span></div>
+      <span class="grip-model">${typeof BOARD !== 'undefined' && BOARD.model_attribution === false ? 'Assessment' : E.grip.generic && !/astra/i.test((E.grip.provenance || {}).model || '') ? 'Model annotation' : 'Astra annotation'}</span></div>
       <div class="grip-findings-list" aria-label="${E.grip.generic ? 'Sensor findings' : 'Grip findings'}">${insights.map((f, i) => `<button type="button" data-grip-finding="${i}" data-evidence-t="${f.t}" data-evidence-pause="true" aria-pressed="${i === 0}">
         <span class="grip-finding-name">${f.generic ? genericSensorHeadlineHtml(f.headline, f.anatomical) : gripFingerHtml(f.headline)}</span><span class="grip-finding-meta"><span>${fmtT(f.start)} to ${fmtT(f.end)}</span><span>${esc(f.visual)}</span></span></button>`).join('')}</div>
       <div id="sensor-evidence-now" class="grip-selected">${gripFindingDetailHtml(insights[0])}</div>
