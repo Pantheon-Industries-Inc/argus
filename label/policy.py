@@ -78,7 +78,7 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
         if type(period) not in (float, int) or not math.isfinite(period) or period <= 0:
             raise ValueError('saved sampling cadence is invalid')
     else:
-        period = 1.0 if sol else PERIODS[rig]
+        period = 1.0 if sol and rig != 'ego_head' else PERIODS[rig]
     if sol and period > 1.0:
         raise ValueError('GPT-6.1 Sol requires at least 1 sample per second')
     # a source's declaration (ctx task_mode or sessions, prepare/annotations.py) is provenance only
