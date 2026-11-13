@@ -178,21 +178,25 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .hp-btn[aria-pressed="true"] { color: var(--fg); border-color: var(--fg-3); }
 .hp-btn[aria-pressed="true"] .hp-sw { background: var(--fg); border-color: var(--fg); }
 .hp-btn[aria-pressed="true"] .hp-sw::after { transform: translateX(10px); background: var(--surface); }
-.hp-mode { padding:4px 6px; gap:6px; flex-wrap:wrap; }
+.hp-mode { padding:0; gap:0; flex-wrap:wrap; background:var(--surface); }
+.hp-mode #hp-mode-label { align-self:stretch; display:flex; align-items:center; padding:0 8px;
+  background:var(--bg); border-right:1px solid var(--border); border-radius:6px 0 0 6px; }
 .hp-mode:not([aria-valuenow="0"]) { color:var(--fg); border-color:var(--fg-3); }
 .hp-track { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); flex:none;
-  width:168px; padding:2px; box-sizing:border-box; border-radius:var(--r-md);
-  background:var(--surface); touch-action:none; user-select:none; }
+  width:168px; margin:3px; padding:2px; box-sizing:border-box; border-radius:4px;
+  outline:1px solid var(--border-strong); background:var(--bg); touch-action:none; user-select:none; }
 .hp-track::before { content:""; position:absolute; top:2px; bottom:2px; left:2px;
   width:calc((100% - 4px)/3); border-radius:calc(var(--r-md) - 2px); background:var(--fg);
   transition:transform 160ms ease; }
 .hp-mode[aria-valuenow="1"] .hp-track::before { transform:translateX(100%); }
 .hp-mode[aria-valuenow="2"] .hp-track::before { transform:translateX(200%); }
 .hp-segment { position:relative; z-index:1; padding:5px 2px; text-align:center; color:var(--fg-2); }
+.hp-segment + .hp-segment::before { content:""; position:absolute; left:0; top:2px; bottom:2px;
+  border-left:1px solid var(--border-strong); }
 .hp-mode[aria-valuenow="0"] [data-mode="off"],
 .hp-mode[aria-valuenow="1"] [data-mode="skeleton"],
 .hp-mode[aria-valuenow="2"] [data-mode="mesh"] { color:var(--surface); }
-.hp-mode .hp-status:not(:empty) { flex-basis:100%; text-align:right; }
+.hp-mode .hp-status:not(:empty) { flex-basis:100%; padding:4px 8px; text-align:right; }
 .cam-cell > .hp-mode { position:absolute; top:calc(var(--fx-top, 0px) + 8px);
   right:calc(var(--fx-right, 0px) + 42px); z-index:6; background:var(--surface); }
 /* the hand pose, drawn on a canvas laid exactly over the displayed image (placed in JS). It sits above the video and
