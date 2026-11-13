@@ -105,6 +105,9 @@ role:b.getAttribute('role'),single,multi:[visible('#coverage'),visible('.cv-name
 return {track:getComputedStyle(t).outlineStyle,label:getComputedStyle(label).borderRightStyle,
 dividers:[...t.children].slice(1).map(e=>getComputedStyle(e,'::before').borderLeftStyle)};})()""")
             assert boundaries=={'track':'solid','label':'solid','dividers':['solid','solid']}
+            spacing=js("""(() => {const s=document.querySelector('[data-mode=skeleton]'),r=document.createRange();
+r.selectNodeContents(s);return s.getBoundingClientRect().width-r.getBoundingClientRect().width;})()""")
+            assert spacing>=14, 'Skeleton needs at least7px of breathing room on each side'
             thumb=[]
             for value in range(3):
                 thumb.append(js("""(() => {const b=document.getElementById('hp-mode');b.setAttribute('aria-valuenow','VALUE');
@@ -120,6 +123,8 @@ labels:[...t.children].map(e=>({width:e.getBoundingClientRect().width,color:getC
             for width in (390,280):
                 send('Emulation.setDeviceMetricsOverride',{'width':width,'height':900,'deviceScaleFactor':1,'mobile':False},sid)
                 layout=js("""(() => {const p=document.getElementById('hp-mode').getBoundingClientRect(),v=document.querySelector('#cell video').getBoundingClientRect(),c=document.querySelector('.video-overlay').getBoundingClientRect();return {p:p.toJSON(),v:v.toJSON(),c:c.toJSON(),width:innerWidth,scroll:document.documentElement.scrollWidth};})()""")
+                assert js("""(() => {const s=document.querySelector('[data-mode=skeleton]'),r=document.createRange();
+r.selectNodeContents(s);return s.getBoundingClientRect().width-r.getBoundingClientRect().width;})()""")>=14
                 assert layout['scroll']==width
                 assert layout['p']['left']>=0 and layout['p']['right']<=width
                 assert layout['v']['top']>=layout['p']['bottom']-1
