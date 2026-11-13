@@ -15,7 +15,8 @@ The outcome. The field the request's own instructions ask for (label/prompts.py 
 with an instruction asks for completion.task_completed, judged against it: that is its outcome, and the list of tasks
 it asks beside it is not (a missing list, or a task with no outcome, is a schema issue the record names). Any other
 request asks for a tasks list with an outcome on every task: at least one task, except on a robot recording with
-neither an instruction nor timed steps, where idle footage holds none. A record asked before the tasks format (no
+neither an instruction nor timed steps, where idle footage holds none. A new head-camera request with confirmed
+recording operations may also hold no work task. A record asked before the tasks format (no
 label_schema) is held to what its mode asked: completion.task_completed for an episode, a tasks list with an outcome on
 every task for a session or the head camera.
 
@@ -126,6 +127,16 @@ def requested_outcome(record: dict) -> str | None:
     return 'tasks' if policy['rig'] == 'ego_head' or sessions else 'completion.task_completed'
 
 
+def confirmed_recording_activities(labels: dict) -> bool:
+    """A nonempty recording-only account requires identified capture equipment and visible evidence."""
+    rows = labels.get('recording_activities')
+    return isinstance(rows, list) and bool(rows) and all(
+        isinstance(row, dict) and row.get('target') == 'capture_rig'
+        and all(_text(row.get(key)) for key in ('activity', 'evidence', 'reason'))
+        and _number(row.get('start_s')) and _number(row.get('end_s'))
+        and row['end_s'] >= row['start_s'] for row in rows)
+
+
 def outcome_gaps(labels: dict, record: dict) -> list[str]:
     """Why the reply lacks the outcome its request asked for, or [] when it has it."""
     field = requested_outcome(record)
@@ -137,10 +148,13 @@ def outcome_gaps(labels: dict, record: dict) -> list[str]:
         return [] if not all(either) else either[0]
     if field == 'tasks':
         # in the tasks format a robot recording with neither an instruction nor timed steps may hold no task (idle
-        # footage); the list is still asked. A head-camera clip always holds one, as it always did.
+        # footage); the list is still asked. New head-camera requests may instead identify capture operations.
         policy = record.get('annotation_policy') if isinstance(record.get('annotation_policy'), dict) else {}
         none_allowed = (tasks_format(record) and policy.get('rig') != 'ego_head'
                         and not _text(record.get('given_prompt')) and not _steps(record))
+        none_allowed = none_allowed or (policy.get('rig') == 'ego_head'
+            and type(record.get('task_scope_version')) is int and record['task_scope_version'] == 1
+            and confirmed_recording_activities(labels))
         if not isinstance(tasks, list) or not (tasks or none_allowed):
             return ['the request asks each activity in tasks with its outcome, and the reply lists none']
         missing = [str(i) for i, task in enumerate(tasks)

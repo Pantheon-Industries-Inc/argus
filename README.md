@@ -159,6 +159,10 @@ A teleop or UMI recording with an instruction is judged as a whole against it, a
 
 A human ego clip of one task takes that task's outcome unless the dataset provides timed subtasks, and a clip of several tasks gets no overall verdict. When the annotation gives a goal, the verdict is whether the clip fully reached it. Without a goal, a task cut off by the end of the clip is named after the work the clip shows.
 
+Human Ego annotations keep confirmed operations of the demonstration's own capture equipment under `recording_activities`, separate from work tasks. The terminal recorder interaction is a review priority, not a rule that removes the last task. Camera work and uncertain actions remain work. Scoped timeline rows stay visible but do not contribute to work-performance scores.
+
+Saved labels can be corrected with `python -m label.task_scope --input RUN/out --reviews reviews.json --out DERIVED/out`. Reviews bind the complete source result and each task by SHA256, state purpose and evidence, and explicitly identify related annotation rows. Human decisions override machine decisions. The command writes a separate, resumable projection with the original task and related rows preserved as evidence; it refuses source-rig mismatches and stale reviews.
+
 ### Long recordings
 
 Argus cuts a recording too long for one request (450s at default sampling) at still moments, labels each part and stitches the parts back onto the recording's timeline. Neighbouring parts overlap by 15s, and the stitch joins a task or step to its counterpart from the other side when the two share at least half of the shorter one's seconds in the overlap, however differently the requests worded them. Labels made without the overlap have their tasks joined by a small seam check ([`python -m review seam`](label/seam.py)).
@@ -295,6 +299,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | Command | Options |
 |---|---|
 | [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |
+| [`label.task_scope`](label/task_scope.py) | `--input`, `--reviews`, `--out` |
 | [`review seam`](label/seam.py) | `--label`, `--footage`, `--out`, `--dry-run`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--timeout`, `--apply` |
 | [`prepare abc130k prepare`](prepare/abc130k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
 | [`prepare abc130k sample`](prepare/abc130k.py) | `--list`, `--per-task`, `--split`, `--seed`, `--jobs` |

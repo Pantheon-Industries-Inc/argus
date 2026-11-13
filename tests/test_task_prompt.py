@@ -1,7 +1,7 @@
 """The shared instructions (label/prompts.py fixed_instructions) by what the dataset gives: a robot episode with an
 instruction keeps main's episode prompt word for word and adds its list of tasks; one without asks only for tasks;
 the dataset's own timed steps add the rules for judging a task against its step; and the head camera keeps main's
-prompt except for three approved edits. tests/fixtures/main_prompts.json holds main's (58c452e) text."""
+prompt except for the approved goal and capture-scope edits. tests/fixtures/main_prompts.json holds main's (58c452e) text."""
 import json
 import re
 from pathlib import Path
@@ -12,6 +12,7 @@ from label import prompts
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = json.loads((ROOT / 'tests' / 'fixtures' / 'main_prompts.json').read_text())
+CAPTURE_SCOPE_EDITS = json.loads((ROOT / 'tests/fixtures/ego_capture_scope_edits.json').read_text())
 ROBOTS = ('teleop_arms', 'handheld_gripper')
 RIGS = ROBOTS + ('ego_head',)
 STRUCTURES = [(given, steps) for given in (True, False) for steps in (True, False)]
@@ -202,12 +203,15 @@ Keep it consistent with goal_alignment: success never sits beside a "different" 
 @pytest.mark.parametrize('given', [True, False])
 @pytest.mark.parametrize('recorded', [True, False])
 @pytest.mark.parametrize('steps', [True, False])
-def test_the_head_camera_prompt_is_mains_but_for_the_three_approved_edits(given, recorded, steps):
+def test_the_head_camera_prompt_is_mains_but_for_the_approved_edits(given, recorded, steps):
     """main's text, the softened framing, and in the slot before the timeline note either the goal's outcome (a clip
     with an annotated goal) or the end-state rule (one without), each pinned here as a literal: B6, the earlier test
     took the end-state block from the function under test, so PR 107 rewrote it and the test still passed."""
     expected = main('ego_head', recorded)
     for old, new in EGO_SOFTENED:
+        assert expected.count(old) == 1, old[:60]
+        expected = expected.replace(old, new)
+    for old, new in CAPTURE_SCOPE_EDITS:
         assert expected.count(old) == 1, old[:60]
         expected = expected.replace(old, new)
     lean = prompts.lean('ego_head')

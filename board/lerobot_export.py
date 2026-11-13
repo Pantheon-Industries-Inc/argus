@@ -132,7 +132,7 @@ def subtask_steps(label: dict, duration: float) -> list[tuple[float, str, frozen
     IDLE, and every step of the spans merged into it."""
     steps = []
     for e in label.get("event_labels") or []:
-        if not isinstance(e, dict):
+        if not isinstance(e, dict) or e.get('activity_scope') == 'recording_control':
             continue
         t0, t1 = _num(e.get("t_s")), _num(e.get("end_s"))
         if t0 is None or t1 is None or t1 <= t0:

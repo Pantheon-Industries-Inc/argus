@@ -484,6 +484,17 @@ def test_progress_vs_outcome_for_an_unclear_outcome():
     assert rules({"completion": {"task_completed": "unclear"}, "timeline": full}) == ["progress_vs_outcome"]
 
 
+def test_nearly_complete_progress_does_not_claim_the_end_state_was_reached():
+    near = _steps((0, 2, .99, 'advancing'), (2, 9, .99, 'advancing'))
+    for outcome in ('failure', 'partial', 'unclear'):
+        assert rules({'completion': {'task_completed': outcome}, 'timeline': near}) == []
+    done = {'task_completed': 'success', 'completed_at_s': 9, 'goal_reached_at_s': 9}
+    full = near[:-1] + _steps((2, 9, 1.0, 'advancing'))
+    assert rules({'completion': done, 'timeline': full}) == []
+    almost_full = near[:-1] + _steps((2, 9, 1.0 - 5e-10, 'advancing'))
+    assert rules({'completion': {'task_completed': 'unclear'}, 'timeline': almost_full}) == ['progress_vs_outcome']
+
+
 def test_goal_times_differ():
     c = {"task_completed": "success", "completed_at_s": 9.0}
     assert rules({"completion": {**c, "goal_reached_at_s": 0.0}}) == ["goal_times_differ"]
@@ -526,13 +537,13 @@ def test_progress_before_goal_reads_a_cyclical_instruction_by_its_first_repeat()
     """B4: a cyclical instruction is done once per repeat, each repeat a task judged against it, and progress reaches
     100% at the end of every repeat while the goal frame is the last repeat's. Main flagged the produce basket session
     (115213: 100% at 62.7s, the end of repeat 1, against the goal frame at 140.0s). The first repeat's goal is the
-    reference now; one task (the first aid kit, a real 8s slip) and progress that counts both repeats (the lids) are
-    read as before."""
+    reference now. The first aid kit remains at 99% until its goal frame, and the lids' progress counts both repeats.
+    Neither is a contradiction."""
     basket = _real_cyclical("episode_20261008_episode_115213")
     assert len([t for t in basket["tasks"] if t["judged_against"] == "instruction"]) == 2
     assert rules(basket, None) == []
     first_aid = _real_cyclical("episode_20261013_episode_141924")
-    assert len(first_aid["tasks"]) == 1 and rules(first_aid, None) == ["progress_before_goal"]
+    assert len(first_aid["tasks"]) == 1 and rules(first_aid, None) == []
     lids = _real_cyclical("episode_20261002_episode_080412")
     assert rules(lids, None) == []
     # a repeat that does reach 100% well before its own goal is still flagged

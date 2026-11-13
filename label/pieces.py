@@ -1486,7 +1486,7 @@ def window_copies(items: list, windows: list[dict], key: str, origin: dict | Non
 
 # the fields of a timeline step that say what was done: a step joined across a cut takes all of them from one half
 STEP_TEXT_FIELDS = ("action", "object", "destination", "spatial_relation", "contribution", "progress", "notes",
-                    "hands_visible", "hands_wearing", "confidence", "source_piece")
+                    "hands_visible", "hands_wearing", "confidence", "source_piece", "activity_scope")
 
 
 def _step_match(left: dict, right: dict, window: dict) -> dict | None:
@@ -1496,6 +1496,8 @@ def _step_match(left: dict, right: dict, window: dict) -> dict | None:
     so two that cover the same seconds are one action however differently each part worded it; two that share less
     are the two sides of a change both parts saw near the cut (one part's step ends just after it, or the other's
     starts just before it)."""
+    if (left.get('activity_scope') == 'recording_control') != (right.get('activity_scope') == 'recording_control'):
+        return None
     a, b = _in_window(left, window), _in_window(right, window)
     if a is None or b is None:
         return None
@@ -1655,7 +1657,7 @@ def chronological(labels: dict) -> dict:
         b = first(item, END_KEYS)
         return (a is None, a if a is not None else 0.0, b is None, b if b is not None else 0.0)
     for k in ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues",
-              "operator_mistakes", "tasks"):
+              "operator_mistakes", "tasks", "recording_activities"):
         if isinstance(labels.get(k), list):
             labels[k] = sorted(labels[k], key=key)
     return labels
@@ -1879,7 +1881,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
                                                   if c["window"] else (c["cut_s"],))})
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
-         "tasks": [], "part_assessments": [], "progress_scope": "request_parts"}
+         "tasks": [], "recording_activities": [], "part_assessments": [], "progress_scope": "request_parts"}
     contacts_model, contacts_missing, views, strip_part = {}, [], {"shown": [], "strips": {}}, {}
     excluded, summaries, reviews, scene_objects = [], [], [], []
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
@@ -1892,7 +1894,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         projected, omitted = project(r.get('labels') or {})
         lab = _shift(projected, t0, t1 - t0)
         owner = {"index": i, "t0_s": t0, "t1_s": t1}
-        for field in ("tasks", "key_events", "timeline"):
+        for field in ("tasks", "key_events", "timeline", "recording_activities"):
             lab[field] = [{**item, "source_piece": dict(owner)} for item in lab.get(field) or []]
         L['part_assessments'].append({
             'source_piece': dict(owner),
@@ -1912,7 +1914,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         scene_objects += [(i, {**o, "source_piece": dict(owner)})
                           for o in (lab.get("scene") or {}).get("objects") or [] if isinstance(o, dict)]
         L["scene"]["setting"] = L["scene"]["setting"] or (lab.get("scene") or {}).get("setting") or ""
-        for k in ("timeline", "key_events", "state_changes", "scene_graph", "recovery"):
+        for k in ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "recording_activities"):
             L[k] += lab.get(k) or []
         for v in lab.get("instruction_variants") or []:
             if v not in L["instruction_variants"] and len(L["instruction_variants"]) < 6:
@@ -2113,6 +2115,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             "prompt_mode": ("session" if selected.get('task_mode') == 'session' and not formats & {LABEL_SCHEMA}
                             else "given" if task_claims(ctx)["instruction"] else "inferred"),
             **({"label_schema": LABEL_SCHEMA} if tasks_format else {}),
+            **({'task_scope_version': 1} if selected.get('rig') == 'ego_head' and tasks_format and not missing
+               and all(type(r.get('task_scope_version')) is int and r['task_scope_version'] == 1
+                       for _, r in parts) else {}),
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,

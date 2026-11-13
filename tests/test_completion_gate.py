@@ -236,6 +236,30 @@ def test_reparse_reads_a_stored_incomplete_reply_with_the_same_rule():
     assert reparse.refresh_received(whole)['parse_ok'] is True
 
 
+def test_reparse_refuses_a_reviewed_task_scope_projection():
+    from label import reparse
+    record = {**saved(reply(**TASKS)), 'task_scope_review': {'version': 1}}
+    with pytest.raises(ValueError, match='reviewed task-purpose'):
+        reparse.refresh_received(record)
+
+
+def test_capture_only_ego_requires_the_new_request_and_confirmed_recording_evidence():
+    activity = {'start_s': 0.0, 'end_s': 60.0, 'activity': 'Stop the worn recorder',
+                'target': 'capture_rig', 'evidence': 'The hand operates its worn recorder.',
+                'reason': 'This controls the equipment collecting the demonstration.'}
+    record = {**saved(reply(tasks=[], recording_activities=[activity]), rig='ego_head', instruction=None),
+              'label_schema': 'tasks', 'task_scope_version': 1}
+    assert harness.annotation_complete(record)
+    assert not harness.annotation_complete({k: v for k, v in record.items() if k != 'task_scope_version'})
+    for version in (True, 2, '1'):
+        assert not harness.annotation_complete({**record, 'task_scope_version': version})
+    for change in ({'target': 'unknown'}, {'activity': ''}, {'evidence': ''}, {'reason': ''},
+                   {'start_s': float('nan')}, {'start_s': True}, {'end_s': -1}):
+        bad = {**record, 'labels': {**record['labels'], 'recording_activities': [{**activity, **change}]}}
+        assert not harness.annotation_complete(bad), change
+    assert not harness.annotation_complete({**record, 'labels': {**record['labels'], 'recording_activities': []}})
+
+
 def test_completeness_is_decided_in_one_place():
     """Every site that calls a unit done reads annotation_problems, never parse_ok alone."""
     from label import completeness
