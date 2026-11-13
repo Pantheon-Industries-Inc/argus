@@ -2843,6 +2843,63 @@ function videoSrc(eidEnc, cam) {
   return BOARD.media + ((rec._media || {})[mediaKey(cam)] || '');
 }
 // the camera's first frame as the video's poster attribute, or nothing where a static build has no such frame
+function isHlsSource(url) { return String(url).split(/[?#]/, 1)[0].toLowerCase().endsWith('.m3u8'); }
+function videoSourceAttr(url) { return `${isHlsSource(url) ? 'data-hls-src' : 'src'}="${esc(url)}"`; }
+// hls.js 1.6.19 is Apache-2.0, loaded only when a camera supplies an HLS playlist.
+let _hlsLibrary = null;
+function loadHlsLibrary() {
+  if (!_hlsLibrary) _hlsLibrary = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.6.19/dist/hls.min.js';
+    script.integrity = 'sha384-eIepVstlIv9sSqP0mAsB37yZCJzcs0Y9qhxne7qDj9mO6EneOgR3uvZy28Xn6XqH';
+    script.crossOrigin = 'anonymous';
+    script.onload = () => window.Hls ? resolve(window.Hls) : reject(new Error('HLS player unavailable'));
+    script.onerror = () => { _hlsLibrary = null; script.remove(); reject(new Error('HLS player unavailable')); };
+    document.head.appendChild(script);
+  });
+  return _hlsLibrary;
+}
+function retainVideoSource(video) { video?._hlsTransport?.release(); }
+function attachVideoSource(video, url, signal) {
+  if (signal?.aborted) return Promise.resolve(false);
+  const old = video._hlsTransport;
+  if (old?.url === url) { old.bind(signal); return old.ready; }
+  old?.dispose();
+  if (!isHlsSource(url)) {
+    if (video.getAttribute('src') !== url) video.src = url;
+    return Promise.resolve(true);
+  }
+  let owner = null;
+  const state = {url, hls:null, disposed:false};
+  state.release = () => { owner?.removeEventListener('abort', state.dispose); owner = null; };
+  state.dispose = () => {
+    if (state.disposed) return;
+    state.disposed = true; state.release();
+    if (state.hls) state.hls.destroy();
+    else { video.pause(); video.removeAttribute('src'); video.load(); }
+    if (video._hlsTransport === state) delete video._hlsTransport;
+  };
+  state.bind = next => { state.release(); owner = next; owner?.addEventListener('abort', state.dispose, {once:true}); };
+  video._hlsTransport = state; state.bind(signal);
+  const native = () => {
+    if (state.disposed) return false;
+    if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; return true; }
+    video.dispatchEvent(new Event('error')); return false;
+  };
+  state.ready = loadHlsLibrary().then(Hls => {
+    if (state.disposed) return false;
+    if (!Hls.isSupported()) return native();
+    state.hls = new Hls({maxBufferLength:8, maxMaxBufferLength:12, backBufferLength:4, maxBufferSize:6*1024*1024});
+    state.hls.attachMedia(video); state.hls.loadSource(url);
+    return true;
+  }).catch(native);
+  return state.ready;
+}
+function attachVideoSources(root, signal) {
+  for (const video of root.querySelectorAll('video[data-hls-src]'))
+    attachVideoSource(video, video.dataset.hlsSrc, signal);
+}
+
 function posterAttr(eidEnc, cam) {
   const src = posterSrc(_activeFile, eidEnc, cam);
   return src ? ` poster="${esc(src)}"` : '';
@@ -3226,7 +3283,7 @@ function unshownCellsHtml(d, eidEnc, kept) {
         <div class="cam-cell cam-wrist cam-unshown${['sensor', 'tactile'].includes(cameraPresentation(d, u.view, u.name)) ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(cameraCaption(d, u.view))}</span>
           <video id="video-${esc(u.view)}"${u.clock_alignment === 'unverified' ? ' data-unsynced="true" controls' : ''} preload="auto" muted playsinline${kept ? ''
-            : ` src="${esc(videoSrc(eidEnc, u.view))}"${posterAttr(eidEnc, u.view)}`} `
+            : ` ${videoSourceAttr(videoSrc(eidEnc, u.view))}${posterAttr(eidEnc, u.view)}`} `
             + `onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('');
 }
@@ -6975,6 +7032,10 @@ function setupPresentedVideoClock(video, on, render, pending) {
 function renderEp(d, opts) {
   opts = opts || {};
   const meta = d._meta || {};
+  const keep = opts.keepVideo && document.getElementById('video')?.dataset.view === episodeCams(d).main ? {
+    video: document.getElementById('video'),
+    side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
+  if (keep) for (const video of [keep.video, ...keep.side.map(([, el]) => el)]) retainVideoSource(video);
   // the video's listeners, and what loads to fill this draw in, belong to this render: a re-render (another source,
   // the same footage) drops them all
   endRender();
@@ -6988,9 +7049,6 @@ function renderEp(d, opts) {
   // dataset's own labels are shown, and one line stands in for every section the model would have answered
   const noLabels = !cmpInfo && !!d._label_failed;
   // switching source keeps the playing footage: the same video elements move into the new layout
-  const keep = opts.keepVideo && document.getElementById('video')?.dataset.view === episodeCams(d).main ? {
-    video: document.getElementById('video'),
-    side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
   // a new episode: stop the old episode's videos now, so their downloads end instead of running on until the detached
   // elements are collected and competing with the new episode's footage (a fast visitor left several loading at once)
   if (!keep) {
@@ -7845,7 +7903,7 @@ function renderEp(d, opts) {
         : ' cam-row-single') : '')}${mainIsScene ? ' cam-main-scene' : ''}">
         <div class="cam-cell cam-exo">
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
-          <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
+          <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` ${videoSourceAttr(videoUrl)}${posterAttr(eidEnc,
             mainCam)}`}></video>${dpHtml(mainCam, dpViews)}
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
@@ -7875,8 +7933,8 @@ function renderEp(d, opts) {
         <div class="cam-cell cam-wrist${['sensor', 'tactile'].includes(c.role) ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(camLabel(v))}</span>
           <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
-            ? ' controls' : ''}${keep ? '' : ` src="${esc(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
-            : videoSrc(eidEnc, v))}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
+            ? ' controls' : ''}${keep ? '' : ` ${videoSourceAttr(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
+            : videoSrc(eidEnc, v))}${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
             dpViews)}
         </div>`;
         }).join('')}
@@ -7912,6 +7970,7 @@ function renderEp(d, opts) {
     for (const [id, el] of [['video', keep.video], ...keep.side]) {
       const fresh = document.getElementById(id);
       if (fresh && el) fresh.replaceWith(el);
+      else el?._hlsTransport?.dispose();
     }
   }
 
@@ -7970,6 +8029,7 @@ function renderEp(d, opts) {
   `;
 
   // wire interactions
+  attachVideoSources(leftCol, window._epAbort.signal);
   const vid = document.getElementById('video');
   const ph  = document.getElementById('playhead');
   const tl  = document.getElementById('timeline');
