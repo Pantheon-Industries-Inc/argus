@@ -841,6 +841,7 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files, sensors files and keypoint downloads only when the build
     # has them (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
+           "model_attribution": not getattr(a, "hide_model_attribution", False),
            "hand_geometry": bool(hands_res and hands_res["files"] and hands_res["geometry_files"] == hands_res["files"]),
            "keypoints": bool(kp_res and kp_res["files"]), "sensors": bool(sn_res and sn_res["files"]),
            "labels_license": sa.labels_license(a.board), "targets": sa.targets(a.board),
@@ -914,6 +915,8 @@ def main():
     ap.add_argument("--clips", type=Path, required=True, help="the clips folder board clips wrote")
     ap.add_argument("--compare", type=Path, default=None, help="other models' labels (default BOARD/compare)")
     ap.add_argument("--hands", type=Path, default=None, help="hand pose files (default BOARD/hands)")
+    ap.add_argument("--hide-model-attribution", action="store_true",
+                    help="site: owner assessment copy without model names, comparisons or call metadata")
     ap.add_argument("--compact-hand-geometry", action="store_true",
                     help="site: round display geometry within 0.0005 pixel XY and 0.0000005 meter Z; native files and downloads stay exact")
     ap.add_argument("--keypoints", type=Path, default=None,
