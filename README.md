@@ -299,6 +299,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | Command | Options |
 |---|---|
 | [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |
+| [`label.task_scope`](label/task_scope.py) | `--input`, `--reviews`, `--out` |
 | [`review seam`](label/seam.py) | `--label`, `--footage`, `--out`, `--dry-run`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--timeout`, `--apply` |
 | [`prepare abc130k prepare`](prepare/abc130k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
 | [`prepare abc130k sample`](prepare/abc130k.py) | `--list`, `--per-task`, `--split`, `--seed`, `--jobs` |
