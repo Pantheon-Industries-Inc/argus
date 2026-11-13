@@ -792,6 +792,9 @@ def cmd_site(a):
             try:
                 doc = hands_overlay.for_copy(json.loads((hands / f).read_text()), mp4)
                 for name, chunk in hands_overlay.geometry_assets(doc, hands):
+                    if getattr(a, "compact_hand_geometry", False):
+                        from board.hand_geometry_transport import compact_geometry
+                        chunk = compact_geometry(chunk)
                     (stage / "data/hands" / name).write_text(dumps(public_json(chunk), separators=(",", ":")))
             except (ValueError, RuntimeError) as err:
                 return f, str(err)[:200], False
@@ -911,6 +914,8 @@ def main():
     ap.add_argument("--clips", type=Path, required=True, help="the clips folder board clips wrote")
     ap.add_argument("--compare", type=Path, default=None, help="other models' labels (default BOARD/compare)")
     ap.add_argument("--hands", type=Path, default=None, help="hand pose files (default BOARD/hands)")
+    ap.add_argument("--compact-hand-geometry", action="store_true",
+                    help="site: round display geometry within 0.0005 pixel XY and 0.0000005 meter Z; native files and downloads stay exact")
     ap.add_argument("--keypoints", type=Path, default=None,
                     help="hand keypoint downloads (default BOARD/hand_keypoints)")
     ap.add_argument("--sensors", type=Path, default=None, help="sensors files (default BOARD/sensors)")
