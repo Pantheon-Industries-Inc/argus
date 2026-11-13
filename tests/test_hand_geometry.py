@@ -338,8 +338,9 @@ def test_identical_shared_chunks_reuse_public_filename(tmp_path):
 
 
 @pytest.mark.parametrize("display_mode", ["skeleton", "mesh"])
-def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, display_mode):
-    """Real video crosses six boundaries with 280ms chunks and one 1.2s response."""
+@pytest.mark.parametrize("late_chunk", [False, True])
+def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, display_mode, late_chunk):
+    """Keep bounded fetches alive across playback, but cancel intentional navigation."""
     import base64
     import http.server
     import json
@@ -352,13 +353,13 @@ def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, di
     from test_layout_fits import chrome, _devtools
     if not chrome() or not shutil.which('ffmpeg'):
         pytest.skip('Chrome and ffmpeg required')
-    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=30:d=8',
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=black:s=160x120:r=30:d=12',
                     '-c:v','libx264','-pix_fmt','yuv420p',str(tmp_path/'clip.mp4')],check=True)
     header={'format':'board-hand-geometry/1','prediction_id':'buffer-fixture',
             'coordinates':{'xy':'source_pixels','z':'camera_meters'},
-            'clip':{'w':160,'h':120,'times':[i/30 for i in range(240)]},'edges':[[0,1]],
+            'clip':{'w':160,'h':120,'times':[i/30 for i in range(360)]},'edges':[[0,1]],
             'topology':{'left':[[0,1,2]],'right':[]},
-            'chunks':[{'start':i*30,'end':(i+1)*30,'file':f'chunk-{i}.json'} for i in range(8)]}
+            'chunks':[{'start':i*30,'end':(i+1)*30,'file':f'chunk-{i}.json'} for i in range(12)]}
     (tmp_path/'episode.json').write_text(json.dumps(header))
     for spec in header['chunks']:
         frames=[]
@@ -377,7 +378,8 @@ def test_geometry_prefetch_continuous_delayed_chunks_and_seek_abort(tmp_path, di
     video='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
     prelude="""const STATIC=true,BOARD={hands:true,data:''},KP_INDEX=null;let _activeFile='episode.json';
 window._epCleanup=[];const siteFile=x=>x;const remember=(c,k,p)=>(c.set(k,p),p);
-function fetchJson(url,options={}){return fetch(url.replace('hands/',''),options).then(r=>r.ok?r.json():null);}
+const handAborts=[],handCompleted=[];
+function fetchJson(url,options={}){options.signal?.addEventListener('abort',()=>handAborts.push(url));return fetch(url.replace('hands/',''),options).then(r=>r.ok?r.json():null).then(doc=>{handCompleted.push(url);return doc;});}
 const testAbort=new AbortController(),on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
 """
     page='<style>'+css+'#cell{position:relative;width:320px;height:240px}video{width:320px;height:240px}</style>'
@@ -388,7 +390,9 @@ const testAbort=new AbortController(),on=(e,k,f)=>e.addEventListener(k,f,{signal
     class Delayed(http.server.SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(tmp_path),**kwargs)
         def do_GET(self):
-            if self.path.startswith('/chunk-'):time.sleep(1.2 if self.path=='/chunk-4.json' else .28)
+            if self.path.startswith('/chunk-'):
+                delay = (4.2 if late_chunk else 2.5) if self.path=='/chunk-3.json' else 3.1 if self.path=='/chunk-4.json' else 2.5 if int(self.path.split('-')[1].split('.')[0])>=5 else .28
+                time.sleep(delay)
             try:super().do_GET()
             except (BrokenPipeError,ConnectionResetError):pass
         def log_message(self,*args):pass
@@ -414,7 +418,14 @@ samples.push({frame:s.frame,status:document.getElementById('hp-status').textCont
 vid.pause();return {samples,width};})()""")
             samples=result['samples']
             assert len({s['frame']//30 for s in samples})>=7
-            assert all(s['status']=='' and s['alpha']>0 for s in samples),[s for s in samples if s['status'] or not s['alpha']][:15]
+            assert js('handAborts')==[], 'Playback must let in-flight HTTP bodies finish'
+            if late_chunk:
+                missing=[s for s in samples if s['status']]
+                assert missing and all(s['status']=='Loading' and s['alpha']==0 and s['frame']//30==3 for s in missing)
+                assert js("handCompleted.includes('hands/chunk-3.json')")
+                assert js("!_hpData.get(_activeFile).loaded.has('chunk-3.json')")
+            else:
+                assert all(s['status']=='' and s['alpha']>0 for s in samples),[s for s in samples if s['status'] or not s['alpha']][:15]
             assert max(s['loaded'] for s in samples)<=5 and max(s['pending'] for s in samples)<=3
             assert all(s['width']==result['width'] for s in samples)
             # A far seek discards old requests and never draws a stale source frame.
@@ -424,6 +435,7 @@ vid.pause();return {samples,width};})()""")
                 time.sleep(.02)
             assert js('window._hp.state.frame')==3
             assert js('_hpData.get(_activeFile).pending.size')>0
+            assert js('handAborts.length')>0, 'Seeking must cancel the previous fetch window'
             assert js("document.getElementById('hp-canvas').getContext('2d').getImageData(46,40,1,1).data[3]")==0
             js("document.querySelector('[data-mode=off]').click()")
             assert js('_hpData.get(_activeFile).pending.size')==0
