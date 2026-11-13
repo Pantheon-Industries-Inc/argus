@@ -12,6 +12,31 @@ def manifest(prediction="p1", chunk="part.json"):
             "chunks":[{"file":chunk,"start":0,"end":1}]}
 
 
+def test_hand_asset_routing_defaults_and_explicit_base():
+    from board import serve
+    import json
+    import re
+    config = {'mode':'static', 'data':'metadata/', 'hands_data':'https://assets.example/shared/'}
+    page = serve.render_index('Example', config)
+    board = json.loads(re.search(r'const BOARD = (.*);', page).group(1))
+    script = r"""
+const assert = require('node:assert/strict'), {src,piece} = require('./tests/page_functions')();
+let STATIC=true, BOARD=JSON.parse(process.argv[1]);
+const EP_SITE={'private/episode.json':'public episode.json'};
+eval(src.match(/const siteFile = [^;]+;/)[0].replace('const siteFile', 'var siteFile'));
+eval(piece('handsUrl'));
+assert.equal(handsUrl('private/episode.json'),'https://assets.example/shared/hands/public%20episode.json');
+assert.equal(handsUrl('part.json'),'https://assets.example/shared/hands/part.json');
+delete BOARD.hands_data;
+assert.equal(handsUrl('private/episode.json'),'metadata/hands/public%20episode.json');
+BOARD.data='';
+assert.equal(handsUrl('part.json'),'hands/part.json');
+STATIC=false; BOARD.hands_data='https://assets.example/shared/';
+assert.equal(handsUrl('private/episode.json'),'api/hands?file=private%2Fepisode.json');
+"""
+    subprocess.run(['node', '-e', script, json.dumps(board)], check=True)
+
+
 def test_geometry_contract():
     html = Path('board/index.html').read_text()
     source = html.split('// BEGIN canonical hand geometry')[1].split('// END canonical hand geometry')[0] if '// BEGIN canonical hand geometry' in html else ''
@@ -68,7 +93,8 @@ def test_chunk_assets_reject_traversal_and_wrong_prediction(tmp_path):
         list(geometry_assets(doc,tmp_path))
 
 
-def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path):
+@pytest.mark.parametrize('hands_data', [None, 'shared/'])
+def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path, hands_data):
     """Use the production overlay on actual decoded video in headless Chrome."""
     import contextlib
     import http.server
@@ -90,18 +116,22 @@ def test_overlay_playback_seek_modes_and_chunk_loading(tmp_path):
          'clip':{'w':160,'h':120,'times':[i/10 for i in range(30)]},'edges':[[0,1]],
          'topology':{'left':[[0,1,2],[0,2,3]],'right':[]},
          'chunks':[{'start':0,'end':15,'file':'chunk-a.json'},{'start':15,'end':30,'file':'chunk-b.json'}]}
-    (tmp_path/'episode.json').write_text(json.dumps(doc))
+    asset_base = hands_data or 'metadata/'
+    asset_dir = tmp_path / asset_base / 'hands'
+    asset_dir.mkdir(parents=True)
+    (asset_dir/'safe-episode.json').write_text(json.dumps(doc))
     missing={**doc, 'chunks':[{'start':0,'end':30,'file':'absent-part.json'}]}
-    (tmp_path/'missing-episode.json').write_text(json.dumps(missing))
+    (asset_dir/'missing-episode.json').write_text(json.dumps(missing))
     for name,start,x in [('chunk-a.json',0,10),('chunk-b.json',15,80)]:
         frame={'left':{'joints':[[x,20,1],[x+20,40,1]],'vertices':[[x,20,1],[x+20,20,1],[x+20,40,1],[x,40,1]]}}
-        (tmp_path/name).write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'fixture',
+        (asset_dir/name).write_text(json.dumps({'format':'board-hand-geometry-chunk/1','prediction_id':'fixture',
                                               'start':start,'frames':[frame]*15}))
     import base64
     video_url='data:video/mp4;base64,'+base64.b64encode((tmp_path/'clip.mp4').read_bytes()).decode()
-    prelude="""const STATIC=true, BOARD={hands:true,data:''}, KP_INDEX=null; let _activeFile='episode.json';
-window._epCleanup=[]; const siteFile=x=>x;
-function fetchJson(url,options={}){return fetch(url.replace('hands/',''),options).then(r=>r.ok?r.json():null);}
+    prelude="const STATIC=true, BOARD="+json.dumps({'hands':True,'data':'metadata/',**({'hands_data':hands_data} if hands_data else {})})+""", KP_INDEX=null; let _activeFile='episode.json';
+window._epCleanup=[]; const EP_SITE={'episode.json':'safe-episode.json'};
+const siteFile=file=>EP_SITE[file] || file;
+function fetchJson(url,options={}){return fetch(url,options).then(r=>r.ok?r.json():null);}
 function remember(c,k,p){c.set(k,p);return p;}
 let testAbort=new AbortController(); const on=(e,k,f)=>e.addEventListener(k,f,{signal:testAbort.signal});
 function selectMode(mode){document.getElementById('hp-mode').dispatchEvent(new KeyboardEvent('keydown',{key:{off:'Home',skeleton:'ArrowRight',mesh:'End'}[mode]}));}
@@ -136,6 +166,7 @@ vid.addEventListener('loadedmetadata',()=>setupHandPose(vid,document.getElementB
                 if js("!!window._hp && window._hp.state.data"):break
                 time.sleep(.05)
             assert js('window._hp.state.data')
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/safe-episode.json')).map(e=>new URL(e.name).pathname)")==[f'/{asset_base}hands/safe-episode.json']
             assert js("_hpData.get(_activeFile).pending.has('chunk-b.json') || _hpData.get(_activeFile).loaded.has('chunk-b.json')") is True
             js("selectMode('mesh')")
             for _ in range(100):
@@ -165,7 +196,7 @@ return {left:r.left+1,right:r.right-1,y:r.top+r.height/2};})()""")
                 if js('window._hp.state.frame>=20') and js("document.querySelector('.hp-status').textContent === ''"):break
                 time.sleep(.02)
             assert js('window._hp.state.frame')==20, js('JSON.stringify({state:window._hp.state,time:vid.currentTime,seeking:vid.seeking,ready:vid.readyState,error:vid.error,status:document.querySelector(".hp-status").textContent})')
-            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).length")==1
+            assert js("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('chunk-b.json')).map(e=>new URL(e.name).pathname)")==[f'/{asset_base}hands/chunk-b.json']
             assert js("document.querySelector('canvas').getContext('2d').getImageData(30,60,1,1).data[3]")==0
             js("vid.play(); selectMode('off')")
             assert js('window._hp.state.active') is False
