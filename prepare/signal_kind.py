@@ -22,9 +22,14 @@ never force. The order of NAME_RULES carries the precedence the kinds need: book
 bookkeeping, not IMU), touch before force (a fingertip force is touch), force/torque before effort (a wrist wrench's
 torque is force/torque, an arm's torque is effort), IMU before base (an IMU on a base is IMU), gripper before velocity
 and effort (a gripper's effort is the gripper), base before pose (odometry is base motion), velocity and effort before
-pose (an end effector's velocity is a velocity), and joints last.
+pose (an end effector's velocity is a velocity), and joints last. Two exceptions keep a ROS name what it is: cmd_vel
+(a mobile base's velocity command) is one word, which word_tokens alone splits into cmd and vel, unless the name also
+names a joint; and a controller whose name gives a joint or state field and no other base word (/arm_controller/state,
+/joint_trajectory_controller/state) is the arm's joints, so it skips base and pose and its field's own word decides.
 """
 from __future__ import annotations
+
+import re
 
 import numpy as np
 
@@ -57,6 +62,11 @@ TOUCH_PARTS = ("finger", "fingers", "fingertip", "fingertips", "palm", "thumb")
 # a pose word is a pose only when nothing in the name says it is a joint's or an arm's own reading: joint_pos is a
 # joint position, ee_pos an end effector's
 JOINT_WORDS = ("joint", "joints", "qpos")
+# ROS's mobile base velocity command, kept whole where word_tokens would split it into cmd and vel
+CMD_VEL = re.compile(r"(?<![a-z0-9])cmd_vel(?![a-z0-9])")
+# a base word that names a ROS controller of any kind: alone with a joint or state word it is an arm controller's state
+CONTROLLER_WORDS = ("controller",)
+CONTROLLER_STATE_WORDS = ("joint", "joints", "qpos", "state", "states")
 # a dictionary role (label/signals.py MOVEMENT_ROLES, NON_TOUCH_ROLES, TOUCH_QUANTITY_ROLES) as a kind
 ROLE_KINDS = {"joint_state": "joints", "actuator_command": "joints", "action": "joints", "state": "joints",
               "end_effector_pose": "pose", "pose": "pose", "landmarks": "pose", "hand_pose": "pose",
@@ -80,13 +90,23 @@ def _words(text) -> list[str]:
         return [w for v in text.values() for w in _words(v)]
     if isinstance(text, (list, tuple)):
         return [w for v in text for w in _words(v)]
-    return word_tokens(text) if isinstance(text, str) else []
+    if not isinstance(text, str):
+        return []
+    words = word_tokens(text)
+    return words + ["cmd_vel"] if CMD_VEL.search(text.lower()) else words
 
 
 def _by_words(words: list[str]) -> str | None:
     found = set(words) | {w[:-1] for w in words if w.endswith("s")}
+    if "cmd_vel" in found and found & set(JOINT_WORDS):
+        found.discard("cmd_vel")
+    controller_state = False
     for kind, vocabulary in NAME_RULES:
-        if kind == "pose" and found & set(JOINT_WORDS):
+        if kind == "base" and found & set(vocabulary) <= set(CONTROLLER_WORDS) and found & set(CONTROLLER_STATE_WORDS):
+            controller_state = bool(found & set(CONTROLLER_WORDS))
+            if controller_state:
+                continue
+        if kind == "pose" and (controller_state or found & set(JOINT_WORDS)):
             continue
         if kind == "force_torque" and found & set(vocabulary) and found & set(TOUCH_PARTS):
             return "touch"

@@ -82,6 +82,19 @@ REAL = {
     "observation.base.wheel_speed": "base",
     "action.chassis.velocities": "base",
     "observation.state.chassis": "base",
+    # a mobile base's velocity command, with or without its Twist message type
+    "/cmd_vel linear": "base",
+    "/cmd_vel angular": "base",
+    "/mobile_base/cmd_vel linear.x": "base",
+    "/base_controller/state": "base",
+    # a ROS arm controller's state is the arm's joints, and a joint's own vel or cmd stays the joint's
+    "/arm_controller/state actual.positions": "joints",
+    "/joint_trajectory_controller/state position": "joints",
+    "/joint_trajectory_controller/state velocity": "velocity",
+    "/arm_controller/state actual.effort": "effort",
+    "/yam_left/joint_cmd vel": "velocity",
+    "/yam_left/joint_state joint_cmd_vel": "velocity",
+    "action.cmd vel": "velocity",
     # IMU on a base is still IMU
     "/base/imu angular_velocity": "imu",
     "observation.state.chassis.imu": "imu",
