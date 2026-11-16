@@ -315,14 +315,14 @@ def build(ep, pl, *, shown=None, images=None, native_images=None, capture_select
     # the signals policy (label/policy.py SIGNAL_TREATMENT) gives a force/torque sensor once, as rows of the signals
     # block, so under auto and off its series are not supplied here too; a touch reading always is
     from label.episode import signal_treatments
-    shown = signal_treatments(ep, pl)
+    treatments = signal_treatments(ep, pl)
     for meta in ctx.get('signals') or []:
         name = meta['name']
         entry = field_interpretation(ctx, name)
         quantity = _quantity(name, entry, _columns(ep, name))
         if quantity is None and not names_touch(name):
             continue
-        if quantity == 'force_torque' and not shown.get(name, {'sensor_evidence': True})['sensor_evidence']:
+        if quantity == 'force_torque' and not treatments.get(name, {'sensor_evidence': True})['sensor_evidence']:
             continue
         status = ('excluded by interpretation' if sg.touch_permission(name, entry.get('role')) is False
                   else 'unsupported interpretation' if quantity is None
