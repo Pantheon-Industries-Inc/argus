@@ -1,0 +1,1918 @@
+{
+ "dataset": "realworld_go2_task0",
+ "profile": "teleop_arms",
+ "state_kind": "none",
+ "episode_id": "episode_000000",
+ "fps": 10.0,
+ "n_state_frames": 92,
+ "cameras": {
+  "exo": {
+   "key": "observation.images.front",
+   "name": "front",
+   "width": 640,
+   "height": 480,
+   "codec": "libdav1d",
+   "role_provenance": "presentation",
+   "mounting": "unspecified",
+   "desc": "recorded camera observation.images.front; its presentation slot does not establish camera mounting or viewpoint"
+  }
+ },
+ "stream_checks": {
+  "episode_length_meta": 92,
+  "frames_on_grid": {
+   "exo": true
+  }
+ },
+ "task_label": [
+  "Walk down the hallway."
+ ],
+ "episode_index": 0,
+ "robot_type": "Unitree Go2 quadruped: a four-legged robot dog with no arms, filmed by a camera at its front looking forward",
+ "source": {
+  "format": "lerobot v3.0",
+  "episode_index": 0,
+  "dataset_folder": null,
+  "unused_cameras": [],
+  "adapter": "lerobot",
+  "adapter_commit": "8ae1154"
+ },
+ "instruction": "Walk down the hallway.",
+ "instruction_note": "This instruction is the episode's task text in the dataset's LeRobot metadata.",
+ "state_note": "Kinematic checks unavailable: the recorded values do not establish six named joints and a gripper or ordered x y z roll pitch yaw and an opening. Original values remain signals.",
+ "state_why": "layout",
+ "recorded_metadata": {
+  "/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet": [
+   {
+    "source": "/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet",
+    "row": 0,
+    "fields": {
+     "episode_index": 0,
+     "tasks": [
+      "Walk down the hallway."
+     ],
+     "length": 92,
+     "data/chunk_index": 0,
+     "data/file_index": 0,
+     "dataset_from_index": 0,
+     "dataset_to_index": 92,
+     "videos/observation.images.front/chunk_index": 0,
+     "videos/observation.images.front/file_index": 0,
+     "videos/observation.images.front/from_timestamp": 0.0,
+     "videos/observation.images.front/to_timestamp": 9.2,
+     "videos/observation.images.front_depth/chunk_index": 0,
+     "videos/observation.images.front_depth/file_index": 0,
+     "videos/observation.images.front_depth/from_timestamp": 0.0,
+     "videos/observation.images.front_depth/to_timestamp": 9.2,
+     "stats/observation.images.front/min": [
+      [
+       [
+        0.04313725605607033
+       ]
+      ],
+      [
+       [
+        0.04313725605607033
+       ]
+      ],
+      [
+       [
+        0.04313725605607033
+       ]
+      ]
+     ],
+     "stats/observation.images.front/max": [
+      [
+       [
+        1.0
+       ]
+      ],
+      [
+       [
+        1.0
+       ]
+      ],
+      [
+       [
+        1.0
+       ]
+      ]
+     ],
+     "stats/observation.images.front/mean": [
+      [
+       [
+        0.5083001852035522
+       ]
+      ],
+      [
+       [
+        0.5086467266082764
+       ]
+      ],
+      [
+       [
+        0.506650984287262
+       ]
+      ]
+     ],
+     "stats/observation.images.front/std": [
+      [
+       [
+        0.1482558399438858
+       ]
+      ],
+      [
+       [
+        0.14681556820869446
+       ]
+      ],
+      [
+       [
+        0.1471632570028305
+       ]
+      ]
+     ],
+     "stats/observation.images.front/count": [
+      92
+     ],
+     "stats/observation.images.front/q01": [
+      [
+       [
+        0.1334467456530591
+       ]
+      ],
+      [
+       [
+        0.1413056612680564
+       ]
+      ],
+      [
+       [
+        0.13340857807152812
+       ]
+      ]
+     ],
+     "stats/observation.images.front/q10": [
+      [
+       [
+        0.33329256224856524
+       ]
+      ],
+      [
+       [
+        0.33717221841161166
+       ]
+      ],
+      [
+       [
+        0.3293009650368517
+       ]
+      ]
+     ],
+     "stats/observation.images.front/q50": [
+      [
+       [
+        0.49821923740832236
+       ]
+      ],
+      [
+       [
+        0.49814182405030094
+       ]
+      ],
+      [
+       [
+        0.49821451083759577
+       ]
+      ]
+     ],
+     "stats/observation.images.front/q90": [
+      [
+       [
+        0.69408267774386
+       ]
+      ],
+      [
+       [
+        0.6940584825184765
+       ]
+      ],
+      [
+       [
+        0.6902436165052637
+       ]
+      ]
+     ],
+     "stats/observation.images.front/q99": [
+      [
+       [
+        0.9333894372482943
+       ]
+      ],
+      [
+       [
+        0.9373239641423077
+       ]
+      ],
+      [
+       [
+        0.9333499101279438
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/min": [
+      [
+       [
+        0.0
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/max": [
+      [
+       [
+        65535.0
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/mean": [
+      [
+       [
+        2494.053955078125
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/std": [
+      [
+       [
+        2274.697265625
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/count": [
+      92
+     ],
+     "stats/observation.images.front_depth/q01": [
+      [
+       [
+        -1.000000013351432e-10
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/q10": [
+      [
+       [
+        657.6373737665235
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/q50": [
+      [
+       [
+        1758.190223382622
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/q90": [
+      [
+       [
+        5403.815355940496
+       ]
+      ]
+     ],
+     "stats/observation.images.front_depth/q99": [
+      [
+       [
+        10541.199977258775
+       ]
+      ]
+     ],
+     "stats/observation.state/min": [
+      -3.0254812240600586,
+      -0.47635820508003235,
+      -0.643419623374939,
+      -0.042444415390491486,
+      -0.02589406445622444,
+      0.3120056688785553,
+      0.0
+     ],
+     "stats/observation.state/max": [
+      1.812994360923767,
+      0.5781516432762146,
+      0.4367583692073822,
+      0.02407105639576912,
+      0.06926898658275604,
+      0.33703431487083435,
+      1.0
+     ],
+     "stats/observation.state/mean": [
+      0.7602668404579163,
+      -0.011226929724216461,
+      0.013582119718194008,
+      -0.010576507076621056,
+      0.016225310042500496,
+      0.32835817337036133,
+      0.8260869383811951
+     ],
+     "stats/observation.state/std": [
+      0.6950932741165161,
+      0.15820962190628052,
+      0.17065149545669556,
+      0.013446677476167679,
+      0.017840377986431122,
+      0.004917782265692949,
+      0.3790346682071686
+     ],
+     "stats/observation.state/count": [
+      92
+     ],
+     "stats/observation.state/q01": [
+      -3.0254812240600586,
+      -0.47635820508003235,
+      -0.643419623374939,
+      -0.042444415390491486,
+      -0.02589406445622444,
+      0.3120056688785553,
+      -1.000000013351432e-10
+     ],
+     "stats/observation.state/q10": [
+      -7.910728454589832e-05,
+      -0.23040432333946229,
+      -0.18970162868499757,
+      -0.026358313113451003,
+      -0.006857647374272346,
+      0.322708922624588,
+      -1.000000013351432e-10
+     ],
+     "stats/observation.state/q50": [
+      1.0339999198913574,
+      0.00133475661277771,
+      0.03309589624404907,
+      -0.012286297976970673,
+      0.01671994850039482,
+      0.3285195827484131,
+      0.9998789272810283
+     ],
+     "stats/observation.state/q90": [
+      1.3212119102478028,
+      0.12846646904945375,
+      0.1556528925895691,
+      0.009807481616735458,
+      0.03622647039592266,
+      0.3343902945518494,
+      0.9999757854562057
+     ],
+     "stats/observation.state/q99": [
+      1.8121043682098388,
+      0.5779576873779297,
+      0.43655966997146606,
+      0.024058824479579924,
+      0.06925148010253906,
+      0.33703201174736025,
+      0.9999975785456205
+     ],
+     "stats/observation.pad/min": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "stats/observation.pad/max": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "stats/observation.pad/mean": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "stats/observation.pad/std": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "stats/observation.pad/count": [
+      92
+     ],
+     "stats/observation.pad/q01": [
+      3.9995784462121265e-16,
+      3.9995784462121265e-16,
+      3.9995784462121265e-16,
+      3.9995784462121265e-16
+     ],
+     "stats/observation.pad/q10": [
+      3.999578446212126e-15,
+      3.999578446212126e-15,
+      3.999578446212126e-15,
+      3.999578446212126e-15
+     ],
+     "stats/observation.pad/q50": [
+      1.9997892231060632e-14,
+      1.9997892231060632e-14,
+      1.9997892231060632e-14,
+      1.9997892231060632e-14
+     ],
+     "stats/observation.pad/q90": [
+      3.599620601590914e-14,
+      3.599620601590914e-14,
+      3.599620601590914e-14,
+      3.599620601590914e-14
+     ],
+     "stats/observation.pad/q99": [
+      3.959582661750005e-14,
+      3.959582661750005e-14,
+      3.959582661750005e-14,
+      3.959582661750005e-14
+     ],
+     "stats/observation.move/min": [
+      0.0
+     ],
+     "stats/observation.move/max": [
+      1.0
+     ],
+     "stats/observation.move/mean": [
+      0.8260869383811951
+     ],
+     "stats/observation.move/std": [
+      0.3790346682071686
+     ],
+     "stats/observation.move/count": [
+      92
+     ],
+     "stats/observation.move/q01": [
+      -1.000000013351432e-10
+     ],
+     "stats/observation.move/q10": [
+      -1.000000013351432e-10
+     ],
+     "stats/observation.move/q50": [
+      0.9998789272810283
+     ],
+     "stats/observation.move/q90": [
+      0.9999757854562057
+     ],
+     "stats/observation.move/q99": [
+      0.9999975785456205
+     ],
+     "stats/action/min": [
+      -3.0255000591278076,
+      -0.4763999879360199,
+      -0.6434000134468079
+     ],
+     "stats/action/max": [
+      1.812999963760376,
+      0.5781999826431274,
+      0.4368000030517578
+     ],
+     "stats/action/mean": [
+      0.7597804665565491,
+      -0.015738043934106827,
+      0.0005641289753839374
+     ],
+     "stats/action/std": [
+      0.695595920085907,
+      0.15727289021015167,
+      0.16357393562793732
+     ],
+     "stats/action/count": [
+      92
+     ],
+     "stats/action/q01": [
+      -3.0255000591278076,
+      -0.4763999879360199,
+      -0.6434000134468079
+     ],
+     "stats/action/q10": [
+      -0.00013659000396728512,
+      -0.23042508959770203,
+      -0.18967283368110657
+     ],
+     "stats/action/q50": [
+      1.034001111984253,
+      -4.722177982330322e-05,
+      8.367356799897692e-05
+     ],
+     "stats/action/q90": [
+      1.321214532852173,
+      0.12826548218727113,
+      0.15547264814376832
+     ],
+     "stats/action/q99": [
+      1.8121094226837158,
+      0.5780059719085693,
+      0.4366012215614319
+     ],
+     "stats/timestamp/min": [
+      0.0
+     ],
+     "stats/timestamp/max": [
+      9.1
+     ],
+     "stats/timestamp/mean": [
+      4.55
+     ],
+     "stats/timestamp/std": [
+      2.6556543449779006
+     ],
+     "stats/timestamp/count": [
+      92
+     ],
+     "stats/timestamp/q01": [
+      -1e-10
+     ],
+     "stats/timestamp/q10": [
+      0.899443999919768
+     ],
+     "stats/timestamp/q50": [
+      4.500859999998919
+     ],
+     "stats/timestamp/q90": [
+      8.200556000080232
+     ],
+     "stats/timestamp/q99": [
+      9.098325600099963
+     ],
+     "stats/frame_index/min": [
+      0.0
+     ],
+     "stats/frame_index/max": [
+      91.0
+     ],
+     "stats/frame_index/mean": [
+      45.5
+     ],
+     "stats/frame_index/std": [
+      26.556543449779003
+     ],
+     "stats/frame_index/count": [
+      92
+     ],
+     "stats/frame_index/q01": [
+      -1e-10
+     ],
+     "stats/frame_index/q10": [
+      8.994439999919768
+     ],
+     "stats/frame_index/q50": [
+      45.00859999999892
+     ],
+     "stats/frame_index/q90": [
+      82.00556000008024
+     ],
+     "stats/frame_index/q99": [
+      90.98325600009997
+     ],
+     "stats/episode_index/min": [
+      0.0
+     ],
+     "stats/episode_index/max": [
+      0.0
+     ],
+     "stats/episode_index/mean": [
+      0.0
+     ],
+     "stats/episode_index/std": [
+      0.0
+     ],
+     "stats/episode_index/count": [
+      92
+     ],
+     "stats/episode_index/q01": [
+      3.9999999999994176e-16
+     ],
+     "stats/episode_index/q10": [
+      3.999999999999417e-15
+     ],
+     "stats/episode_index/q50": [
+      1.9999999999997088e-14
+     ],
+     "stats/episode_index/q90": [
+      3.599999999999476e-14
+     ],
+     "stats/episode_index/q99": [
+      3.9599999999994235e-14
+     ],
+     "stats/index/min": [
+      0.0
+     ],
+     "stats/index/max": [
+      91.0
+     ],
+     "stats/index/mean": [
+      45.5
+     ],
+     "stats/index/std": [
+      26.556543449779003
+     ],
+     "stats/index/count": [
+      92
+     ],
+     "stats/index/q01": [
+      -1e-10
+     ],
+     "stats/index/q10": [
+      8.994439999919768
+     ],
+     "stats/index/q50": [
+      45.00859999999892
+     ],
+     "stats/index/q90": [
+      82.00556000008024
+     ],
+     "stats/index/q99": [
+      90.98325600009997
+     ],
+     "stats/task_index/min": [
+      0.0
+     ],
+     "stats/task_index/max": [
+      0.0
+     ],
+     "stats/task_index/mean": [
+      0.0
+     ],
+     "stats/task_index/std": [
+      0.0
+     ],
+     "stats/task_index/count": [
+      92
+     ],
+     "stats/task_index/q01": [
+      3.9999999999994176e-16
+     ],
+     "stats/task_index/q10": [
+      3.999999999999417e-15
+     ],
+     "stats/task_index/q50": [
+      1.9999999999997088e-14
+     ],
+     "stats/task_index/q90": [
+      3.599999999999476e-14
+     ],
+     "stats/task_index/q99": [
+      3.9599999999994235e-14
+     ],
+     "meta/episodes/chunk_index": 0,
+     "meta/episodes/file_index": 0
+    }
+   }
+  ],
+  "/tmp/raw/realworld_go2_task0/meta/info.json": {
+   "codebase_version": "v3.0",
+   "fps": 10,
+   "features": {
+    "observation.images.front": {
+     "dtype": "video",
+     "shape": [
+      480,
+      640,
+      3
+     ],
+     "names": [
+      "height",
+      "width",
+      "channels"
+     ],
+     "info": {
+      "is_depth_map": false,
+      "video.height": 480,
+      "video.width": 640,
+      "video.codec": "av1",
+      "video.pix_fmt": "yuv420p",
+      "video.fps": 10,
+      "video.channels": 3,
+      "has_audio": false,
+      "video.g": 2,
+      "video.crf": 30,
+      "video.preset": 12,
+      "video.fast_decode": 0,
+      "video.video_backend": "pyav",
+      "video.extra_options": {}
+     }
+    },
+    "observation.images.front_depth": {
+     "dtype": "video",
+     "shape": [
+      480,
+      640,
+      1
+     ],
+     "names": [
+      "height",
+      "width",
+      "channels"
+     ],
+     "info": {
+      "is_depth_map": true,
+      "depth_unit": "mm",
+      "video.height": 480,
+      "video.width": 640,
+      "video.codec": "hevc",
+      "video.pix_fmt": "gray12le",
+      "video.fps": 10,
+      "video.channels": 1,
+      "has_audio": false,
+      "video.g": 2,
+      "video.crf": 30,
+      "video.preset": null,
+      "video.fast_decode": 0,
+      "video.video_backend": "pyav",
+      "video.extra_options": {
+       "x265-params": "lossless=1:log-level=error"
+      },
+      "video.depth_min": 0.01,
+      "video.depth_max": 10.0,
+      "video.shift": 3.5,
+      "video.use_log": true
+     }
+    },
+    "observation.state": {
+     "dtype": "float32",
+     "shape": [
+      7
+     ],
+     "names": [
+      "vx",
+      "vy",
+      "vyaw",
+      "roll",
+      "pitch",
+      "body_height",
+      "move"
+     ]
+    },
+    "observation.pad": {
+     "dtype": "float32",
+     "shape": [
+      4
+     ],
+     "names": [
+      "lx",
+      "ly",
+      "rx",
+      "ry"
+     ]
+    },
+    "observation.move": {
+     "dtype": "float32",
+     "shape": [
+      1
+     ],
+     "names": [
+      "move"
+     ]
+    },
+    "action": {
+     "dtype": "float32",
+     "shape": [
+      3
+     ],
+     "names": [
+      "vx",
+      "vy",
+      "vyaw"
+     ]
+    },
+    "timestamp": {
+     "dtype": "float32",
+     "shape": [
+      1
+     ],
+     "names": null
+    },
+    "frame_index": {
+     "dtype": "int64",
+     "shape": [
+      1
+     ],
+     "names": null
+    },
+    "episode_index": {
+     "dtype": "int64",
+     "shape": [
+      1
+     ],
+     "names": null
+    },
+    "index": {
+     "dtype": "int64",
+     "shape": [
+      1
+     ],
+     "names": null
+    },
+    "task_index": {
+     "dtype": "int64",
+     "shape": [
+      1
+     ],
+     "names": null
+    }
+   },
+   "total_episodes": 50,
+   "total_frames": 9448,
+   "total_tasks": 1,
+   "chunks_size": 1000,
+   "data_files_size_in_mb": 100,
+   "video_files_size_in_mb": 200,
+   "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+   "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+   "robot_type": "unitree_go2",
+   "splits": {
+    "train": "0:50"
+   }
+  }
+ },
+ "represented_source_members": {
+  "json": {
+   "/tmp/raw/realworld_go2_task0/meta/info.json": [
+    "/codebase_version",
+    "/fps",
+    "/robot_type",
+    "/data_path",
+    "/video_path",
+    "/chunks_size",
+    "/features/observation.images.front/dtype",
+    "/features/observation.images.front/shape",
+    "/features/observation.images.front/names",
+    "/features/observation.images.front/info/video.codec",
+    "/features/observation.images.front_depth/dtype",
+    "/features/observation.images.front_depth/shape",
+    "/features/observation.images.front_depth/names",
+    "/features/observation.images.front_depth/info/video.codec",
+    "/features/observation.state/dtype",
+    "/features/observation.state/shape",
+    "/features/observation.state/names",
+    "/features/observation.pad/dtype",
+    "/features/observation.pad/shape",
+    "/features/observation.pad/names",
+    "/features/observation.move/dtype",
+    "/features/observation.move/shape",
+    "/features/observation.move/names",
+    "/features/action/dtype",
+    "/features/action/shape",
+    "/features/action/names",
+    "/features/timestamp/dtype",
+    "/features/timestamp/shape",
+    "/features/timestamp/names",
+    "/features/frame_index/dtype",
+    "/features/frame_index/shape",
+    "/features/frame_index/names",
+    "/features/episode_index/dtype",
+    "/features/episode_index/shape",
+    "/features/episode_index/names",
+    "/features/index/dtype",
+    "/features/index/shape",
+    "/features/index/names",
+    "/features/task_index/dtype",
+    "/features/task_index/shape",
+    "/features/task_index/names"
+   ]
+  }
+ },
+ "uploader_annotation": "{\"previous recorded notes\": {\"recorded episode metadata\": {\"/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet\": [{\"source\": \"/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet\", \"row\": 0, \"fields\": {\"episode_index\": 0, \"tasks\": [\"Walk down the hallway.\"], \"length\": 92, \"data/chunk_index\": 0, \"data/file_index\": 0, \"dataset_from_index\": 0, \"dataset_to_index\": 92, \"videos/observation.images.front/chunk_index\": 0, \"videos/observation.images.front/file_index\": 0, \"videos/observation.images.front/from_timestamp\": 0.0, \"videos/observation.images.front/to_timestamp\": 9.2, \"videos/observation.images.front_depth/chunk_index\": 0, \"videos/observation.images.front_depth/file_index\": 0, \"videos/observation.images.front_depth/from_timestamp\": 0.0, \"videos/observation.images.front_depth/to_timestamp\": 9.2, \"stats/observation.images.front/min\": [[[0.04313725605607033]], [[0.04313725605607033]], [[0.04313725605607033]]], \"stats/observation.images.front/max\": [[[1.0]], [[1.0]], [[1.0]]], \"stats/observation.images.front/mean\": [[[0.5083001852035522]], [[0.5086467266082764]], [[0.506650984287262]]], \"stats/observation.images.front/std\": [[[0.1482558399438858]], [[0.14681556820869446]], [[0.1471632570028305]]], \"stats/observation.images.front/count\": [92], \"stats/observation.images.front/q01\": [[[0.1334467456530591]], [[0.1413056612680564]], [[0.13340857807152812]]], \"stats/observation.images.front/q10\": [[[0.33329256224856524]], [[0.33717221841161166]], [[0.3293009650368517]]], \"stats/observation.images.front/q50\": [[[0.49821923740832236]], [[0.49814182405030094]], [[0.49821451083759577]]], \"stats/observation.images.front/q90\": [[[0.69408267774386]], [[0.6940584825184765]], [[0.6902436165052637]]], \"stats/observation.images.front/q99\": [[[0.9333894372482943]], [[0.9373239641423077]], [[0.9333499101279438]]], \"stats/observation.images.front_depth/min\": [[[0.0]]], \"stats/observation.images.front_depth/max\": [[[65535.0]]], \"stats/observation.images.front_depth/mean\": [[[2494.053955078125]]], \"stats/observation.images.front_depth/std\": [[[2274.697265625]]], \"stats/observation.images.front_depth/count\": [92], \"stats/observation.images.front_depth/q01\": [[[-1.000000013351432e-10]]], \"stats/observation.images.front_depth/q10\": [[[657.6373737665235]]], \"stats/observation.images.front_depth/q50\": [[[1758.190223382622]]], \"stats/observation.images.front_depth/q90\": [[[5403.815355940496]]], \"stats/observation.images.front_depth/q99\": [[[10541.199977258775]]], \"stats/observation.state/min\": [-3.0254812240600586, -0.47635820508003235, -0.643419623374939, -0.042444415390491486, -0.02589406445622444, 0.3120056688785553, 0.0], \"stats/observation.state/max\": [1.812994360923767, 0.5781516432762146, 0.4367583692073822, 0.02407105639576912, 0.06926898658275604, 0.33703431487083435, 1.0], \"stats/observation.state/mean\": [0.7602668404579163, -0.011226929724216461, 0.013582119718194008, -0.010576507076621056, 0.016225310042500496, 0.32835817337036133, 0.8260869383811951], \"stats/observation.state/std\": [0.6950932741165161, 0.15820962190628052, 0.17065149545669556, 0.013446677476167679, 0.017840377986431122, 0.004917782265692949, 0.3790346682071686], \"stats/observation.state/count\": [92], \"stats/observation.state/q01\": [-3.0254812240600586, -0.47635820508003235, -0.643419623374939, -0.042444415390491486, -0.02589406445622444, 0.3120056688785553, -1.000000013351432e-10], \"stats/observation.state/q10\": [-7.910728454589832e-05, -0.23040432333946229, -0.18970162868499757, -0.026358313113451003, -0.006857647374272346, 0.322708922624588, -1.000000013351432e-10], \"stats/observation.state/q50\": [1.0339999198913574, 0.00133475661277771, 0.03309589624404907, -0.012286297976970673, 0.01671994850039482, 0.3285195827484131, 0.9998789272810283], \"stats/observation.state/q90\": [1.3212119102478028, 0.12846646904945375, 0.1556528925895691, 0.009807481616735458, 0.03622647039592266, 0.3343902945518494, 0.9999757854562057], \"stats/observation.state/q9 [truncated]",
+ "uploader_notes": {
+  "previous recorded notes": {
+   "recorded episode metadata": {
+    "/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet": [
+     {
+      "source": "/tmp/raw/realworld_go2_task0/meta/episodes/chunk-000/file-000.parquet",
+      "row": 0,
+      "fields": {
+       "episode_index": 0,
+       "tasks": [
+        "Walk down the hallway."
+       ],
+       "length": 92,
+       "data/chunk_index": 0,
+       "data/file_index": 0,
+       "dataset_from_index": 0,
+       "dataset_to_index": 92,
+       "videos/observation.images.front/chunk_index": 0,
+       "videos/observation.images.front/file_index": 0,
+       "videos/observation.images.front/from_timestamp": 0.0,
+       "videos/observation.images.front/to_timestamp": 9.2,
+       "videos/observation.images.front_depth/chunk_index": 0,
+       "videos/observation.images.front_depth/file_index": 0,
+       "videos/observation.images.front_depth/from_timestamp": 0.0,
+       "videos/observation.images.front_depth/to_timestamp": 9.2,
+       "stats/observation.images.front/min": [
+        [
+         [
+          0.04313725605607033
+         ]
+        ],
+        [
+         [
+          0.04313725605607033
+         ]
+        ],
+        [
+         [
+          0.04313725605607033
+         ]
+        ]
+       ],
+       "stats/observation.images.front/max": [
+        [
+         [
+          1.0
+         ]
+        ],
+        [
+         [
+          1.0
+         ]
+        ],
+        [
+         [
+          1.0
+         ]
+        ]
+       ],
+       "stats/observation.images.front/mean": [
+        [
+         [
+          0.5083001852035522
+         ]
+        ],
+        [
+         [
+          0.5086467266082764
+         ]
+        ],
+        [
+         [
+          0.506650984287262
+         ]
+        ]
+       ],
+       "stats/observation.images.front/std": [
+        [
+         [
+          0.1482558399438858
+         ]
+        ],
+        [
+         [
+          0.14681556820869446
+         ]
+        ],
+        [
+         [
+          0.1471632570028305
+         ]
+        ]
+       ],
+       "stats/observation.images.front/count": [
+        92
+       ],
+       "stats/observation.images.front/q01": [
+        [
+         [
+          0.1334467456530591
+         ]
+        ],
+        [
+         [
+          0.1413056612680564
+         ]
+        ],
+        [
+         [
+          0.13340857807152812
+         ]
+        ]
+       ],
+       "stats/observation.images.front/q10": [
+        [
+         [
+          0.33329256224856524
+         ]
+        ],
+        [
+         [
+          0.33717221841161166
+         ]
+        ],
+        [
+         [
+          0.3293009650368517
+         ]
+        ]
+       ],
+       "stats/observation.images.front/q50": [
+        [
+         [
+          0.49821923740832236
+         ]
+        ],
+        [
+         [
+          0.49814182405030094
+         ]
+        ],
+        [
+         [
+          0.49821451083759577
+         ]
+        ]
+       ],
+       "stats/observation.images.front/q90": [
+        [
+         [
+          0.69408267774386
+         ]
+        ],
+        [
+         [
+          0.6940584825184765
+         ]
+        ],
+        [
+         [
+          0.6902436165052637
+         ]
+        ]
+       ],
+       "stats/observation.images.front/q99": [
+        [
+         [
+          0.9333894372482943
+         ]
+        ],
+        [
+         [
+          0.9373239641423077
+         ]
+        ],
+        [
+         [
+          0.9333499101279438
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/min": [
+        [
+         [
+          0.0
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/max": [
+        [
+         [
+          65535.0
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/mean": [
+        [
+         [
+          2494.053955078125
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/std": [
+        [
+         [
+          2274.697265625
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/count": [
+        92
+       ],
+       "stats/observation.images.front_depth/q01": [
+        [
+         [
+          -1.000000013351432e-10
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/q10": [
+        [
+         [
+          657.6373737665235
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/q50": [
+        [
+         [
+          1758.190223382622
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/q90": [
+        [
+         [
+          5403.815355940496
+         ]
+        ]
+       ],
+       "stats/observation.images.front_depth/q99": [
+        [
+         [
+          10541.199977258775
+         ]
+        ]
+       ],
+       "stats/observation.state/min": [
+        -3.0254812240600586,
+        -0.47635820508003235,
+        -0.643419623374939,
+        -0.042444415390491486,
+        -0.02589406445622444,
+        0.3120056688785553,
+        0.0
+       ],
+       "stats/observation.state/max": [
+        1.812994360923767,
+        0.5781516432762146,
+        0.4367583692073822,
+        0.02407105639576912,
+        0.06926898658275604,
+        0.33703431487083435,
+        1.0
+       ],
+       "stats/observation.state/mean": [
+        0.7602668404579163,
+        -0.011226929724216461,
+        0.013582119718194008,
+        -0.010576507076621056,
+        0.016225310042500496,
+        0.32835817337036133,
+        0.8260869383811951
+       ],
+       "stats/observation.state/std": [
+        0.6950932741165161,
+        0.15820962190628052,
+        0.17065149545669556,
+        0.013446677476167679,
+        0.017840377986431122,
+        0.004917782265692949,
+        0.3790346682071686
+       ],
+       "stats/observation.state/count": [
+        92
+       ],
+       "stats/observation.state/q01": [
+        -3.0254812240600586,
+        -0.47635820508003235,
+        -0.643419623374939,
+        -0.042444415390491486,
+        -0.02589406445622444,
+        0.3120056688785553,
+        -1.000000013351432e-10
+       ],
+       "stats/observation.state/q10": [
+        -7.910728454589832e-05,
+        -0.23040432333946229,
+        -0.18970162868499757,
+        -0.026358313113451003,
+        -0.006857647374272346,
+        0.322708922624588,
+        -1.000000013351432e-10
+       ],
+       "stats/observation.state/q50": [
+        1.0339999198913574,
+        0.00133475661277771,
+        0.03309589624404907,
+        -0.012286297976970673,
+        0.01671994850039482,
+        0.3285195827484131,
+        0.9998789272810283
+       ],
+       "stats/observation.state/q90": [
+        1.3212119102478028,
+        0.12846646904945375,
+        0.1556528925895691,
+        0.009807481616735458,
+        0.03622647039592266,
+        0.3343902945518494,
+        0.9999757854562057
+       ],
+       "stats/observation.state/q99": [
+        1.8121043682098388,
+        0.5779576873779297,
+        0.43655966997146606,
+        0.024058824479579924,
+        0.06925148010253906,
+        0.33703201174736025,
+        0.9999975785456205
+       ],
+       "stats/observation.pad/min": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+       ],
+       "stats/observation.pad/max": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+       ],
+       "stats/observation.pad/mean": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+       ],
+       "stats/observation.pad/std": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+       ],
+       "stats/observation.pad/count": [
+        92
+       ],
+       "stats/observation.pad/q01": [
+        3.9995784462121265e-16,
+        3.9995784462121265e-16,
+        3.9995784462121265e-16,
+        3.9995784462121265e-16
+       ],
+       "stats/observation.pad/q10": [
+        3.999578446212126e-15,
+        3.999578446212126e-15,
+        3.999578446212126e-15,
+        3.999578446212126e-15
+       ],
+       "stats/observation.pad/q50": [
+        1.9997892231060632e-14,
+        1.9997892231060632e-14,
+        1.9997892231060632e-14,
+        1.9997892231060632e-14
+       ],
+       "stats/observation.pad/q90": [
+        3.599620601590914e-14,
+        3.599620601590914e-14,
+        3.599620601590914e-14,
+        3.599620601590914e-14
+       ],
+       "stats/observation.pad/q99": [
+        3.959582661750005e-14,
+        3.959582661750005e-14,
+        3.959582661750005e-14,
+        3.959582661750005e-14
+       ],
+       "stats/observation.move/min": [
+        0.0
+       ],
+       "stats/observation.move/max": [
+        1.0
+       ],
+       "stats/observation.move/mean": [
+        0.8260869383811951
+       ],
+       "stats/observation.move/std": [
+        0.3790346682071686
+       ],
+       "stats/observation.move/count": [
+        92
+       ],
+       "stats/observation.move/q01": [
+        -1.000000013351432e-10
+       ],
+       "stats/observation.move/q10": [
+        -1.000000013351432e-10
+       ],
+       "stats/observation.move/q50": [
+        0.9998789272810283
+       ],
+       "stats/observation.move/q90": [
+        0.9999757854562057
+       ],
+       "stats/observation.move/q99": [
+        0.9999975785456205
+       ],
+       "stats/action/min": [
+        -3.0255000591278076,
+        -0.4763999879360199,
+        -0.6434000134468079
+       ],
+       "stats/action/max": [
+        1.812999963760376,
+        0.5781999826431274,
+        0.4368000030517578
+       ],
+       "stats/action/mean": [
+        0.7597804665565491,
+        -0.015738043934106827,
+        0.0005641289753839374
+       ],
+       "stats/action/std": [
+        0.695595920085907,
+        0.15727289021015167,
+        0.16357393562793732
+       ],
+       "stats/action/count": [
+        92
+       ],
+       "stats/action/q01": [
+        -3.0255000591278076,
+        -0.4763999879360199,
+        -0.6434000134468079
+       ],
+       "stats/action/q10": [
+        -0.00013659000396728512,
+        -0.23042508959770203,
+        -0.18967283368110657
+       ],
+       "stats/action/q50": [
+        1.034001111984253,
+        -4.722177982330322e-05,
+        8.367356799897692e-05
+       ],
+       "stats/action/q90": [
+        1.321214532852173,
+        0.12826548218727113,
+        0.15547264814376832
+       ],
+       "stats/action/q99": [
+        1.8121094226837158,
+        0.5780059719085693,
+        0.4366012215614319
+       ],
+       "stats/timestamp/min": [
+        0.0
+       ],
+       "stats/timestamp/max": [
+        9.1
+       ],
+       "stats/timestamp/mean": [
+        4.55
+       ],
+       "stats/timestamp/std": [
+        2.6556543449779006
+       ],
+       "stats/timestamp/count": [
+        92
+       ],
+       "stats/timestamp/q01": [
+        -1e-10
+       ],
+       "stats/timestamp/q10": [
+        0.899443999919768
+       ],
+       "stats/timestamp/q50": [
+        4.500859999998919
+       ],
+       "stats/timestamp/q90": [
+        8.200556000080232
+       ],
+       "stats/timestamp/q99": [
+        9.098325600099963
+       ],
+       "stats/frame_index/min": [
+        0.0
+       ],
+       "stats/frame_index/max": [
+        91.0
+       ],
+       "stats/frame_index/mean": [
+        45.5
+       ],
+       "stats/frame_index/std": [
+        26.556543449779003
+       ],
+       "stats/frame_index/count": [
+        92
+       ],
+       "stats/frame_index/q01": [
+        -1e-10
+       ],
+       "stats/frame_index/q10": [
+        8.994439999919768
+       ],
+       "stats/frame_index/q50": [
+        45.00859999999892
+       ],
+       "stats/frame_index/q90": [
+        82.00556000008024
+       ],
+       "stats/frame_index/q99": [
+        90.98325600009997
+       ],
+       "stats/episode_index/min": [
+        0.0
+       ],
+       "stats/episode_index/max": [
+        0.0
+       ],
+       "stats/episode_index/mean": [
+        0.0
+       ],
+       "stats/episode_index/std": [
+        0.0
+       ],
+       "stats/episode_index/count": [
+        92
+       ],
+       "stats/episode_index/q01": [
+        3.9999999999994176e-16
+       ],
+       "stats/episode_index/q10": [
+        3.999999999999417e-15
+       ],
+       "stats/episode_index/q50": [
+        1.9999999999997088e-14
+       ],
+       "stats/episode_index/q90": [
+        3.599999999999476e-14
+       ],
+       "stats/episode_index/q99": [
+        3.9599999999994235e-14
+       ],
+       "stats/index/min": [
+        0.0
+       ],
+       "stats/index/max": [
+        91.0
+       ],
+       "stats/index/mean": [
+        45.5
+       ],
+       "stats/index/std": [
+        26.556543449779003
+       ],
+       "stats/index/count": [
+        92
+       ],
+       "stats/index/q01": [
+        -1e-10
+       ],
+       "stats/index/q10": [
+        8.994439999919768
+       ],
+       "stats/index/q50": [
+        45.00859999999892
+       ],
+       "stats/index/q90": [
+        82.00556000008024
+       ],
+       "stats/index/q99": [
+        90.98325600009997
+       ],
+       "stats/task_index/min": [
+        0.0
+       ],
+       "stats/task_index/max": [
+        0.0
+       ],
+       "stats/task_index/mean": [
+        0.0
+       ],
+       "stats/task_index/std": [
+        0.0
+       ],
+       "stats/task_index/count": [
+        92
+       ],
+       "stats/task_index/q01": [
+        3.9999999999994176e-16
+       ],
+       "stats/task_index/q10": [
+        3.999999999999417e-15
+       ],
+       "stats/task_index/q50": [
+        1.9999999999997088e-14
+       ],
+       "stats/task_index/q90": [
+        3.599999999999476e-14
+       ],
+       "stats/task_index/q99": [
+        3.9599999999994235e-14
+       ],
+       "meta/episodes/chunk_index": 0,
+       "meta/episodes/file_index": 0
+      }
+     }
+    ],
+    "/tmp/raw/realworld_go2_task0/meta/info.json": {
+     "features": {
+      "observation.images.front": {
+       "info": {
+        "is_depth_map": false,
+        "video.height": 480,
+        "video.width": 640,
+        "video.pix_fmt": "yuv420p",
+        "video.fps": 10,
+        "video.channels": 3,
+        "has_audio": false,
+        "video.g": 2,
+        "video.crf": 30,
+        "video.preset": 12,
+        "video.fast_decode": 0,
+        "video.video_backend": "pyav"
+       }
+      },
+      "observation.images.front_depth": {
+       "info": {
+        "is_depth_map": true,
+        "depth_unit": "mm",
+        "video.height": 480,
+        "video.width": 640,
+        "video.pix_fmt": "gray12le",
+        "video.fps": 10,
+        "video.channels": 1,
+        "has_audio": false,
+        "video.g": 2,
+        "video.crf": 30,
+        "video.fast_decode": 0,
+        "video.video_backend": "pyav",
+        "video.extra_options": {
+         "x265-params": "lossless=1:log-level=error"
+        },
+        "video.depth_min": 0.01,
+        "video.depth_max": 10.0,
+        "video.shift": 3.5,
+        "video.use_log": true
+       }
+      }
+     },
+     "total_episodes": 50,
+     "total_frames": 9448,
+     "total_tasks": 1,
+     "data_files_size_in_mb": 100,
+     "video_files_size_in_mb": 200,
+     "splits": {
+      "train": "0:50"
+     }
+    }
+   }
+  },
+  "recorded annotation data source": "/tmp/raw/realworld_go2_task0/data/chunk-000/file-000.parquet",
+  "recorded annotation tables": {
+   "/tmp/raw/realworld_go2_task0/meta/tasks.parquet": {
+    "task_index": {
+     "labels": {
+      "0": {
+       "label": "Walk down the hallway.",
+       "notes": {
+        "task": "Walk down the hallway."
+       },
+       "claims": [
+        {
+         "row": 0,
+         "value": 0,
+         "fields": {
+          "task": "Walk down the hallway."
+         },
+         "source": "/tmp/raw/realworld_go2_task0/meta/tasks.parquet",
+         "table_key": "task_index"
+        }
+       ],
+       "why": null
+      }
+     },
+     "issues": []
+    }
+   }
+  },
+  "recorded annotation spans": {},
+  "unresolved recorded annotation rows": {}
+ },
+ "reader_issues": [
+  {
+   "kind": "metadata_limit",
+   "what": "Recorded episode metadata exceeds the prompt note limit; complete original claims and source paths remain in the episode context and uploader notes."
+  },
+  {
+   "kind": "metadata_limit",
+   "what": "file-000.parquet and its recorded metadata exceed the prompt note limit; complete original rows and source claims remain in the episode context and uploader notes.",
+   "source": "/tmp/raw/realworld_go2_task0/data/chunk-000/file-000.parquet"
+  }
+ ],
+ "annotation_task_claims": [
+  {
+   "source": "/tmp/raw/realworld_go2_task0/meta/tasks.parquet",
+   "column": "task_index",
+   "value": 0,
+   "values": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "row_start": 0,
+   "row_end": 91,
+   "raw_times": [
+    0.0,
+    0.10000000149011612,
+    0.20000000298023224,
+    0.30000001192092896,
+    0.4000000059604645,
+    0.5,
+    0.6000000238418579,
+    0.699999988079071,
+    0.800000011920929,
+    0.8999999761581421,
+    1.0,
+    1.100000023841858,
+    1.2000000476837158,
+    1.2999999523162842,
+    1.399999976158142,
+    1.5,
+    1.600000023841858,
+    1.7000000476837158,
+    1.7999999523162842,
+    1.899999976158142,
+    2.0,
+    2.0999999046325684,
+    2.200000047683716,
+    2.299999952316284,
+    2.4000000953674316,
+    2.5,
+    2.5999999046325684,
+    2.700000047683716,
+    2.799999952316284,
+    2.9000000953674316,
+    3.0,
+    3.0999999046325684,
+    3.200000047683716,
+    3.299999952316284,
+    3.4000000953674316,
+    3.5,
+    3.5999999046325684,
+    3.700000047683716,
+    3.799999952316284,
+    3.9000000953674316,
+    4.0,
+    4.099999904632568,
+    4.199999809265137,
+    4.300000190734863,
+    4.400000095367432,
+    4.5,
+    4.599999904632568,
+    4.699999809265137,
+    4.800000190734863,
+    4.900000095367432,
+    5.0,
+    5.099999904632568,
+    5.199999809265137,
+    5.300000190734863,
+    5.400000095367432,
+    5.5,
+    5.599999904632568,
+    5.699999809265137,
+    5.800000190734863,
+    5.900000095367432,
+    6.0,
+    6.099999904632568,
+    6.199999809265137,
+    6.300000190734863,
+    6.400000095367432,
+    6.5,
+    6.599999904632568,
+    6.699999809265137,
+    6.800000190734863,
+    6.900000095367432,
+    7.0,
+    7.099999904632568,
+    7.199999809265137,
+    7.300000190734863,
+    7.400000095367432,
+    7.5,
+    7.599999904632568,
+    7.699999809265137,
+    7.800000190734863,
+    7.900000095367432,
+    8.0,
+    8.100000381469727,
+    8.199999809265137,
+    8.300000190734863,
+    8.399999618530273,
+    8.5,
+    8.600000381469727,
+    8.699999809265137,
+    8.800000190734863,
+    8.899999618530273,
+    9.0,
+    9.100000381469727
+   ],
+   "label": "Walk down the hallway.",
+   "notes": {
+    "task": "Walk down the hallway."
+   },
+   "claims": [
+    {
+     "row": 0,
+     "value": 0,
+     "fields": {
+      "task": "Walk down the hallway."
+     },
+     "source": "/tmp/raw/realworld_go2_task0/meta/tasks.parquet",
+     "table_key": "task_index"
+    }
+   ],
+   "t0": 0.0,
+   "timing_reason": "no measured end boundary on the recorded clock",
+   "data_source": "/tmp/raw/realworld_go2_task0/data/chunk-000/file-000.parquet",
+   "raw_t0": 0.0,
+   "clock_mapping": "recorded frame_index / fps on this episode's video frames"
+  }
+ ],
+ "annotation_subtasks": [],
+ "annotation_unresolved": [],
+ "annotation_tables": {
+  "/tmp/raw/realworld_go2_task0/meta/tasks.parquet": {
+   "task_index": {
+    "labels": {
+     "0": {
+      "label": "Walk down the hallway.",
+      "notes": {
+       "task": "Walk down the hallway."
+      },
+      "claims": [
+       {
+        "row": 0,
+        "value": 0,
+        "fields": {
+         "task": "Walk down the hallway."
+        },
+        "source": "/tmp/raw/realworld_go2_task0/meta/tasks.parquet",
+        "table_key": "task_index"
+       }
+      ],
+      "why": null
+     }
+    },
+    "issues": []
+   }
+  }
+ },
+ "depth": {
+  "exo": {
+   "units": "relative",
+   "scale_m": null,
+   "kind": "depth",
+   "source": "observation.images.front_depth",
+   "paired_camera": "exo",
+   "source_key": "observation.images.front_depth"
+  }
+ },
+ "signals": [
+  {
+   "name": "observation.state",
+   "key": "s0",
+   "dims": 7,
+   "names": [
+    "vx",
+    "vy",
+    "vyaw",
+    "roll",
+    "pitch",
+    "body_height",
+    "move"
+   ],
+   "source": "column observation.state",
+   "source_dtype": "float32",
+   "units_undeclared": true
+  },
+  {
+   "name": "observation.pad",
+   "key": "s1",
+   "dims": 4,
+   "names": [
+    "lx",
+    "ly",
+    "rx",
+    "ry"
+   ],
+   "source": "column observation.pad",
+   "source_dtype": "float32",
+   "units_undeclared": true
+  },
+  {
+   "name": "observation.move",
+   "key": "s2",
+   "dims": 1,
+   "names": [
+    "move"
+   ],
+   "source": "column observation.move",
+   "source_dtype": "float32",
+   "units_undeclared": true
+  },
+  {
+   "name": "action",
+   "key": "s3",
+   "dims": 3,
+   "names": [
+    "vx",
+    "vy",
+    "vyaw"
+   ],
+   "source": "column action",
+   "source_dtype": "float32",
+   "units_undeclared": true
+  }
+ ],
+ "recorded_state_archive": {
+  "file": "state.npz",
+  "source_column": "observation.state",
+  "source": "/tmp/raw/realworld_go2_task0/data/chunk-000/file-000.parquet",
+  "shape": [
+   92,
+   7
+  ],
+  "row_count": 92,
+  "dtype": "float32",
+  "meaning": "Unsupported native rows retained without an inferred layout or camera alignment."
+ },
+ "whole_body": "legged_no_arms"
+}

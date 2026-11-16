@@ -1,0 +1,8 @@
+{
+ "exo": {
+  "packed": "/tmp/raw/realworld_go2_task0/videos/observation.images.front/chunk-000/file-000.mp4",
+  "base_s": 0.0,
+  "n_frames": 92,
+  "camera_key": "observation.images.front"
+ }
+}

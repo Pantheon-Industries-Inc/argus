@@ -160,6 +160,14 @@ def load(ep_dir: Path) -> dict:
             interpretation = field_interpretation(ctx, name)
             if interpretation:
                 meta["dictionary"] = interpretation
+        # each signal's kind (prepare/signal_kind.py), as preparation saved it or, for an episode prepared before it
+        # did, from the same names, so the signals policy (label/policy.py SIGNAL_TREATMENT) treats both alike. The kind
+        # stays out of signal_meta, the descriptor every other reader (the checks, inspection, the dictionary) takes
+        from prepare.signal_kind import kind_of
+        ep["signal_kind"] = {}
+        for name, meta in ep["signal_meta"].items():
+            saved = meta.pop("stream_kind", None)
+            ep["signal_kind"][name] = kind_of(name, {**meta, "stream_kind": saved}, ep["signals"][name])
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
@@ -1032,7 +1040,8 @@ def _contact_views(ep: dict, c: dict) -> tuple[list[str], list[str], list[str]]:
         mounted = [v for v in vs if v in MOUNTED]
         near = own or (mounted[:1] if len(mounted) == 1 and c.get("hand") is None else []) or vs[:1]
     peak = near + [v for v in vs[:1] if v not in near]
-    return near, peak, [v for v in peak if v in (ep.get("depth") or {})]
+    # depth rides beside the strongest moment only when the policy sends depth pictures (depth_pictures)
+    return near, peak, [v for v in peak if v in (ep.get("depth") or {}) and depth_pictures(ep)]
 
 
 def _frame_at(ep: dict, t_s: float) -> int:
@@ -1414,6 +1423,9 @@ def _depth_note(ep: dict) -> str:
                         + (' has' if len(unpaired) == 1 else ' have')
                         + ' no recorded RGB camera pairing. Display slots do not establish common sensors '
                         'or image coordinates with the colour views. ')
+    if not depth_pictures(ep):
+        # the signals policy keeps depth pictures out of the request (label/policy.py SIGNAL_TREATMENT depth)
+        return "\nDEPTH: " + description + "Its pictures are not in this request." + precision
     return ("\nDEPTH: " + description + 'Detail views are followed by available recorded depth at the displayed instants.'
             + precision
             + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
@@ -1670,7 +1682,159 @@ def signal_readout_budget(instants: int) -> int:
                                          SIGNAL_TABLE_CHARS_PER_INSTANT * instants))
 
 
+def signals_mode(ep: dict) -> str:
+    """The annotation policy's signals mode for this episode (label/policy.py SIGNALS_MODES)."""
+    return policy.signals_mode(policy.effective(ep["context"]))
+
+
+def signal_kinds(ep: dict) -> dict:
+    """{signal: kind} (prepare/signal_kind.py): as load() read them, or for an episode put together without load(),
+    derived now from the same evidence. The episode is left as it was."""
+    from label.dictionary_context import field_interpretation
+    from prepare.signal_kind import kind_of
+    saved = ep.get("signal_kind") or {}
+    meta = ep.get("signal_meta") or {}
+    out = {}
+    for name, a in (ep.get("signals") or {}).items():
+        if name in saved:
+            out[name] = saved[name]
+            continue
+        m = meta.get(name) or {}
+        out[name] = kind_of(name, {**m, "dictionary": m.get("dictionary") or field_interpretation(ep["context"], name)},
+                            a)
+    return out
+
+
+def signal_treatments(ep: dict, pl: dict | None = None) -> dict:
+    """{signal: what the policy gives it} (label/policy.py signal_treatment). A signal the episode's touch verdicts
+    (touch_verdicts) judge touch is treated as touch whatever its kind, since its numbers behave as touch does."""
+    mode = signals_mode(ep)
+    sig = ep.get("signals") or {}
+    if mode == "all":
+        return {name: dict(policy.TODAY) for name in sig}
+    kinds = signal_kinds(ep)
+    touch = _touch(ep, pl) if pl is not None else frozenset()
+    return {name: policy.signal_treatment("touch" if name in touch else kinds[name], mode) for name in sig}
+
+
+def _rows_view(ep: dict, pl: dict) -> dict:
+    """The episode as the rows of the signals block see it: every signal under all, else only those the policy gives
+    rows. The episode itself is not changed."""
+    if signals_mode(ep) == "all" or not ep.get("signals"):
+        return ep
+    shown = signal_treatments(ep, pl)
+    keep = {name: a for name, a in ep["signals"].items() if shown[name]["prompt"] == "rows"}
+    return ep if len(keep) == len(ep["signals"]) else {**ep, "signals": keep}
+
+
+def depth_pictures(ep: dict) -> bool:
+    """Whether the request carries depth pictures beside its detail views and contacts (label/policy.py
+    SIGNAL_TREATMENT depth): only under all. Otherwise the depth note stays and the pictures are fetchable through
+    inspection when a request carries one."""
+    return policy.signal_treatment("depth", signals_mode(ep))["prompt"] == "rows"
+
+
+SPIKE_DEVIATIONS = 8.0   # a reading this many robust deviations (1.4826 x MAD) from its value's median is a spike
+SPIKE_SHARE = 0.5        # and at least this share of the value's own range from its median
+SPIKES_TIMED = 3         # the largest spikes of a one line signal given with their times
+ONE_LINE_MOVED = 0.1     # a change over a still span of this share of the signal's own range is a move
+KIND_WORDS = {"imu": "IMU", "velocity": "velocity", "effort": "effort", "base": "base motion or controller input"}
+
+
+def _spikes(ep: dict, a: np.ndarray) -> str:
+    """"2 spikes, the largest at 20.00s and 11.00s": the short excursions of a signal, a run of frames where any value
+    is further than SPIKE_DEVIATIONS robust deviations from its median, with the times of the largest."""
+    a = np.asarray(a, dtype=np.float64)
+    read = np.isfinite(a).any(axis=0)
+    if not read.any():
+        return ""
+    a = a[:, read]
+    med = np.nanmedian(a, axis=0)
+    mad = 1.4826 * np.nanmedian(np.abs(a - med), axis=0)
+    ok = mad > 0
+    if not ok.any():
+        return ""
+    away = np.abs(a[:, ok] - med[ok])
+    dev = np.where(np.isfinite(away), away / mad[ok], 0.0)
+    # far outside the usual spread and a large part of the value's own range: a velocity that rests at zero has a
+    # spread of almost nothing, and every move would otherwise be a spike
+    span = np.nanmax(a[:, ok], axis=0) - np.nanmin(a[:, ok], axis=0)
+    big = np.where(np.isfinite(away), away, 0.0) > SPIKE_SHARE * span
+    z = np.where(big, dev, 0.0).max(axis=1)
+    hot = z > SPIKE_DEVIATIONS
+    if not hot.any():
+        return "no spikes"
+    edges = np.flatnonzero(np.diff(np.r_[0, hot.astype(np.int8), 0]))
+    runs = list(zip(edges[::2], edges[1::2]))
+    peaks = sorted(runs, key=lambda r: -float(z[r[0]:r[1]].max()))[:SPIKES_TIMED]
+    times = [_seconds_number(frame_time(ep, int(s + np.argmax(z[s:e]))), 2) + "s" for s, e in peaks]
+    said = times[0] if len(times) == 1 else ", ".join(times[:-1]) + " and " + times[-1]
+    return (f"{len(runs)} spike{'s' if len(runs) != 1 else ''}, "
+            + (f"at {said}" if len(runs) == 1 else f"the largest at {said}"))
+
+
+def _one_line(ep: dict, pl: dict, name: str, kind: str, untimed: bool) -> str:
+    """One signal in one line: its range, whether it moved over each recorded still span, and its spikes. A signal
+    with no established time on the video is given only as its range."""
+    from label import signals as sg
+    a = ep["signals"][name][:pl["n"]]
+    width = int(np.prod(np.shape(a)[1:])) if np.ndim(a) > 1 else 1
+    what = ", ".join(x for x in (KIND_WORDS.get(kind, ""), f"{width} value{'s' if width != 1 else ''}") if x)
+    if not len(a) or not np.isfinite(a).any():
+        return f"  {name} ({what}): no reading"
+    low, high = (np.asarray(x, dtype=np.float64) for x in sg.finite_range(a))
+    parts = [f"{sg.reading_text(float(np.nanmin(low)))} to {sg.reading_text(float(np.nanmax(high)))}"]
+    if untimed:
+        return f"  {name} ({what}): " + parts[0] + ", with no established time on the video"
+    span = float(np.nanmax(high - low))
+    if pl["spans"]:
+        moved = []
+        for a0, b0 in pl["spans"]:
+            seg = a[a0:b0 + 1]
+            if not np.isfinite(seg).any():
+                continue
+            s_lo, s_hi = sg.finite_range(seg)
+            if span > 0 and float(np.nanmax(np.asarray(s_hi) - np.asarray(s_lo))) > ONE_LINE_MOVED * span:
+                moved.append(f"{frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, pl['n'] - 1)):.2f}s")
+        parts.append(("moved during the still span" + ("s " if len(moved) > 1 else " ") + ", ".join(moved))
+                     if moved else "steady over every recorded still span")
+    spikes = _spikes(ep, a)
+    if spikes:
+        parts.append(spikes)
+    return f"  {name} ({what}): " + "; ".join(parts)
+
+
 def _signals_table(ep: dict, pl: dict) -> str:
+    """The signals block under the annotation policy's signals mode (label/policy.py): under all, every signal as
+    _signals_rows_text gives it; otherwise the signals the policy gives rows as it gives them, then the one line ones
+    (_one_line), then the names of those it drops, once, so the model knows they exist."""
+    if signals_mode(ep) == "all" or not ep.get("signals"):
+        return _signals_rows_text(ep, pl)
+    shown = signal_treatments(ep, pl)
+    kinds = signal_kinds(ep)
+    view = _rows_view(ep, pl)
+    text = _signals_rows_text(view, pl) if view.get("signals") else ""
+    untimed = untimed_signals(ep)
+    lines = [_one_line(ep, pl, name, kinds[name], name in untimed)
+             for name in ep["signals"] if shown[name]["prompt"] == "one_line"]
+    if lines:
+        lines.insert(0, "  These are given in one line each: the range of their values, whether they moved over each "
+                        "recorded still span, and their spikes (readings far outside their usual spread); their values "
+                        "at each instant are not given:")
+    dropped = [name for name in ep["signals"] if shown[name]["prompt"] == "drop"]
+    if dropped:
+        lines.append(("  Also recorded but not given here: " if text or lines else "  Recorded but not given here: ")
+                     + "; ".join(dropped) + ".")
+    if not lines:
+        return text
+    if not text:
+        text = ("\nOTHER RECORDED SIGNALS: the other numbers the dataset records per frame, under the dataset's own "
+                "names. Like the rest of the recording they are claims to check against the video; a camera carried "
+                "by something they show moving (a mobile base, a torso) moves with it.")
+    return text + "\n" + "\n".join(lines)
+
+
+def _signals_rows_text(ep: dict, pl: dict) -> str:
     """The recording's other per-frame numbers (ep["signals"], under the dataset's own names): every one listed once
     with its shape, its value names and the range its values take (label/signals.py describe); over each recorded
     still span how much each one changed (the claim they bear on: a mobile base can drive while the arms are still);
@@ -1776,6 +1940,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     """
     from label import signals as sg
     from label.dictionary_context import field_interpretation
+    ep = _rows_view(ep, pl)     # only the signals the policy gives rows (label/policy.py SIGNAL_TREATMENT)
     sig = ep.get("signals") or {}
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
@@ -3036,13 +3201,13 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                   max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
                   example_dir=None, inspect_evidence=False, model=None, reasoning=None,
                   sample_fps=None, task_mode=None, dataset_note=None, derived_dir=None, read_only=False,
-                  inspection=None) -> dict:
+                  inspection=None, signals=None) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell. task_mode
     only reproduces a saved policy (label/policy.py resolve); it never changes the request."""
     ep = load(ep_dir)
     ep['context']['annotation_policy'] = policy.resolve(ep['context'], model=model, reasoning=reasoning,
-        sample_fps=sample_fps, task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
+        sample_fps=sample_fps, task_mode=task_mode, dataset_note=dataset_note, inspection=inspection, signals=signals)
     policy.require_request_window(ep['context'], request_duration(ep))
     from prepare import jaws
     ep['jaw_evidence'] = (jaws.for_episode(ep, derived_dir, read_only=True) if read_only
@@ -3080,7 +3245,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     array_bytes = sum(len(base64.b64decode(p['image_url']['url'].split(',', 1)[1]))
                       for p in array_parts if p['type'] == 'image_url')
     # depth at the detail instants, and one colour scale per camera from its readings at the sampled instants
-    depth_at = _depth_frames(ep, pl)
+    depth_at = _depth_frames(ep, pl) if depth_pictures(ep) else {}
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)

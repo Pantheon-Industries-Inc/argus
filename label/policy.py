@@ -36,6 +36,62 @@ def inspection_mode(selected: dict) -> str:
     return selected.get('inspection', LEGACY_INSPECTION)
 
 
+# What the model is given of each kind of recorded stream (prepare/signal_kind.py KINDS), on every path to it:
+# - prompt: rows, the stream as the signals block gives it, its range and its values at the sampled instants (a touch
+#   signal's timing as the episode's contacts); one_line, one line of its range, whether it moved over each still span
+#   and its spikes; drop, its name in one short list, so the model knows it exists; note, for depth, the depth note
+#   without its pictures beside the detail views.
+# - inspection: whether evidence inspection (label/evidence_access.py) lists it, so the model can fetch it at full rate
+#   when a request carries an inspection. Leaving the rows never buys an inspection: it runs for its own reasons.
+# - sensor_evidence: whether it may enter the sensor evidence series (label/sensor_evidence.py). A force/torque sensor
+#   is given once, as rows.
+# The defaults are the design of 2026-11-16: the actor's own configuration and touch as rows; IMU, velocities, arm
+# effort, base motion and controller inputs as one line; settings and bookkeeping dropped. A kind goes back to rows
+# when an A/B on real datasets shows its labels need it.
+PROMPT_TREATMENTS = ('rows', 'one_line', 'drop', 'note')
+SIGNAL_TREATMENT = {
+    'joints': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
+    'gripper': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
+    'pose': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
+    'touch': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': True},
+    'force_torque': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
+    'imu': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+    'velocity': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+    'effort': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+    'base': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+    'depth': {'prompt': 'note', 'inspection': True, 'sensor_evidence': False},
+    'constant': {'prompt': 'drop', 'inspection': False, 'sensor_evidence': False},
+    'bookkeeping': {'prompt': 'drop', 'inspection': False, 'sensor_evidence': False},
+    'unknown': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+}
+# what every stream got before the table, and what all gives it: rows, depth pictures, inspection and sensor evidence
+TODAY = {'prompt': 'rows', 'inspection': True, 'sensor_evidence': True}
+# auto is the table, and all is the behaviour before it, exactly. off names every stream in one list and gives no
+# rows, while inspection and sensor evidence keep what auto gives them
+SIGNALS_MODES = ('auto', 'all', 'off')
+SIGNALS = 'auto'
+# a policy saved before the setting existed labelled every stream as all does, so it resumes that way and a job labelled
+# then rebinds the requests it paid for (as LEGACY_INSPECTION); never written
+LEGACY_SIGNALS = 'all'
+
+
+def signals_mode(selected: dict) -> str:
+    """The signals mode of a resolved or saved policy."""
+    return selected.get('signals', LEGACY_SIGNALS)
+
+
+def signal_treatment(kind: str, mode: str) -> dict:
+    """What a stream of this kind gets under this signals mode: {prompt, inspection, sensor_evidence}."""
+    if mode not in SIGNALS_MODES:
+        raise ValueError(f'signals must be one of {", ".join(SIGNALS_MODES)}')
+    if mode == 'all':
+        return dict(TODAY)
+    treatment = dict(SIGNAL_TREATMENT.get(kind, SIGNAL_TREATMENT['unknown']))
+    if mode == 'off':
+        treatment['prompt'] = 'drop'
+    return treatment
+
+
 def output_limit(answer_tokens: int, reasoning: str) -> int:
     """max_completion_tokens for a call that writes up to answer_tokens at this reasoning effort."""
     if reasoning not in REASONING_TOKENS:
@@ -49,7 +105,7 @@ FIELD_DICTIONARY = False
 def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None,
             sample_fps: float | None = None, task_mode: str | None = None,
             dataset_note: str | None = None, inspection: str | None = None,
-            field_dictionary: bool | None = None) -> dict:
+            field_dictionary: bool | None = None, signals: str | None = None) -> dict:
     """Source declarations and caller overrides, independent of dataset names or absent task text."""
     saved = ctx.get('annotation_policy') or {}
     if saved and (not isinstance(saved, dict) or saved.get('version') != VERSION):
@@ -99,6 +155,9 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
     inspect = inspection if inspection is not None else inspection_mode(saved) if saved else INSPECTION
     if inspect not in INSPECTION_MODES:
         raise ValueError(f'inspection must be one of {", ".join(INSPECTION_MODES)}')
+    shown = signals if signals is not None else signals_mode(saved) if saved else SIGNALS
+    if shown not in SIGNALS_MODES:
+        raise ValueError(f'signals must be one of {", ".join(SIGNALS_MODES)}')
     # a new policy has no field dictionary unless asked for: arm state alone qualifies an upload for the call, so it
     # ran on nearly every teleop upload. A policy saved without the key was made when the dictionary ran by default,
     # and resumes with it
@@ -112,6 +171,7 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
             **({'task_mode': mode} if mode is not None else {}),
             'dataset_note': note,
             **({'inspection': inspect} if inspect != LEGACY_INSPECTION else {}),
+            **({'signals': shown} if shown != LEGACY_SIGNALS else {}),
             **({'field_dictionary': False} if not dictionary else {})}
 
 
@@ -130,6 +190,10 @@ def add_arguments(parser) -> None:
                         help='paid evidence selection before each annotation: auto (default) for a recording with a '
                              'touch sensor (not a force/torque sensor alone) or fields the prompt does not carry, all '
                              'for any recording with recorded fields beyond its cameras, depth included, off for none')
+    parser.add_argument('--signals', choices=SIGNALS_MODES, default=None,
+                        help='what the prompt carries of each recorded stream: auto (default) by its kind '
+                             '(label/policy.py SIGNAL_TREATMENT), all for every stream as rows and every depth '
+                             'picture, off for one list of their names')
 
 
 def persist(episodes, **overrides) -> dict:

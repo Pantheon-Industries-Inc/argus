@@ -312,12 +312,22 @@ def build(ep, pl, *, shown=None, images=None, native_images=None, capture_select
         return doc
     doc['episode_window_s'] = frame_window(ep, n)
     numeric = []
+    # the signals policy (label/policy.py SIGNAL_TREATMENT) gives a force/torque sensor once, as rows of the signals
+    # block, so under auto and off its series are not supplied here too; a touch reading always is. The treatments are
+    # read by kind alone (no touch verdicts, which judge every signal's numbers) and only when a force/torque is found
+    from label.episode import signal_treatments
+    treatments = None
     for meta in ctx.get('signals') or []:
         name = meta['name']
         entry = field_interpretation(ctx, name)
         quantity = _quantity(name, entry, _columns(ep, name))
         if quantity is None and not names_touch(name):
             continue
+        # a force/torque array (a grid of cells) is no wrist sensor: its regional analysis is owned by the evidence
+        if quantity == 'force_torque' and (_columns(ep, name) or 0) <= MAX_SERIES:
+            treatments = signal_treatments(ep) if treatments is None else treatments
+            if not treatments.get(name, {'sensor_evidence': True})['sensor_evidence']:
+                continue
         status = ('excluded by interpretation' if sg.touch_permission(name, entry.get('role')) is False
                   else 'unsupported interpretation' if quantity is None
                   else 'readings unavailable' if name not in ep.get('signals', {}) else 'pending')
