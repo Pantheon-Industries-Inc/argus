@@ -54,12 +54,13 @@ def _keys() -> str:
 
 def run_policy(extra: list[str]) -> dict:
     """The policy settings the harness is given after -- (--model, --reasoning, --sample-fps, --dataset-note,
-    --inspection), as label/policy.py resolve takes them."""
+    --inspection, --signals), as label/policy.py resolve takes them."""
     from label import policy
     ap = argparse.ArgumentParser(add_help=False)
     policy.add_arguments(ap)
     known, _ = ap.parse_known_args([x for x in extra if x != "--"])
-    return {k: getattr(known, k) for k in ("model", "reasoning", "sample_fps", "dataset_note", "inspection")}
+    return {k: getattr(known, k) for k in ("model", "reasoning", "sample_fps", "dataset_note", "inspection",
+                                           "signals")}
 
 
 def plan_pieces(run: Path, slice_dir: Path, extra: list[str]) -> dict:

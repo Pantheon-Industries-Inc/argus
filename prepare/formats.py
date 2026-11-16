@@ -3866,6 +3866,10 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
                                                 f"{len(rows)} frame{'s' if len(rows) != 1 else ''}; read as missing",
                       signal=k, t0_s=float(t[rows[0]] - t[0]), t1_s=float(t[rows[-1]] - t[0]))
         arrays[key] = a                    # every original array keeps its key and values, including bookkeeping
+        # the stream's kind for the signals policy (prepare/signal_kind.py), from its readings, names and declarations;
+        # a reader's "kind" is what its message type said (mcap_signals) and decides only below them
+        from prepare.signal_kind import signal_kind
+        from_schema = m.pop("kind", None)
         cols, why = bookkeeping_columns(k, m, a.shape[1])
         if cols:
             names = m.get("names")
@@ -3891,7 +3895,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
             m["unnamed"] = True
             if searched:
                 m["names_searched"] = searched
-        readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m})
+        readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m,
+                         "kind": signal_kind(k, m, a, from_schema=from_schema)})
         if k not in quiet:
             for issue in signal_gaps(k, a, t):
                 if m.get("camera_aligned_by") == ALIGNED_CAMERA:
@@ -10981,6 +10986,11 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
         out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}", origin=origin)
         out.meta[name]["rate_hz"] = round(rate, 2)
         out.meta[name]["span_s"] = readings_s
+        # what the channel's message type says the field is (sensor_msgs/msg/Imu), which write_signals reads when it
+        # sets the signal's kind (prepare/signal_kind.py)
+        from prepare.signal_kind import schema_kind
+        if schema_kind(kinds.get(r["topic"], "")):
+            out.meta[name]["kind"] = schema_kind(kinds.get(r["topic"], ""))
         if capture_clock:
             clocks = clock_sources[r["topic"]]
             errors = clock_errors.get(r["topic"], set())
