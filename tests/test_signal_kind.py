@@ -52,7 +52,6 @@ REAL = {
     "/left/joint_states effort": "effort",
     "/left/joint_command position": "joints",
     "/left-arm-state torque": "effort",
-    "/left-ee-state velocity": "velocity",
     # end effector, hand and body poses
     "observation.ee_pose": "pose",
     "obs/robot0_eef_pos": "pose",
@@ -61,6 +60,9 @@ REAL = {
     "observation.hand_keypoints.left": "pose",
     "head_pose": "pose",
     "right_wrist_pos": "pose",
+    # FreeTacMan's Hold_10_traj.csv (the TCP's position and rotation) and habit_two's cartesian targets
+    "hold_traj": "pose",
+    "robot0.action.target_cartesian_delta": "pose",
     # force/torque
     "/left/ft_sensor/wrench wrench.force": "force_torque",
     "/right_arm/wrist_ft torque": "force_torque",
@@ -109,9 +111,16 @@ REAL = {
     "observation.language.tokens": "bookkeeping",
     "/odom pose.covariance": "bookkeeping",
     "/slam/health": "bookkeeping",
+    # the YAM motors' temperatures, outcome flags and a sensor bundle's clock
+    "/yam_left/aux_state temp_rotor": "bookkeeping",
+    "/yam_right/joint_state temp_mos": "bookkeeping",
+    "next.success": "bookkeeping",
+    "robot0.observation.state.prev_command_successful": "bookkeeping",
+    "observation.sensor_bundle_time_s": "bookkeeping",
+    # a joint's acceleration is a rate of the joint, not an IMU
+    "robot0.action.numerical_joint_acceleration": "velocity",
     # nothing in the name says what it is
     "/d360_0/ght_topic": "unknown",
-    "hold_traj": "unknown",
     "gaze": "unknown",
 }
 
@@ -119,6 +128,28 @@ REAL = {
 @pytest.mark.parametrize("name,kind", sorted(REAL.items()))
 def test_real_names_get_their_kind(name, kind):
     assert signal_kind(name, {}) == kind
+
+
+def test_an_end_effectors_one_number_reading_is_its_gripper():
+    """ABC-130k's /left-ee-state carries the 1-DOF gripper's velocity and torque; an end effector's pose stays a pose."""
+    one = np.array([[0.0], [1.0]])
+    assert signal_kind("/left-ee-state velocity", {"dims": 1}) == "gripper"
+    assert signal_kind("/left-ee-state torque", {}, one) == "gripper"
+    assert signal_kind("observation.ee_pose", {"dims": 7}) == "pose"
+    assert signal_kind("/right_arm/ee_pose position", {}, np.hstack([one] * 3)) == "pose"
+
+
+def test_a_message_type_decides_info_and_point_cloud_streams():
+    """RealOmin's foxglove types name their package with a dot; a PointCloud2's decoded fields are its header; an info
+    message that carries a moving transform is that transform, while camera_info and range_info stay settings."""
+    from prepare.signal_kind import schema_kind
+    assert schema_kind("foxglove.MagneticEncoderMeasurement") == "gripper"
+    assert schema_kind("foxglove.IMUMeasurement") == "imu"
+    assert schema_kind("sensor_msgs/msg/PointCloud2") == "bookkeeping"
+    assert signal_kind("/utlidar/cloud_base", {}, from_schema="bookkeeping") == "bookkeeping"
+    assert signal_kind("/robot0/sim/robot_info base_link.transform.position", {}) == "base"
+    assert signal_kind("/camera/front/camera_info K", {}) == "bookkeeping"
+    assert signal_kind("/utlidar/range_info point", {}) == "bookkeeping"
 
 
 def test_every_kind_is_listed():
