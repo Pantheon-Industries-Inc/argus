@@ -31,3 +31,4 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["signals_policy: runs under the signals setting a new policy resolves to (tests/conftest.py)"]
