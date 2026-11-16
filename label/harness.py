@@ -565,7 +565,8 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                            max_cell_w=route_w, example_dir=example_dir, inspect_evidence=True,
                            model=model, reasoning=reasoning, sample_fps=sample_fps,
                            task_mode=task_mode, dataset_note=dataset_note, inspection=policy.inspection_mode(resolved),
-                           signals=policy.signals_mode(resolved), derived_dir=Path(out_path).parent / ".derived" / "jaws")
+                           signals=policy.signals_mode(resolved),
+                           derived_dir=Path(out_path).parent / ".derived" / "jaws")
     pl = req["plan"]
     fields = {
         "input_identity": identity,
