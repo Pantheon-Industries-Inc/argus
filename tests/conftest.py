@@ -83,6 +83,17 @@ def pytest_collection_modifyitems(config, items):
         items[:] = keep
 
 
+@pytest.fixture(autouse=True)
+def _every_stream_as_rows(request, monkeypatch):
+    """An episode built by hand with no saved policy resolves the signals setting as a new policy does, to auto
+    (label/policy.py SIGNALS). The tests written before the setting describe every stream as the signals block gave it
+    then, which --signals all keeps byte for byte, so they run under all. A test of the auto or off treatment marks
+    itself signals_policy (tests/test_signal_treatment.py, tests/test_signal_policy.py)."""
+    if request.node.get_closest_marker('signals_policy') is None:
+        from label import policy
+        monkeypatch.setattr(policy, 'SIGNALS', 'all')
+
+
 @pytest.fixture
 def inspect_every_field(monkeypatch):
     """Evidence inspection of every recorded field beyond the cameras (policy inspection all), which a test of the

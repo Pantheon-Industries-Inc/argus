@@ -14,6 +14,8 @@ from label import episode as me
 from label import policy
 from label import state as ms
 
+pytestmark = pytest.mark.signals_policy
+
 N = 900
 JOINT = "/yam_left/joint_state joint_pos"
 GRIPPER = "/yam_left/joint_state gripper_eff"

@@ -46,7 +46,7 @@ NAME_RULES = (
     ("base", ("base", "chassis", "odom", "odometry", "wheel", "wheels", "cmd_vel", "pad", "move", "joystick",
               "controller", "locomotion", "nav", "navigation", "mobile")),
     ("velocity", ("vel", "velocity", "velocities", "qvel", "speed", "speeds", "twist")),
-    ("effort", ("effort", "eff", "torque", "torques", "current", "currents", "load")),
+    ("effort", ("effort", "eff", "torque", "torques", "current", "currents")),
     ("pose", ("pose", "poses", "eef", "ee", "keypoint", "keypoints", "landmark", "landmarks", "skeleton", "tf",
               "transforms", "transform", "quat", "orientation", "pos", "position")),
     ("joints", ("joint", "joints", "qpos", "state", "states", "action", "actions", "leader", "follower", "arm",

@@ -7,6 +7,8 @@ import pytest
 from label import policy
 from prepare.signal_kind import KINDS
 
+pytestmark = pytest.mark.signals_policy
+
 
 def test_every_kind_has_a_treatment_on_every_path():
     assert set(policy.SIGNAL_TREATMENT) == set(KINDS)

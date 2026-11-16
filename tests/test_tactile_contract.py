@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from label import policy
 from label import sensor_evidence as se
 
 
@@ -96,9 +95,6 @@ def test_force_axes_and_contact_flags_keep_their_meaning_without_fingers():
                   {'name': 'pressure_notes', 'shape': [1]}],
                  {'load': {'role': 'force_torque'}, 'switch': {'role': 'contact_state'},
                   'force_cmd': {'role': 'touch'}, 'pressure_notes': {'role': 'annotation', 'provenance': 'human'}})
-    # a force/torque sensor's series ride in sensor evidence under --signals all; under auto it is given once, as rows
-    # (tests/test_signal_treatment.py)
-    ep['context']['annotation_policy'] = policy.resolve(ep['context'], signals='all')
     doc = se.build(ep, {'n': 5, 'ks': [0, 2, 4]})
     assert [s['name'] for s in doc['sensors']] == ['load', 'switch']
     assert [r['label'] for r in doc['series'][:6]] == ['Fx', 'Fy', 'Fz', 'Tx', 'Ty', 'Tz']
