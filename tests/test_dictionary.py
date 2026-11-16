@@ -49,6 +49,43 @@ def test_inventory_deduplicates_compatible_fields_and_keeps_variant_owners(tmp_p
     assert str(tmp_path) not in json.dumps(inv)
 
 
+def archived_state_episode(root, name, *, signal_columns=("observation.state", "action")):
+    """An episode as prepare writes an unsupported LeRobot state (lerobot/aloha_static_coffee): state_kind none, the
+    columns as signals and the raw rows archived in state.npz."""
+    rng = np.random.default_rng(0)
+    state, action = rng.normal(size=(5, 14)).astype("f4"), rng.normal(size=(5, 14)).astype("f4")
+    names = [f"{side}_{joint}" for side in ("left", "right")
+             for joint in ("waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate", "gripper")]
+    values = {"observation.state": state, "action": action}
+    ep = episode(root, name, [(column, values[column], {"dims": 14, "names": names, "source": "column " + column})
+                              for column in signal_columns],
+                 extra={"recorded_state_archive": {"file": "state.npz", "source_column": "observation.state",
+                                                   "shape": [5, 14]}})
+    np.savez(ep / "state.npz", state=state, action=action)
+    return ep
+
+
+def test_an_archived_state_is_described_once_by_the_signals_that_hold_it(tmp_path):
+    from label import dictionary as dd
+    inv = dd.inventory([archived_state_episode(tmp_path, "one")])
+    numeric = [f for f in inv["fields"] if f.get("dtype") == "float32"]
+    assert sorted(f["name"] for f in numeric) == ["action", "observation.state"], numeric
+    assert all(f["kind"] == "signal" for f in numeric)
+    bound = {f["name"]: [(b["file"], b["key"]) for b in f["bindings"]] for f in numeric}
+    assert bound == {"observation.state": [("signals.npz", "s0"), ("state.npz", "state")],
+                     "action": [("signals.npz", "s1"), ("state.npz", "action")]}
+    # the request names each column's values once: no state.npz field and no unnamed bookkeeping copy of them
+    request = json.loads(dd.request(inv)[0]["text"].split("\n", 1)[1])
+    assert sorted(f["name"] for f in request["fields"] if f.get("dtype") == "float32") == ["action", "observation.state"]
+
+
+def test_an_archive_column_no_signal_holds_keeps_its_own_field(tmp_path):
+    from label import dictionary as dd
+    inv = dd.inventory([archived_state_episode(tmp_path, "one", signal_columns=("observation.state",))])
+    kinds = sorted((f["name"], f["kind"]) for f in inv["fields"] if f.get("dtype") == "float32")
+    assert kinds == [("action", "action"), ("observation.state", "signal")], kinds
+
+
 def test_summaries_are_bounded_and_requests_never_carry_rows_or_images(tmp_path, monkeypatch):
     from label import dictionary as dd
     values = np.arange(100_001, dtype="f4").reshape(-1, 1)
