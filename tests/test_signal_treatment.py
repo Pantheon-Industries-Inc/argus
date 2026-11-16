@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -194,6 +196,47 @@ def test_inspection_lists_what_left_the_rows_but_not_settings_or_bookkeeping(tmp
             assert {INFO, HEALTH} <= names
         else:
             assert not {INFO, HEALTH} & names
+
+
+GO2 = Path(__file__).parent / "fixtures" / "signal_policy_go2"
+
+
+def _go2(tmp_path, mode):
+    """A real prepared episode (realworld_go2_task0 episode 0, LeRobot, prepared before signal kinds existed): arm
+    state as observation.state and action, the controller pad and move inputs, and front depth."""
+    d = tmp_path / mode / "episode_000000"
+    shutil.copytree(GO2 / "episode_000000", d)
+    ctx = json.loads((d / "context.json").read_text())
+    ctx["annotation_policy"] = policy.resolve(ctx, model="openai/gpt-6.1-sol", reasoning="high",
+                                              **({} if mode == "legacy" else {"signals": mode}))
+    if mode == "legacy":
+        # a policy saved before the signals setting existed
+        ctx["annotation_policy"].pop("signals")
+    (d / "context.json").write_text(json.dumps(ctx))
+    ep = me.load(d)
+    return ep, me.plan(ep)
+
+
+@pytest.mark.parametrize("mode", ["legacy", "all"])
+def test_all_gives_a_real_episode_the_text_origin_main_gave_it(tmp_path, mode):
+    """tests/fixtures/signal_policy_go2/main_869c968.json is what origin/main at 869c968 wrote for this episode."""
+    want = json.loads((GO2 / "main_869c968.json").read_text())
+    ep, pl = _go2(tmp_path, mode)
+    assert len(pl["ks"]) == want["ks"]
+    assert me._signals_table(ep, pl) == want["signals"]
+    assert me._depth_note(ep) == want["depth"] and me.depth_pictures(ep)
+
+
+def test_auto_on_the_real_episode_keeps_the_arm_and_one_lines_the_controller(tmp_path):
+    ep, pl = _go2(tmp_path, "auto")
+    assert me.signal_kinds(ep) == {"observation.state": "joints", "observation.pad": "constant",
+                                   "observation.move": "base", "action": "joints"}
+    text = me._signals_table(ep, pl)
+    rows = text.split("at every instant you receive")[-1]
+    assert "    observation.state" in rows and "    observation.move" not in rows
+    assert "  observation.move (base motion or controller input, 1 value): 0 to 1" in text
+    assert "Also recorded but not given here: observation.pad." in text
+    assert not me.depth_pictures(ep) and "Its pictures are not in this request." in me._depth_note(ep)
 
 
 def test_depth_pictures_ride_only_under_all_and_the_note_says_so():
