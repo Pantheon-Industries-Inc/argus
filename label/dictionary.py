@@ -160,6 +160,22 @@ def _pointer_key(value):
     return str(value).replace("~", "~0").replace("/", "~1")
 
 
+def archived_signals(ctx: dict) -> dict:
+    """{"state" or "action": index of the signal that holds the same recorded column}, for an episode whose
+    unsupported state prepare archived raw in state.npz (state_kind none and recorded_state_archive) while its columns
+    stay signals; empty otherwise."""
+    archive = ctx.get("recorded_state_archive")
+    if ctx.get("state_kind") not in (None, "none") or not isinstance(archive, dict) or archive.get("file") != "state.npz":
+        return {}
+    columns = {"state": archive.get("source_column") or "observation.state", "action": "action"}
+    out = {}
+    for i, meta in enumerate(ctx.get("signals") or []):
+        for kind, column in columns.items():
+            if isinstance(meta, dict) and meta.get("source") == "column " + column and kind not in out:
+                out[kind] = i
+    return out
+
+
 def inventory(episodes: list[Path]) -> dict:
     """Keep every prepared field, with distinct identities for incompatible recorded descriptors."""
     fields, aggregates = {}, {}
@@ -192,6 +208,7 @@ def inventory(episodes: list[Path]) -> dict:
             aggregates.setdefault(ident, []).append(numbers)
         elif file and kind in ("state", "action", "signal", "bookkeeping"):
             aggregates.setdefault(ident, [])
+        return ident
 
     def numeric(ep, meta, kind, path, file, key):
         try:
@@ -204,8 +221,8 @@ def inventory(episodes: list[Path]) -> dict:
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError) as error:
             shape, dtype, numbers = meta.get("shape", meta.get("record_shape", [meta.get("dims", 0)])), None, None
             limitation = f"{file} {key or ''} unreadable ({type(error).__name__})"
-        add(ep, meta.get("name", key), kind, shape, dtype, meta, path,
-            file=file, key=key, numbers=numbers, limitation=limitation)
+        return add(ep, meta.get("name", key), kind, shape, dtype, meta, path,
+                   file=file, key=key, numbers=numbers, limitation=limitation)
 
     def retained(ep, value, name, path, kind, public_path):
         if isinstance(value, dict):
@@ -237,8 +254,15 @@ def inventory(episodes: list[Path]) -> dict:
         ctx = json.loads((ep / "context.json").read_text())
         source = ctx.get("source") or {}
         claimed = {"state.npz": set(), "signals.npz": set()}
+        # prepare keeps an unsupported state twice: its columns as signals and its raw rows in a state.npz archive
+        # (prepare/formats.py archive_lerobot_state). An archived column that a signal holds is that signal's field,
+        # bound to both files, so the request describes its values once.
+        mirrored = archived_signals(ctx)
         if (ep / "state.npz").exists() or ctx.get("state_kind") not in (None, "none"):
             for kind in ("state", "action"):
+                if kind in mirrored:
+                    claimed["state.npz"].add(kind)
+                    continue
                 if kind == "action":
                     try:
                         with zipfile.ZipFile(ep / "state.npz") as z:
@@ -262,8 +286,11 @@ def inventory(episodes: list[Path]) -> dict:
                 claimed["state.npz"].add(kind)
         for i, meta in enumerate(ctx.get("signals") or []):
             file = meta.get("file") or "signals.npz"
-            numeric(ep, meta, "signal", f"signals/{i}", file, meta.get("key"))
+            ident = numeric(ep, meta, "signal", f"signals/{i}", file, meta.get("key"))
             claimed.setdefault(file, set()).add(meta.get("key"))
+            for kind in [k for k, index in mirrored.items() if index == i]:
+                fields[ident]["bindings"].append({"episode": ep.name, "context_path": "recorded_state_archive",
+                                                  "file": "state.npz", "key": kind})
         if ctx.get('table_field_inventory'):
             from label.evidence_access import table_source_identity
             table_identity = table_source_identity(ctx, ep)
