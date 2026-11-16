@@ -2397,12 +2397,12 @@ const currentEp = document.getElementById('current-ep');
 function handVisibilityLabel(ev) {
   if (!ev) return '';
   if ('left_hand_visible' in ev || 'right_hand_visible' in ev) {
-    if (ev.left_hand_visible === false && ev.right_hand_visible === false) return 'Hands out of view';
+    if (ev.left_hand_visible === false && ev.right_hand_visible === false) return 'Both hands out of view';
     if (ev.left_hand_visible === false) return 'Left hand out of view';
     if (ev.right_hand_visible === false) return 'Right hand out of view';
     return '';
   }
-  return ev.hands_visible === false ? 'Hands out of view' : '';
+  return ev.hands_visible === false ? 'Both hands out of view' : '';
 }
 
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }

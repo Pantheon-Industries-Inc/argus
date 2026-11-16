@@ -59,11 +59,11 @@ eval(piece('handVisibilityLabel'));
 for(const [event,expected] of [
  [{left_hand_visible:false,right_hand_visible:true},'Left hand out of view'],
  [{left_hand_visible:true,right_hand_visible:false},'Right hand out of view'],
- [{left_hand_visible:false,right_hand_visible:false},'Hands out of view'],
+ [{left_hand_visible:false,right_hand_visible:false},'Both hands out of view'],
  [{left_hand_visible:true,right_hand_visible:true},''],
  [{left_hand_visible:null,right_hand_visible:null,hands_visible:false},''],
  [{left_hand_visible:false,right_hand_visible:null},'Left hand out of view'],
- [{hands_visible:false},'Hands out of view'],[{hands_visible:true},''],[null,''],
+ [{hands_visible:false},'Both hands out of view'],[{hands_visible:true},''],[null,''],
  [{arm:'left'},''],[{hands_visible:true,pose_detected:false},'']
 ])assert.equal(handVisibilityLabel(event),expected);
 '''],check=True)
@@ -95,8 +95,8 @@ const start = src.indexOf('  function renderHands(t) {');
 const end = src.indexOf('\n  // ----- a session of tasks:', start);
 assert.ok(start > 0 && end > start);
 eval(src.slice(start, end));
-for (const [t, label] of ['Left hand out of view','Right hand out of view','Hands out of view',
-                         '', 'Hands out of view', '', 'Wearing work glove'].entries()) {
+for (const [t, label] of ['Left hand out of view','Right hand out of view','Both hands out of view',
+                         '', 'Both hands out of view', '', 'Wearing work glove'].entries()) {
   renderHands(t);
   assert.equal(classes.has('show'), !!label);
   assert.equal(classes.has('hidden-hands'), label.endsWith('out of view'));
