@@ -145,3 +145,22 @@ def test_an_mcap_message_type_decides_below_bookkeeping_words_and_above_the_othe
     assert signal_kind("/body/upper orientation", {}) == "pose"
     assert signal_kind("/body/upper orientation", {}, from_schema="imu") == "imu"
     assert signal_kind("/body/upper orientation_covariance", {}, from_schema="imu") == "bookkeeping"
+
+
+def test_write_signals_turns_a_readers_message_type_into_the_saved_kind(tmp_path):
+    """mcap_signals leaves its message type's kind in the reader's meta; write_signals decides the saved kind from it
+    and every other reader of the entry sees only that."""
+    import json
+    from prepare import formats
+    n = 120
+    sig = formats.Signals()
+    moving = np.stack([np.sin(np.arange(n) / 9.0 + j) for j in range(4)], axis=1).astype(np.float32)
+    sig["/body/upper orientation"] = moving
+    sig.meta["/body/upper orientation"] = {"kind": "imu", "names": ["x", "y", "z", "w"]}
+    sig["/body/upper pose"] = moving
+    sig.meta["/body/upper pose"] = {"names": ["x", "y", "z", "w"]}
+    ctx = {"fps": 30, "n_state_frames": n, "profile": "teleop_arms", "state_kind": "none"}
+    formats.write_signals(tmp_path, ctx, sig)
+    kinds = {s["name"]: s["kind"] for s in ctx["signals"]}
+    assert kinds == {"/body/upper orientation": "imu", "/body/upper pose": "pose"}
+    assert json.dumps(ctx["signals"]).count('"kind"') == 2
