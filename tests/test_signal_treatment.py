@@ -132,7 +132,7 @@ def _write_episode(tmp_path, *, kind=False, mode=None):
     formats.write_signals(d, ctx, {k: v.astype(np.float32) for k, v in sig.items()})
     if not kind:
         for s in ctx["signals"]:
-            s.pop("kind")
+            s.pop("stream_kind")
     if mode:
         ctx["annotation_policy"] = policy.resolve(ctx, signals=mode)
     (d / "context.json").write_text(json.dumps(ctx))
@@ -142,7 +142,7 @@ def _write_episode(tmp_path, *, kind=False, mode=None):
 
 def test_prepare_writes_each_signals_kind(tmp_path):
     d = _write_episode(tmp_path, kind=True)
-    kinds = {s["name"]: s["kind"] for s in json.loads((d / "context.json").read_text())["signals"]}
+    kinds = {s["name"]: s["stream_kind"] for s in json.loads((d / "context.json").read_text())["signals"]}
     assert kinds == {JOINT: "joints", GRIPPER: "gripper", IMU: "imu", INFO: "constant", HEALTH: "bookkeeping",
                      GLOVE: "touch"}
 

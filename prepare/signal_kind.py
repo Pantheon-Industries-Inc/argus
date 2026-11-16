@@ -1,9 +1,10 @@
 """What kind of stream a recorded signal is, decided at preparation with no paid call, so the annotation policy can
 treat each kind its own way (label/policy.py SIGNAL_TREATMENT).
 
-prepare/formats.py write_signals stores the kind in each context.json signal entry ("kind"). An episode prepared
-before that has none, and label/episode.py load derives it at label time from the same evidence (kind_of), so an old
-prepared folder labels under the same policy as a new one.
+prepare/formats.py write_signals stores the kind in each context.json signal entry as "stream_kind", since "kind" is
+already a reader's own key there (an audio channel's "samples"). An episode prepared before that has none, and
+label/episode.py load derives it at label time from the same evidence (kind_of), so an old prepared folder labels under
+the same policy as a new one.
 
 The evidence, strongest first:
 - the entry's own saved kind;
@@ -11,8 +12,8 @@ The evidence, strongest first:
   constant, whatever its name says;
 - what the source declares about the field (its description, sensor type or sensor semantics) and the touch verdict
   preparation already made ("touch");
-- the words of the field's own recorded name (prepare/formats.py word_tokens, the split every name matcher uses), in
-  the order of NAME_RULES;
+- a bookkeeping word of the field's name, then the kind its MCAP message type says (schema_kind), then the other words
+  of its name (prepare/formats.py word_tokens, the split every name matcher uses), in the order of NAME_RULES;
 - only for a stream the names leave unknown, the role the paid field dictionary gave it (label/dictionary.py). The
   dictionary refines an unknown stream and never overrides a kind the names or the source declare.
 
@@ -20,8 +21,8 @@ Words are matched whole (prepare/formats.py _names_word), so a covariance is nev
 never force. The order of NAME_RULES carries the precedence the kinds need: bookkeeping first (an IMU's covariance is
 bookkeeping, not IMU), touch before force (a fingertip force is touch), force/torque before effort (a wrist wrench's
 torque is force/torque, an arm's torque is effort), IMU before base (an IMU on a base is IMU), gripper before velocity
-and effort (a gripper's effort is the gripper), base before pose (odometry is base motion), velocity and effort before pose (an end effector's velocity is a
-velocity), and joints last.
+and effort (a gripper's effort is the gripper), base before pose (odometry is base motion), velocity and effort before
+pose (an end effector's velocity is a velocity), and joints last.
 """
 from __future__ import annotations
 
@@ -145,7 +146,7 @@ def kind_of(name: str, meta: dict | None = None, values=None) -> str:
     and for a stream that leaves unknown, the paid field dictionary's role (meta["dictionary"], label/episode.py load)
     when it names a kind."""
     meta = meta or {}
-    saved = meta.get("kind")
+    saved = meta.get("stream_kind")
     kind = saved if saved in KINDS else signal_kind(name, meta, values)
     if kind != "unknown":
         return kind

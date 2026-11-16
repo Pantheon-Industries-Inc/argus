@@ -127,13 +127,13 @@ def test_declared_touch_verdict_and_sensor_type_decide_before_the_name():
 
 
 def test_a_saved_kind_is_kept_and_the_dictionary_refines_only_unknown():
-    meta = {"kind": "imu"}
+    meta = {"stream_kind": "imu"}
     assert kind_of("observation.state", meta) == "imu"
     # the paid dictionary's role names an unknown stream, never overrides one the names declare
     assert kind_of("/d360_0/ght_topic", {"dictionary": {"role": "base_motion"}}) == "base"
     assert kind_of("observation.state", {"dictionary": {"role": "imu"}}) == "joints"
     # a saved kind that is not one of KINDS (a later preparation's word) is derived again
-    assert kind_of("ego.gyro_rads", {"kind": "spaceship"}) == "imu"
+    assert kind_of("ego.gyro_rads", {"stream_kind": "spaceship"}) == "imu"
 
 
 def test_an_mcap_message_type_decides_below_bookkeeping_words_and_above_the_other_name_words():
@@ -156,11 +156,16 @@ def test_write_signals_turns_a_readers_message_type_into_the_saved_kind(tmp_path
     sig = formats.Signals()
     moving = np.stack([np.sin(np.arange(n) / 9.0 + j) for j in range(4)], axis=1).astype(np.float32)
     sig["/body/upper orientation"] = moving
-    sig.meta["/body/upper orientation"] = {"kind": "imu", "names": ["x", "y", "z", "w"]}
+    sig.meta["/body/upper orientation"] = {"schema_kind": "imu", "names": ["x", "y", "z", "w"]}
     sig["/body/upper pose"] = moving
     sig.meta["/body/upper pose"] = {"names": ["x", "y", "z", "w"]}
+    # a reader's own "kind" (mcap_signals marks an audio channel kept as its loudness "samples") is kept as it was
+    sig["/d360_0/mic_0 data"] = moving[:, :2]
+    sig.meta["/d360_0/mic_0 data"] = {"kind": "samples", "sample_rate": 48000.0,
+                                      "names": ["root mean square", "peak"]}
     ctx = {"fps": 30, "n_state_frames": n, "profile": "teleop_arms", "state_kind": "none"}
     formats.write_signals(tmp_path, ctx, sig)
-    kinds = {s["name"]: s["kind"] for s in ctx["signals"]}
-    assert kinds == {"/body/upper orientation": "imu", "/body/upper pose": "pose"}
-    assert json.dumps(ctx["signals"]).count('"kind"') == 2
+    kinds = {s["name"]: s["stream_kind"] for s in ctx["signals"]}
+    assert kinds == {"/body/upper orientation": "imu", "/body/upper pose": "pose", "/d360_0/mic_0 data": "unknown"}
+    assert [s.get("kind") for s in ctx["signals"]] == [None, None, "samples"]
+    assert "schema_kind" not in json.dumps(ctx["signals"])

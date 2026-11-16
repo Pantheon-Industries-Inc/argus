@@ -166,8 +166,8 @@ def load(ep_dir: Path) -> dict:
         from prepare.signal_kind import kind_of
         ep["signal_kind"] = {}
         for name, meta in ep["signal_meta"].items():
-            saved = meta.pop("kind", None)
-            ep["signal_kind"][name] = kind_of(name, {**meta, "kind": saved}, ep["signals"][name])
+            saved = meta.pop("stream_kind", None)
+            ep["signal_kind"][name] = kind_of(name, {**meta, "stream_kind": saved}, ep["signals"][name])
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
