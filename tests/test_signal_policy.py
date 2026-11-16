@@ -19,8 +19,9 @@ def test_every_kind_has_a_treatment_on_every_path():
 
 def test_the_approved_defaults():
     t = policy.SIGNAL_TREATMENT
-    assert {k for k, v in t.items() if v["prompt"] == "rows"} == {"joints", "gripper", "pose", "touch", "force_torque"}
-    assert {k for k, v in t.items() if v["prompt"] == "one_line"} == {"imu", "velocity", "effort", "base", "unknown"}
+    assert {k for k, v in t.items() if v["prompt"] == "rows"} == {"joints", "gripper", "pose", "touch", "force_torque",
+                                                                     "base"}
+    assert {k for k, v in t.items() if v["prompt"] == "one_line"} == {"imu", "velocity", "effort", "unknown"}
     assert {k for k, v in t.items() if v["prompt"] == "drop"} == {"constant", "bookkeeping"}
     assert t["depth"]["prompt"] == "note"
     # force/torque is sent once, as rows, not again as sensor evidence series; touch is both

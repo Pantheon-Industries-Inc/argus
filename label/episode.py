@@ -1738,7 +1738,7 @@ SPIKE_DEVIATIONS = 8.0   # a reading this many robust deviations (1.4826 x MAD) 
 SPIKE_SHARE = 0.5        # and at least this share of the value's own range from its median
 SPIKES_TIMED = 3         # the largest spikes of a one line signal given with their times
 ONE_LINE_MOVED = 0.1     # a change over a still span of this share of the signal's own range is a move
-KIND_WORDS = {"imu": "IMU", "velocity": "velocity", "effort": "effort", "base": "base motion or controller input"}
+KIND_WORDS = {"imu": "IMU", "velocity": "velocity", "effort": "effort"}
 
 
 def _spikes(ep: dict, a: np.ndarray) -> str:

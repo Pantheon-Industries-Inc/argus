@@ -45,9 +45,11 @@ def inspection_mode(selected: dict) -> str:
 #   when a request carries an inspection. Leaving the rows never buys an inspection: it runs for its own reasons.
 # - sensor_evidence: whether it may enter the sensor evidence series (label/sensor_evidence.py). A force/torque sensor
 #   is given once, as rows.
-# The defaults are the design of 2026-11-16: the actor's own configuration and touch as rows; IMU, velocities, arm
-# effort, base motion and controller inputs as one line; settings and bookkeeping dropped. A kind goes back to rows
-# when an A/B on real datasets shows its labels need it.
+# The defaults are the design of 2026-11-16: the actor's own configuration, base motion and controller inputs, and
+# touch as rows; IMU, velocities and arm effort as one line; settings and bookkeeping dropped. A legged or mobile
+# robot's base command is the main record of what it did, and one line of it made the go2 prompt longer, not shorter
+# (52,429 characters against 52,281 under all). A kind goes back to rows when an A/B on real datasets shows its labels
+# need it.
 PROMPT_TREATMENTS = ('rows', 'one_line', 'drop', 'note')
 SIGNAL_TREATMENT = {
     'joints': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
@@ -58,7 +60,7 @@ SIGNAL_TREATMENT = {
     'imu': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
     'velocity': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
     'effort': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
-    'base': {'prompt': 'one_line', 'inspection': True, 'sensor_evidence': False},
+    'base': {'prompt': 'rows', 'inspection': True, 'sensor_evidence': False},
     'depth': {'prompt': 'note', 'inspection': True, 'sensor_evidence': False},
     'constant': {'prompt': 'drop', 'inspection': False, 'sensor_evidence': False},
     'bookkeeping': {'prompt': 'drop', 'inspection': False, 'sensor_evidence': False},

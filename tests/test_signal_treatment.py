@@ -229,14 +229,23 @@ def test_all_gives_a_real_episode_the_text_origin_main_gave_it(tmp_path, mode):
     assert me._depth_note(ep) == want["depth"] and me.depth_pictures(ep)
 
 
-def test_auto_on_the_real_episode_keeps_the_arm_and_one_lines_the_controller(tmp_path):
+def _rows_of(text, name):
+    """The lines of the values at each instant that belong to the stream name."""
+    return [line for line in text.split("at every instant you receive")[-1].split("\n")
+            if line.startswith(f"    {name} ") or line == f"    {name}"]
+
+
+def test_auto_on_the_real_episode_keeps_the_arm_and_the_base_command_as_rows(tmp_path):
+    """A legged robot's base command is the main record of what it did, so under auto the go2's move input keeps the
+    rows all gives it, and only the constant pad leaves them."""
     ep, pl = _go2(tmp_path, "auto")
     assert me.signal_kinds(ep) == {"observation.state": "joints", "observation.pad": "constant",
                                    "observation.move": "base", "action": "joints"}
     text = me._signals_table(ep, pl)
-    rows = text.split("at every instant you receive")[-1]
-    assert "    observation.state" in rows and "    observation.move" not in rows
-    assert "  observation.move (base motion or controller input, 1 value): 0 to 1" in text
+    every = json.loads((GO2 / "main_869c968.json").read_text())["signals"]
+    for name in ("observation.state", "observation.move", "action"):
+        assert _rows_of(text, name) and _rows_of(text, name) == _rows_of(every, name), name
+    assert "  observation.move (1 value (move)): 0 to 1" in text
     assert "Also recorded but not given here: observation.pad." in text
     assert not me.depth_pictures(ep) and "Its pictures are not in this request." in me._depth_note(ep)
 
