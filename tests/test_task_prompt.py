@@ -152,6 +152,32 @@ UNHELD_CONTACT_HANDHELD = [
 
 # The owner's two approved edits to the head camera's prompt: its absolutes softened, so a short clip of one task is
 # an ordinary case, and (with no annotated goal) the rule for naming each task's end state.
+# Approved future Ego visibility change (2026-11-16).
+EGO_VISIBILITY = (
+    """- hands_visible is a per-step ground-truth: set it FALSE whenever NEITHER of the
+  person's hands is actually in the supplied frame during that step, and TRUE when
+  at least one hand (or a clearly hand-held object in the grip) is in shot. In
+  first-person video the head/gaze often points away from the hands, so the hands drop
+  below, behind, or out of the frame while the person leans in, looks over a shelf,
+  reaches low, or turns away; in those steps you are inferring the hand action from
+  body pose and context, not seeing it, so hands_visible is false. Judge it from what
+  is actually in the frame for that step, not from whether an action is happening. Be
+  honest and precise: it drives a viewer cue that marks exactly when the annotation is
+  inferred rather than observed. Default TRUE only when a hand is genuinely visible.
+""",
+    """- Record left_hand_visible and right_hand_visible for BOTH of the person's anatomical
+  hands in every step, regardless of which hand is acting. Use true when any part of
+  that hand is visible (a partly visible hand counts), false when it is entirely out
+  of the supplied frame, and null when visibility cannot be determined. A held object
+  alone is not evidence that the hand itself is visible. Judge the supplied image,
+  not the inferred action or whether a pose estimator found a hand.
+  Split a timeline step when either hand's visibility changes, even if its action
+  continues. Repeat the same visibility values on overlapping steps for that moment.
+  Keep hands_visible as the aggregate: true if either hand is visible, false only
+  when both are false, otherwise null. These fields drive the viewer's out-of-view cue.
+""",
+)
+
 EGO_SOFTENED = [
     ('''single overall goal, especially in a longer clip; the person does a SEQUENCE of
   distinct activities. "arm"/left/right means the person's LEFT or RIGHT HAND. Do NOT
@@ -207,6 +233,11 @@ def test_the_head_camera_prompt_is_mains_but_for_the_three_approved_edits(given,
     with an annotated goal) or the end-state rule (one without), each pinned here as a literal: B6, the earlier test
     took the end-state block from the function under test, so PR 107 rewrote it and the test still passed."""
     expected = main('ego_head', recorded)
+    expected = expected.replace(*EGO_VISIBILITY)
+    expected = expected.replace('"progress", "hands_visible", "hands_wearing", "notes"',
+                                '"progress", "hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing", "notes"')
+    expected = expected.replace('<hands_visible true | false>,',
+                                '<hands_visible true | false | null>,\n     <left_hand_visible true | false | null>, <right_hand_visible true | false | null>,')
     for old, new in EGO_SOFTENED:
         assert expected.count(old) == 1, old[:60]
         expected = expected.replace(old, new)

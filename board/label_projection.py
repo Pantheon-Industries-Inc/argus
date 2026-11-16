@@ -310,7 +310,7 @@ ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES, 'own_outcome': OUTCOME
          'severity': ('low', 'medium', 'high'), 'contribution': ('advancing', 'wasteful', 'idle'),
          'relation': ('aligned', 'narrower', 'broader', 'different', 'unrelated'),
          'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST, 'basis': BASES}
-BOOLS = {'timeline': ('hands_visible',), 'recovery': ('recovered',),
+BOOLS = {'timeline': ('hands_visible', 'left_hand_visible', 'right_hand_visible'), 'recovery': ('recovered',),
          'operator_mistakes': ('recovered',), 'goal_alignment': ('matches_given',)}
 TEXT_LISTS = {'tasks': ('objects',), 'scene.objects': ('attributes',), 'scene_graph': ('relations',)}
 

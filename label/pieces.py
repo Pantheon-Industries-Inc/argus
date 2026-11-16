@@ -1486,7 +1486,7 @@ def window_copies(items: list, windows: list[dict], key: str, origin: dict | Non
 
 # the fields of a timeline step that say what was done: a step joined across a cut takes all of them from one half
 STEP_TEXT_FIELDS = ("action", "object", "destination", "spatial_relation", "contribution", "progress", "notes",
-                    "hands_visible", "hands_wearing", "confidence", "source_piece")
+                    "hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing", "confidence", "source_piece")
 
 
 def _step_match(left: dict, right: dict, window: dict) -> dict | None:
@@ -1541,6 +1541,10 @@ def join_steps_across_cuts(steps: list, windows: dict, origin: dict | None = Non
             if not isinstance(arm, str) or len(right) != 1 or sum(s.get("arm") == arm for s in ends) != 1:
                 continue
             right = right[0]
+            # A visibility change is a real timeline boundary, even if the action continues.
+            visibility = ('left_hand_visible', 'right_hand_visible')
+            if any((key in left) != (key in right) or left.get(key) != right.get(key) for key in visibility):
+                continue
             how = _step_match(whole(left), whole(right), window)
             if how is None:
                 continue
