@@ -221,6 +221,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             # head camera: per step whether the person's hands are in the frame, so the board can mark
             # stretches inferred while unseen, and what covers them (gloves) when visible; absent elsewhere
             "hands_visible": s.get("hands_visible"),
+            **{key: s[key] for key in ("left_hand_visible", "right_hand_visible") if key in s},
             "hands_wearing": s.get("hands_wearing"),
         })
 

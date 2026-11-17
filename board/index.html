@@ -2434,6 +2434,17 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 <script>
 const currentEp = document.getElementById('current-ep');
 
+function handVisibilityLabel(ev) {
+  if (!ev) return '';
+  if ('left_hand_visible' in ev || 'right_hand_visible' in ev) {
+    if (ev.left_hand_visible === false && ev.right_hand_visible === false) return 'Both hands out of view';
+    if (ev.left_hand_visible === false) return 'Left hand out of view';
+    if (ev.right_hand_visible === false) return 'Right hand out of view';
+    return '';
+  }
+  return ev.hands_visible === false ? 'Both hands out of view' : '';
+}
+
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
 function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + ' min' : Math.round(s) + 's'); }
 
@@ -7348,9 +7359,9 @@ function renderEp(d, opts) {
   </div>` : '';
 
   // lanes under the timeline, on its time scale: when the wearer's hands leave a head camera (the model's
-  // per-step hands_visible), and the dataset's own timed labels as the publisher ships them
+  // per-hand visibility, or hands_visible on old labels), and the dataset's own timed labels as the publisher ships them
   const lanePct = (t) => (100 * Math.max(0, Math.min(duration, t)) / Math.max(duration, 1e-6));
-  const handSpans = isEgo ? eventLabels.filter(e => e.hands_visible === false && e.t_s != null)
+  const handSpans = isEgo ? eventLabels.filter(e => handVisibilityLabel(e) && e.t_s != null)
     .map(e => [Number(e.t_s), Number(e.end_s != null ? e.end_s : e.t_s + 1)]) : [];
   const pubLabels = (d.dataset_labels || []).filter(x => x && x.label != null);
   const lane = (id, title, now, segs) => `<div class="lane" id="${id}"><div class="lane-title">${title}${now
@@ -8410,7 +8421,7 @@ function renderEp(d, opts) {
 
   // ----- head camera: hands out of view -----
   // A head camera often points away from the hands, so a step's action is inferred rather than seen. The model marks
-  // this per step (hands_visible); the spans where it is false are highlighted, and what the hands wear is shown.
+  // this per hand and step; old labels use hands_visible. Hidden spans and hand coverings are shown.
   const esHand = document.getElementById('es-hand');
   const isBare = w => !w || ['bare', 'none', 'null', 'nothing'].includes(String(w).trim().toLowerCase());
   let _handSig = null;
@@ -8419,15 +8430,16 @@ function renderEp(d, opts) {
     // the step the bottom caption shows (captionSteps); with a row per side, the one that started last
     const rows = captionSteps(segWindows, t);
     const ev = rows.length ? rows.reduce((a, s) => (s.t0 >= a.t0 ? s : a)).ev : null;
-    const hidden = ev ? ev.hands_visible === false : false;
-    const gloves = (ev && ev.hands_visible !== false && !isBare(ev.hands_wearing)) ? ev.hands_wearing : '';
-    const sig = hidden ? 'H' : (gloves ? 'G:' + gloves : '');
+    const label = handVisibilityLabel(ev);
+    const hidden = !!label;
+    const gloves = (ev && !hidden && !isBare(ev.hands_wearing)) ? ev.hands_wearing : '';
+    const sig = hidden ? label : (gloves ? 'G:' + gloves : '');
     if (sig === _handSig) return;   // only touch the DOM on change
     _handSig = sig;
     exoCell.classList.toggle('hands-hidden', hidden);
     if (!esHand) return;
     esHand.classList.remove('hidden-hands', 'gloved', 'show');
-    if (hidden) { esHand.textContent = 'Hands out of view'; esHand.classList.add('show', 'hidden-hands'); }
+    if (hidden) { esHand.textContent = label; esHand.classList.add('show', 'hidden-hands'); }
     else if (gloves) { esHand.textContent = 'Wearing ' + String(gloves).replace(/[\u2013\u2014]/g, '-');
       esHand.classList.add('show', 'gloved'); }
   }
