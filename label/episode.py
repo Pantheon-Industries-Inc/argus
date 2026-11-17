@@ -1032,7 +1032,7 @@ def _contact_views(ep: dict, c: dict) -> tuple[list[str], list[str], list[str]]:
         mounted = [v for v in vs if v in MOUNTED]
         near = own or (mounted[:1] if len(mounted) == 1 and c.get("hand") is None else []) or vs[:1]
     peak = near + [v for v in vs[:1] if v not in near]
-    return near, peak, [v for v in peak if v in (ep.get("depth") or {})]
+    return near, peak, [v for v in peak if v in (ep.get("depth") or {})] if sends_depth_pictures(ep) else []
 
 
 def _frame_at(ep: dict, t_s: float) -> int:
@@ -1414,6 +1414,9 @@ def _depth_note(ep: dict) -> str:
                         + (' has' if len(unpaired) == 1 else ' have')
                         + ' no recorded RGB camera pairing. Display slots do not establish common sensors '
                         'or image coordinates with the colour views. ')
+    if not sends_depth_pictures(ep):
+        # --depth-pictures off: what is recorded, and that none of it rides in the request
+        return "\nDEPTH: " + description + "No depth picture is sent with this request."
     return ("\nDEPTH: " + description + 'Detail views are followed by available recorded depth at the displayed instants.'
             + precision
             + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
@@ -1683,7 +1686,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
     from label.dictionary_context import field_interpretation
     from prepare.value_names import recorded_units
     sig = ep.get("signals") or {}
-    if not sig:
+    imu = ep.get("imu_by_name") or []
+    if not sig and not imu:
         return ""
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
@@ -1691,6 +1695,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
     # any precision, and their differences are taken in float64), with no whole copy of a large signal
     arrs = {k: a[:n] for k, a in sig.items()}
     lines, still, wherever, unplaced = [], [], [], []
+    # a policy that leaves out IMU rows or depth pictures names each stream that never changes, without its value
+    # (label/policy.py names_constants)
+    unchanging = [] if policy.names_constants(saved_policy(ep)) else None
     untimed = untimed_signals(ep)
     for name, a in arrs.items():
         interpretation = field_interpretation(ep["context"], name)
@@ -1698,6 +1705,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
         try:
             if not len(a):
                 lines.append(f"  {name}: no rows, so no reading at any frame" + wording)
+                continue
+            if unchanging is not None and _constant(a):
+                unchanging.append(name + wording)
                 continue
             if _constant(a):
                 # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
@@ -1737,7 +1747,12 @@ def _signals_table(ep: dict, pl: dict) -> str:
         lines.append("  The same at every frame: " + "; ".join(still))
     if wherever:
         lines.append("  The same wherever it reads: " + "; ".join(wherever))
-    if pl["spans"]:
+    if unchanging:
+        lines.append("  Never changing, values not given: "
+                     + ", ".join(unchanging) + ".")
+    if imu:
+        lines.append("  IMU streams, readings not given: " + ", ".join(imu) + ".")
+    if pl["spans"] and arrs:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")
         for a0, b0 in pl["spans"]:
@@ -1757,8 +1772,10 @@ def _signals_table(ep: dict, pl: dict) -> str:
                            if any(field_interpretation(ep["context"], name) for name in arrs) else
                            "They are not interpreted for you: read what each is from its name and the robot's description above. ")
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
-            "name, with the range each of its values takes over the episode (one that never changes is given as its "
-            "value). " + interpretation_note + "Like the rest of the recording they are claims to check against the video; a camera carried by "
+            "name, with the range each of its values takes over the episode ("
+            + ("one that never changes is only named" if unchanging else
+               "one that never changes is given as its value")
+            + "). " + interpretation_note + "Like the rest of the recording they are claims to check against the video; a camera carried by "
             "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
 
 
@@ -2330,6 +2347,38 @@ def _has_signals(ep: dict, pl: dict) -> bool:
     return bool(ep.get("signals"))
 
 
+def saved_policy(ep: dict) -> dict:
+    """The annotation policy build_request resolved into the episode's context; an episode with none (a block text
+    called on a hand-built episode) reads as a policy saved before the IMU and depth picture settings."""
+    return ep["context"].get("annotation_policy") or {}
+
+
+def imu_by_name(ep: dict) -> list[str]:
+    """The IMU streams (label/signals.py is_imu) the policy gives by name only (--imu off), in the episode's order."""
+    if policy.imu_mode(saved_policy(ep)) != "off" or not ep.get("signals"):
+        return []
+    from label import signals as sg
+    topics, meta = sg.imu_topics(ep["context"]), ep.get("signal_meta") or {}
+    return [nm for nm in ep["signals"] if sg.is_imu(nm, (meta.get(nm) or {}).get("source"), topics)]
+
+
+def _without_imu(ep: dict) -> dict:
+    """The episode as the signals block reads it: its IMU streams, under --imu off, only named (ep["imu_by_name"]).
+    The plan was made from every stream, so the sampled instants are the same either way."""
+    imu = imu_by_name(ep)
+    if not imu:
+        return ep
+    return {**ep, "signals": {k: a for k, a in ep["signals"].items() if k not in imu},
+            "signal_meta": {k: m for k, m in (ep.get("signal_meta") or {}).items() if k not in imu},
+            "imu_by_name": imu}
+
+
+def sends_depth_pictures(ep: dict) -> bool:
+    """Whether the request sends depth pictures: the episode records depth and its policy sends them
+    (--depth-pictures on, or a policy saved before the setting)."""
+    return bool(ep.get("depth")) and policy.depth_pictures_mode(saved_policy(ep)) == "on"
+
+
 def untimed_signals(ep: dict) -> frozenset:
     """The signals with no established time on the video (prepare/signal_alignment.py video_timing: placed from both
     starts, or by an unknown placement). Each is given only as its whole-recording summary: never at a sampled
@@ -2500,7 +2549,7 @@ def _no_state_base_text(ep: dict, pl: dict) -> str:
                    if joints else ""))
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
     # depth pictures follow the detail views of an episode with depth (the depth block), so there the video is not all
-    all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
+    all_there_is = (("the cameras' colour and depth images are" if sends_depth_pictures(ep) else "the video is")
                     + " all there is.")
     if ((ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS)
             or ctx.get("state_why") not in (None, NOT_RECORDED)):
@@ -2992,12 +3041,14 @@ def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple,
     """The episode's part of the prompt: the base, with each present block (given, or found now) in its slot."""
     got = dict.fromkeys(PROMPT_SLOTS, "")
     blocks = present_blocks(ep, pl) if blocks is None else blocks
-    if _has_signals(ep, pl):
+    # the signals block gives an IMU stream only its name under --imu off; every other block reads every stream
+    shown = _without_imu(ep)
+    if _has_signals(shown, pl):
         # the readout of the signals is made once: the signals block prints it and the state line names only the
         # joint readings it shows whole
-        pl = {**pl, "readout": _signal_readout(ep, pl)}
+        pl = {**pl, "readout": _signal_readout(shown, pl)}
     for b in blocks:
-        got[b.slot] += b.text(ep, pl)
+        got[b.slot] += b.text(shown if b.name == "signals" else ep, pl)
     capture_text = _camera_capture_text(ep, pl)
     return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl, blocks))
             + "\n"
@@ -3036,13 +3087,14 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                   max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
                   example_dir=None, inspect_evidence=False, model=None, reasoning=None,
                   sample_fps=None, task_mode=None, dataset_note=None, derived_dir=None, read_only=False,
-                  inspection=None) -> dict:
+                  inspection=None, imu=None, depth_pictures=None) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell. task_mode
     only reproduces a saved policy (label/policy.py resolve); it never changes the request."""
     ep = load(ep_dir)
     ep['context']['annotation_policy'] = policy.resolve(ep['context'], model=model, reasoning=reasoning,
-        sample_fps=sample_fps, task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
+        sample_fps=sample_fps, task_mode=task_mode, dataset_note=dataset_note, inspection=inspection,
+        imu=imu, depth_pictures=depth_pictures)
     policy.require_request_window(ep['context'], request_duration(ep))
     from prepare import jaws
     ep['jaw_evidence'] = (jaws.for_episode(ep, derived_dir, read_only=True) if read_only
@@ -3080,7 +3132,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     array_bytes = sum(len(base64.b64decode(p['image_url']['url'].split(',', 1)[1]))
                       for p in array_parts if p['type'] == 'image_url')
     # depth at the detail instants, and one colour scale per camera from its readings at the sampled instants
-    depth_at = _depth_frames(ep, pl)
+    depth_at = _depth_frames(ep, pl) if sends_depth_pictures(ep) else {}
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)

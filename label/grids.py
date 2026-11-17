@@ -153,7 +153,8 @@ def _one(record: dict, ep_dir: Path) -> list[dict]:
             max_tokens=settings['max_tokens'], cell_w=settings['cell_w'], example_dir=examples,
             sample_fps=selected.get('sample_fps'), task_mode=selected.get('task_mode'),
             dataset_note=selected.get('dataset_note'),
-            inspection=policy.inspection_mode(selected))
+            inspection=policy.inspection_mode(selected), imu=policy.imu_mode(selected),
+            depth_pictures=policy.depth_pictures_mode(selected))
         if not _same_grid_inputs(identity, current):
             raise GridError('the source, dictionary or request settings differ from the recorded request')
         req = me.build_request(ep_dir, cell_w=recipe['cell'][0], grid_cols=recipe['grid_cols'],

@@ -36,6 +36,35 @@ def inspection_mode(selected: dict) -> str:
     return selected.get('inspection', LEGACY_INSPECTION)
 
 
+# Two inputs a new policy leaves out of the request, because they cost input without helping a label: IMU readings at
+# each instant (an Ego recording's head and wrist IMUs were about 34.5% of a run's billed input, and no reply cited
+# them) and the depth pictures after the detail views. With --imu off each IMU stream (label/signals.py is_imu) is
+# named once instead of its rows; with --depth-pictures off the depth note stays and no depth picture is sent. A policy
+# that leaves out either one also names every stream that never changes in one list, without its value. A policy
+# saved before these settings existed resolves both to on (never written), so a job labelled then resumes as it was
+# paid for, like LEGACY_INSPECTION; with both on the request is the one sent before them.
+SWITCHES = ('on', 'off')
+IMU = DEPTH_PICTURES = 'off'
+LEGACY_IMU = LEGACY_DEPTH_PICTURES = 'on'
+
+
+def imu_mode(selected: dict) -> str:
+    """Whether a resolved or saved policy gives IMU streams their rows (on) or only their names (off)."""
+    return selected.get('imu', LEGACY_IMU)
+
+
+def depth_pictures_mode(selected: dict) -> str:
+    """Whether a resolved or saved policy sends depth pictures after the detail views (on) or none (off)."""
+    return selected.get('depth_pictures', LEGACY_DEPTH_PICTURES)
+
+
+def names_constants(selected: dict) -> bool:
+    """Whether a policy names every stream that never changes in one list instead of one line with its value: a
+    policy that leaves out IMU rows or depth pictures does; one saved before those settings, or with both on, does
+    not."""
+    return imu_mode(selected) == 'off' or depth_pictures_mode(selected) == 'off'
+
+
 def output_limit(answer_tokens: int, reasoning: str) -> int:
     """max_completion_tokens for a call that writes up to answer_tokens at this reasoning effort."""
     if reasoning not in REASONING_TOKENS:
@@ -49,7 +78,8 @@ FIELD_DICTIONARY = False
 def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None,
             sample_fps: float | None = None, task_mode: str | None = None,
             dataset_note: str | None = None, inspection: str | None = None,
-            field_dictionary: bool | None = None) -> dict:
+            field_dictionary: bool | None = None, imu: str | None = None,
+            depth_pictures: str | None = None) -> dict:
     """Source declarations and caller overrides, independent of dataset names or absent task text."""
     saved = ctx.get('annotation_policy') or {}
     if saved and (not isinstance(saved, dict) or saved.get('version') != VERSION):
@@ -99,6 +129,11 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
     inspect = inspection if inspection is not None else inspection_mode(saved) if saved else INSPECTION
     if inspect not in INSPECTION_MODES:
         raise ValueError(f'inspection must be one of {", ".join(INSPECTION_MODES)}')
+    imu = imu if imu is not None else imu_mode(saved) if saved else IMU
+    depth_pictures = (depth_pictures if depth_pictures is not None
+                      else depth_pictures_mode(saved) if saved else DEPTH_PICTURES)
+    if imu not in SWITCHES or depth_pictures not in SWITCHES:
+        raise ValueError('imu and depth pictures must each be on or off')
     # a new policy has no field dictionary unless asked for: arm state alone qualifies an upload for the call, so it
     # ran on nearly every teleop upload. A policy saved without the key was made when the dictionary ran by default,
     # and resumes with it
@@ -112,6 +147,8 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
             **({'task_mode': mode} if mode is not None else {}),
             'dataset_note': note,
             **({'inspection': inspect} if inspect != LEGACY_INSPECTION else {}),
+            **({'imu': imu} if imu != LEGACY_IMU else {}),
+            **({'depth_pictures': depth_pictures} if depth_pictures != LEGACY_DEPTH_PICTURES else {}),
             **({'field_dictionary': False} if not dictionary else {})}
 
 
@@ -130,6 +167,12 @@ def add_arguments(parser) -> None:
                         help='paid evidence selection before each annotation: auto (default) for a recording with a '
                              'touch sensor (not a force/torque sensor alone) or fields the prompt does not carry, all '
                              'for any recording with recorded fields beyond its cameras, depth included, off for none')
+    parser.add_argument('--imu', choices=SWITCHES, default=None,
+                        help="IMU readings at each instant (on), or only each IMU stream's name (off, the default "
+                             'for a new policy)')
+    parser.add_argument('--depth-pictures', choices=SWITCHES, default=None,
+                        help='depth pictures after the detail views (on), or the depth note alone (off, the default '
+                             'for a new policy)')
 
 
 def persist(episodes, **overrides) -> dict:
