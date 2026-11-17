@@ -212,6 +212,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "object": s.get("object") or "",
             "carry_phase": (f"-> {dest}" if dest else ""),
             "contribution": s.get("contribution") or "",
+            **({'activity_scope': s['activity_scope']} if s.get('activity_scope') else {}),
             "progress": s.get("progress"),
             # a recording labelled in parts: the step's progress toward its own part's sub-task (label/pieces.py)
             **({"progress_in_part": s["progress_in_part"]} if s.get("progress_in_part") is not None else {}),
@@ -276,6 +277,10 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "dataset": dataset,
         "episode_prompt": labels.get("task_summary") or released("recording_summary"),
         "viewpoint": labels.get("viewpoint"),  # ego: first_person | third_person
+        **({'recording_activities': finite(copy.deepcopy(labels['recording_activities']))}
+           if isinstance(labels.get('recording_activities'), list) else {}),
+        **({'task_scope_review': finite(copy.deepcopy(result['task_scope_review']))}
+           if isinstance(result.get('task_scope_review'), dict) else {}),
         **({'camera_observations': finite(copy.deepcopy(result['camera_observations']))}
            if not failed and isinstance(result.get('camera_observations'), dict)
            and result['camera_observations'].get('version') == 1 else {}),
