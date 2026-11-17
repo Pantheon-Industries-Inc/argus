@@ -1976,6 +1976,9 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
     if msg.get("reasoning"):
         # the reasoning text or summary the provider returned, when it returns one
         result["reasoning_text"] = msg["reasoning"][:20000]
+    # head cameras: both hands, only the left and only the right out of frame, in seconds and % of the episode
+    from label import hand_visibility
+    hand_visibility.attach(result, hand_visibility.episode_length(ep_dir))
     write_atomic(out_path, result)
     if parse_ok and isinstance(result.get('sensor_evidence'), dict) and isinstance(result.get('evidence_inspection'), dict) \
             and result['evidence_inspection'].get('digest'):

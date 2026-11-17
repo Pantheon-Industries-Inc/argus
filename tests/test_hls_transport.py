@@ -95,7 +95,7 @@ const ev=[];const h0=document.getElementById('hls');for(const k of ['waiting','s
 const h=document.getElementById('hls'),ahead=h.buffered.end(h.buffered.length-1)-h.currentTime;
 const sought=new Promise(r=>h.requestVideoFrameCallback((now,md)=>r(md.mediaTime)));h.currentTime=18.4;
 const seekTime=await sought;owner.abort();return {times,ahead,seekTime,disposed:!h._hlsTransport,source:h.getAttribute('src'),diag:window.__diag};})()""")
-            print('HLSDIAG', json.dumps(result['diag']), 'counts', {k: len(v) for k, v in result['times'].items()})
+            import warnings; warnings.warn('HLSDIAG ' + json.dumps({'diag': result['diag'], 'counts': {k: len(v) for k, v in result['times'].items()}}))
             for mode,times in result['times'].items():
                 assert len(times)>=8 and times[-1]-times[0]>=1.5,(mode,times)
                 assert all(min(abs(t-want)for want in expected)<1e-6 for t in times),(mode,times)

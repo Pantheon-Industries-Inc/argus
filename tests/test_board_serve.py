@@ -45,7 +45,8 @@ def _board(tmp: Path) -> Path:
     head = _episode("my_own_rig", "ego_head",
                     tasks=[{"task": "wash a cup", "outcome": "success", "completed_at_s": 5.0},
                            {"task": "dry it", "outcome": "failure"}])
-    head["event_labels"][1]["hands_visible"] = False
+    head["hands_out"] = {"episode_s": 12.0, "both_s": 8.0, "both_pct": 66.667, "left_only_s": 0.0,
+                         "left_only_pct": 0.0, "right_only_s": 0.0, "right_only_pct": 0.0}
     head["_meta"]["episode_id"] = "episode_000002"
     grip = _episode("fastumi", "handheld_gripper", camera_views=["left", "right"])
     grip["_meta"]["episode_id"] = "episode_000003"
@@ -63,10 +64,10 @@ def test_rail_records_and_episode_view(tmp_path):
     arms = recs["episode_000001"]
     assert (arms["n_issues"], arms["n_minor_issues"], arms["max_severity"]) == (1, 1, "medium")
     assert arms["top_issue"] == "the instruction names another object"
-    assert arms["n_mistakes"] == 1 and arms["families"] and arms["hands_hidden_s"] is None
+    assert arms["n_mistakes"] == 1 and arms["families"] and "hands_out" not in arms
     head = recs["episode_000002"]
     assert (head["n_tasks"], head["n_task_success"], head["dataset"]) == (2, 1, "my_own_rig")
-    assert head["hands_hidden_s"] == pytest.approx(8.0)
+    assert head["hands_out"]["both_s"] == pytest.approx(8.0)
     # every issue the page shows carries its family and whether it counts, from the one counting rule
     view = serve.episode_view(json.loads((board / "qa" / "episode_000001.json").read_text()))
     assert [i["counted"] for i in view["data_issues"]] == [True, False]

@@ -166,6 +166,10 @@ def refresh_received(record: dict) -> dict:
     if '_reparsed' in (record.get('labels') or {}):
         labels['_reparsed'] = copy.deepcopy(record['labels']['_reparsed'])
     updated.update(labels=labels, parse_ok=ok)
+    from label import hand_visibility
+    known = (record.get('hands_out') or {}).get('episode_s') if isinstance(record.get('hands_out'), dict) else None
+    hand_visibility.attach(updated, known if known is not None
+                           else hand_visibility.episode_length(record.get('episode_dir') or ''))
     if ok:
         if 'camera_observations' not in labels:
             updated.pop('camera_observations', None)
