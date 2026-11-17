@@ -18,6 +18,38 @@ def _board(n_peers=6, peer_goal=10.0):
     return peers
 
 
+def test_capture_only_time_is_removed_from_work_and_subgoal_score_durations():
+    record = _record('open the left door then the right door', 10,
+        [(0, 2, 'advancing', .5), (2, 8, 'wasteful', .5), (8, 10, 'advancing', 1)],
+        [(8, 'left door open')])
+    record['event_labels'][1]['activity_scope'] = 'recording_control'
+    facts = scores.facts(record)
+    assert (facts['start_s'], facts['end_s'], facts['goal_s']) == (0, 10, 10)
+    assert (facts['window_s'], facts['hesitation_s'], facts['active_s']) == (4, 0, 4)
+    subs = scores.subgoals(record, facts)
+    assert [(s['start_s'], s['end_s'], s['duration_s'], s['steady']) for s in subs] == [
+        (0, 8, 2, 10), (8, 10, 2, 10)]
+    peers = _board(peer_goal=4)
+    peers['capture.json'] = record
+    scored = scores.score_board(peers)['capture.json']
+    assert scored['inputs']['time_to_goal_s'] == 4
+    assert scored['inputs']['hesitation_share'] == 0
+    assert scored['efficiency'] == 10
+    assert scored['subgoals'][0]['efficiency'] == 10
+
+
+def test_capture_exclusion_preserves_simultaneous_real_work_and_ordinary_idle_time():
+    record = _record('open both doors', 10,
+        [(0, 2, 'advancing', .2), (2, 8, 'wasteful', .2), (4, 6, 'advancing', .5),
+         (8, 9, 'idle', .5), (9, 10, 'advancing', 1)], [(9, 'left door open')])
+    record['event_labels'][1]['activity_scope'] = 'recording_control'
+    facts = scores.facts(record)
+    assert (facts['window_s'], facts['hesitation_s'], facts['active_s']) == (6, 1, 5)
+    first, last = scores.subgoals(record, facts)
+    assert first['duration_s'] == 5 and first['steady'] == 6
+    assert last['duration_s'] == 1 and last['steady'] == 10
+
+
 def test_a_clean_demo_at_the_typical_time_scores_full_and_a_slow_one_loses_speed_only():
     recs = _board()
     recs["slow.json"] = _record("open the left door, then open the right door", 20.0,

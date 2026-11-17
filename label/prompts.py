@@ -487,13 +487,13 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     ],
     "setting": "<one line describing the workspace>"
   },
-  "timeline_columns": ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation", "contribution", "progress", "hands_visible", "hands_wearing", "notes"],
+  "timeline_columns": ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation", "contribution", "progress", "hands_visible", "hands_wearing", "notes", "activity_scope"],
   "timeline": [
     [<start_s float>, <end_s float>, "left" | "right" | "both", "<free-form verb phrase for what the hand does>",
      "<object acted on, or null>", "<where it goes, or null>", "<e.g. 'into the bin', 'onto the plate', or null>",
      "advancing" | "wasteful" | "idle", <progress float 0..1>, <hands_visible true | false>,
      "<what covers the hands if anything, e.g. 'blue nitrile gloves', 'oven mitt'; 'bare' if the bare skin is visible; null when hands are not visible>",
-     "<notes, e.g. what makes this uncertain, or null>"]
+     "<notes, e.g. what makes this uncertain, or null>", "work" | "recording_control" | "uncertain"]
   ],
   "task_summary": "<one sentence on the work the person does across the clip>",
   "viewpoint": "first_person | third_person - judge from the footage: first_person = a head/chest-mounted egocentric camera where you mostly see the wearer's own hands reaching out from the bottom of the frame and never their face; third_person = an external/tripod camera looking AT the person, where you can see their body, torso, or face. Do not assume; decide from what the camera actually shows.",
@@ -507,6 +507,13 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
   "state_changes": [
     {"t_s": <float>, "object": "<name>",
      "from": "<state before>", "to": "<state after>"}
+  ],
+  "recording_activities": [
+    {"start_s": <float>, "end_s": <float>,
+     "activity": "<operation of this demonstration's capture rig, not an objective of the demonstrated work>",
+     "target": "capture_rig",
+     "evidence": "<visible action and contextual evidence identifying this recording's own capture equipment>",
+     "reason": "<why this serves data collection rather than the demonstrated objective>"}
   ],
   "tasks": [
     {"start_s": <float>, "end_s": <float>,
@@ -616,7 +623,26 @@ Rules:
   gloves", "oven mitt", "work glove" - or "bare" when the bare skin is visible; null only when no hand is
   visible. Track it per step: it changes if the person puts on
   or removes gloves partway through, so report what is actually on the hands at that step.
-- tasks is the list of distinct activities, in time order. Each has a start_s/end_s
+- Separate the demonstrated work from operating the equipment collecting THIS demonstration.
+  tasks contains work objectives. recording_activities contains only positively identified capture-rig
+  operations whose purpose is collecting this demonstration: starting/stopping its recorder, repositioning
+  its worn camera, or adjusting its capture mount. Preserve these actions on the dense timeline, but do not
+  make them work tasks, task failures, unfinished work, or task-critical key_events. Do not count them in
+  task_summary or performance_review. Do not claim which button was pressed when its function is unreadable.
+  Set activity_scope to recording_control only on timeline rows positively identified as such; keep work
+  and uncertain rows in their respective scopes, including real work occurring alongside a rig adjustment.
+  A final interaction with this recording's capture unit, after the demonstrated work finishes and immediately
+  before the clip ends, is strong supporting evidence of capture control. Prioritize checking that final
+  activity. It is not sufficient by itself, and a mid-clip rig adjustment can also be recording activity.
+  This is a purpose judgment using the stated goal, the whole activity sequence, equipment identity and visible
+  action, not a camera/device keyword rule or a rule about the last few seconds. A final action is not evidence
+  of capture control by itself. Filming a product, taking a requested photograph, repairing or calibrating a
+  camera, operating machinery, or adjusting a wearable as the actual demonstration objective remains work,
+  even if the same hardware can record video. An explicit task involving the camera takes precedence over
+  assumptions about capture equipment. If its target or purpose is uncertain, retain it in tasks with that
+  uncertainty; do not silently exclude it. recording_activities is [] when none is confirmed. A clip containing
+  only confirmed capture operations has tasks [], not an invented successful or failed work objective.
+- tasks is the list of distinct work activities, in time order. Each has a start_s/end_s
   span, an open-vocab `task` describing what the person is doing (e.g. "pour water
   into the kettle", "chop the onion"), the `objects` involved, a `success_predicate`
   (the end-state that means THAT activity is done), an `outcome`, and `completed_at_s`
