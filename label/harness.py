@@ -1303,12 +1303,13 @@ def normalize_timeline(labels: dict) -> dict:
                     bad = why
                     break
                 _violation(labels, f'timeline row {i}: {why}')
-        if 'hands_visible' in seg and seg['hands_visible'] is not None and type(seg['hands_visible']) is not bool:
-            why = f'its hands_visible is not true or false ({seg["hands_visible"]!r})'
-            if missing_notes:
-                bad = why
-            else:
-                _violation(labels, f'timeline row {i}: {why}')
+        for key in ('hands_visible', 'left_hand_visible', 'right_hand_visible'):
+            if seg.get(key) is not None and type(seg[key]) is not bool:
+                why = f'its {key} is not true or false ({seg[key]!r})'
+                if missing_notes:
+                    bad = why
+                else:
+                    _violation(labels, f'timeline row {i}: {why}')
         if missing_notes and not bad:
             def compatible(candidate):
                 for key, value in candidate.items():
@@ -1317,7 +1318,7 @@ def normalize_timeline(labels: dict) -> dict:
                     if key in ('start_s', 'end_s', 'progress'):
                         if isinstance(value, bool) or me.number(value) is None:
                             return False
-                    elif key == 'hands_visible':
+                    elif key in ('hands_visible', 'left_hand_visible', 'right_hand_visible'):
                         if type(value) is not bool:
                             return False
                     elif key in ('arm', 'action', 'object', 'destination', 'spatial_relation',

@@ -487,11 +487,12 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     ],
     "setting": "<one line describing the workspace>"
   },
-  "timeline_columns": ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation", "contribution", "progress", "hands_visible", "hands_wearing", "notes", "activity_scope"],
+  "timeline_columns": ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation", "contribution", "progress", "hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing", "notes", "activity_scope"],
   "timeline": [
     [<start_s float>, <end_s float>, "left" | "right" | "both", "<free-form verb phrase for what the hand does>",
      "<object acted on, or null>", "<where it goes, or null>", "<e.g. 'into the bin', 'onto the plate', or null>",
-     "advancing" | "wasteful" | "idle", <progress float 0..1>, <hands_visible true | false>,
+     "advancing" | "wasteful" | "idle", <progress float 0..1>, <hands_visible true | false | null>,
+     <left_hand_visible true | false | null>, <right_hand_visible true | false | null>,
      "<what covers the hands if anything, e.g. 'blue nitrile gloves', 'oven mitt'; 'bare' if the bare skin is visible; null when hands are not visible>",
      "<notes, e.g. what makes this uncertain, or null>", "work" | "recording_control" | "uncertain"]
   ],
@@ -609,16 +610,16 @@ Rules:
   force one global success/failure or one goal frame when there are several activities.
   Segment the clip into the distinct activities in `tasks`. A short clip that is genuinely
   one task yields one task, with its own goal frame.
-- hands_visible is a per-step ground-truth: set it FALSE whenever NEITHER of the
-  person's hands is actually in the supplied frame during that step, and TRUE when
-  at least one hand (or a clearly hand-held object in the grip) is in shot. In
-  first-person video the head/gaze often points away from the hands, so the hands drop
-  below, behind, or out of the frame while the person leans in, looks over a shelf,
-  reaches low, or turns away; in those steps you are inferring the hand action from
-  body pose and context, not seeing it, so hands_visible is false. Judge it from what
-  is actually in the frame for that step, not from whether an action is happening. Be
-  honest and precise: it drives a viewer cue that marks exactly when the annotation is
-  inferred rather than observed. Default TRUE only when a hand is genuinely visible.
+- Record left_hand_visible and right_hand_visible for BOTH of the person's anatomical
+  hands in every step, regardless of which hand is acting. Use true when any part of
+  that hand is visible (a partly visible hand counts), false when it is entirely out
+  of the supplied frame, and null when visibility cannot be determined. A held object
+  alone is not evidence that the hand itself is visible. Judge the supplied image,
+  not the inferred action or whether a pose estimator found a hand.
+  Split a timeline step when either hand's visibility changes, even if its action
+  continues. Repeat the same visibility values on overlapping steps for that moment.
+  Keep hands_visible as the aggregate: true if either hand is visible, false only
+  when both are false, otherwise null. These fields drive the viewer's out-of-view cue.
 - hands_wearing: when a hand IS visible, say what covers it if anything - "blue nitrile
   gloves", "oven mitt", "work glove" - or "bare" when the bare skin is visible; null only when no hand is
   visible. Track it per step: it changes if the person puts on
