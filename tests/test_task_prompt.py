@@ -234,13 +234,13 @@ def test_the_head_camera_prompt_is_mains_but_for_the_three_approved_edits(given,
     took the end-state block from the function under test, so PR 107 rewrote it and the test still passed."""
     expected = main('ego_head', recorded)
     expected = expected.replace(*EGO_VISIBILITY)
-    expected = expected.replace('"progress", "hands_visible", "hands_wearing", "notes"',
-                                '"progress", "hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing", "notes"')
     expected = expected.replace('<hands_visible true | false>,',
                                 '<hands_visible true | false | null>,\n     <left_hand_visible true | false | null>, <right_hand_visible true | false | null>,')
     for old, new in EGO_SOFTENED:
         assert expected.count(old) == 1, old[:60]
         expected = expected.replace(old, new)
+    expected = expected.replace('"hands_visible", "hands_wearing"',
+                                '"hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing"')
     lean = prompts.lean('ego_head')
     assert expected.count(lean) == 1
     expected = expected[:expected.index(lean)] + (EGO_GOAL_OUTCOME if given else EGO_NO_GOAL) + lean
