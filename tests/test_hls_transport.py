@@ -86,7 +86,9 @@ const owner=new AbortController();
                 assert 'exceptionDetails'not in result,result
                 return result['result'].get('value')
             deadline=time.monotonic()+15
-            while not js("[...document.querySelectorAll('video')].every(v=>v.readyState>=2)"):
+            # both players must exist before their readiness counts: evaluated while the target still shows about:blank
+            # or a half-parsed page, an every() over no videos is true, and playback then starts before HLS has data
+            while not js("(v=>v.length===2&&v.every(x=>x.readyState>=2))([...document.querySelectorAll('video')])"):
                 assert time.monotonic()<deadline,'HLS did not load'
                 time.sleep(.05)
             result=js("""(async()=>{const videos=[...document.querySelectorAll('video')],times={mp4:[],hls:[]};let measure=true;
