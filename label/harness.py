@@ -570,6 +570,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     fields = {
         "input_identity": identity,
         "annotation_policy": resolved,
+        **({'task_scope_version': 1} if resolved['rig'] == 'ego_head' else {}),
         **({"jaw_evidence": req["jaw_evidence"]} if req.get("jaw_evidence") else {}),
         **billing,
         **({"sensor_evidence": req["sensor_evidence"]} if req.get("sensor_evidence", {}).get("sensors") else {}),
@@ -1373,7 +1374,7 @@ def normalize_timeline(labels: dict) -> dict:
 
 # the reply's fields by the type the output format gives them (label/prompts.py)
 LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
-               "tasks", "contacts", "contacts_missing", "sensor_findings", "evidence_findings", "camera_observations")
+               "tasks", "recording_activities", "contacts", "contacts_missing", "sensor_findings", "evidence_findings", "camera_observations")
 DICT_FIELDS = ("scene", "completion", "goal_alignment", "goal_outcome")
 TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
 TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",

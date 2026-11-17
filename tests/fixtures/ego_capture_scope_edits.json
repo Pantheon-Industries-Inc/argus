@@ -1,0 +1,18 @@
+[
+  [
+    "  \"timeline_columns\": [\"start_s\", \"end_s\", \"arm\", \"action\", \"object\", \"destination\", \"spatial_relation\", \"contribution\", \"progress\", \"hands_visible\", \"hands_wearing\", \"notes\"],",
+    "  \"timeline_columns\": [\"start_s\", \"end_s\", \"arm\", \"action\", \"object\", \"destination\", \"spatial_relation\", \"contribution\", \"progress\", \"hands_visible\", \"hands_wearing\", \"notes\", \"activity_scope\"],"
+  ],
+  [
+    "     \"<notes, e.g. what makes this uncertain, or null>\"]",
+    "     \"<notes, e.g. what makes this uncertain, or null>\", \"work\" | \"recording_control\" | \"uncertain\"]"
+  ],
+  [
+    "  \"tasks\": [\n",
+    "  \"recording_activities\": [\n    {\"start_s\": <float>, \"end_s\": <float>,\n     \"activity\": \"<operation of this demonstration's capture rig, not an objective of the demonstrated work>\",\n     \"target\": \"capture_rig\",\n     \"evidence\": \"<visible action and contextual evidence identifying this recording's own capture equipment>\",\n     \"reason\": \"<why this serves data collection rather than the demonstrated objective>\"}\n  ],\n  \"tasks\": [\n"
+  ],
+  [
+    "- tasks is the list of distinct activities, in time order.",
+    "- Separate the demonstrated work from operating the equipment collecting THIS demonstration.\n  tasks contains work objectives. recording_activities contains only positively identified capture-rig\n  operations whose purpose is collecting this demonstration: starting/stopping its recorder, repositioning\n  its worn camera, or adjusting its capture mount. Preserve these actions on the dense timeline, but do not\n  make them work tasks, task failures, unfinished work, or task-critical key_events. Do not count them in\n  task_summary or performance_review. Do not claim which button was pressed when its function is unreadable.\n  Set activity_scope to recording_control only on timeline rows positively identified as such; keep work\n  and uncertain rows in their respective scopes, including real work occurring alongside a rig adjustment.\n  A final interaction with this recording's capture unit, after the demonstrated work finishes and immediately\n  before the clip ends, is strong supporting evidence of capture control. Prioritize checking that final\n  activity. It is not sufficient by itself, and a mid-clip rig adjustment can also be recording activity.\n  This is a purpose judgment using the stated goal, the whole activity sequence, equipment identity and visible\n  action, not a camera/device keyword rule or a rule about the last few seconds. A final action is not evidence\n  of capture control by itself. Filming a product, taking a requested photograph, repairing or calibrating a\n  camera, operating machinery, or adjusting a wearable as the actual demonstration objective remains work,\n  even if the same hardware can record video. An explicit task involving the camera takes precedence over\n  assumptions about capture equipment. If its target or purpose is uncertain, retain it in tasks with that\n  uncertainty; do not silently exclude it. recording_activities is [] when none is confirmed. A clip containing\n  only confirmed capture operations has tasks [], not an invented successful or failed work objective.\n- tasks is the list of distinct work activities, in time order."
+  ]
+]

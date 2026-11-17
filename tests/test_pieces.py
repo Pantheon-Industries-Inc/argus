@@ -1968,6 +1968,30 @@ def _ego_part(p: Path, tasks: list, goal_outcome: dict | None) -> dict:
     return record
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+def test_stitch_retains_capture_operations_and_versions_only_uniform_new_requests(tmp_path, monkeypatch, legacy):
+    ep, parts, contexts = _ego_two_parts(tmp_path, monkeypatch, instruction='')
+    records = [_ego_part(p, [], None) for p in parts]
+    for record in records:
+        record['task_scope_version'] = 1
+        record['labels']['recording_activities'] = [{'start_s': .1, 'end_s': .4,
+            'activity': 'Adjust the capture mount', 'target': 'capture_rig',
+            'evidence': 'The hand repositions its worn recorder.', 'reason': 'This sets the recording view.'}]
+    if legacy:
+        records[0].pop('task_scope_version')
+    result = pieces.stitch(ep, list(zip(contexts, records)))
+    assert (result.get('task_scope_version') == 1) is (not legacy)
+    rows = result['labels']['recording_activities']
+    assert len(rows) == 2
+    for index, row in enumerate(rows):
+        start = contexts[index]['piece']['t0_s']
+        assert row['start_s'] == round(start + .1, 3)
+        assert row['end_s'] == round(start + .4, 3)
+        assert row['source_piece']['index'] == index + 1
+    if not legacy:
+        assert harness.annotation_complete(result)
+
+
 COLLECT = {'start_s': 0.0, 'end_s': 0.75, 'task': 'Collect the loose tabletop toothpicks into the holder',
            'objects': ['wooden toothpicks', 'toothpick holder', 'white tissue'], 'outcome': 'success',
            'success_predicate': 'The loose toothpicks have been transferred into the holder and the tissue is clear.',
