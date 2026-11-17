@@ -151,14 +151,6 @@ def _overlaps(patterns, pre, word, post) -> bool:
     return False
 
 
-def hands_out_of_view(event: dict) -> bool:
-    """Explicit per-hand visibility takes precedence; old labels keep their aggregate cue."""
-    keys = ('left_hand_visible', 'right_hand_visible')
-    if any(key in event for key in keys):
-        return any(event.get(key) is False for key in keys)
-    return event.get('hands_visible') is False
-
-
 class Families:
     def __init__(self, path: Path | None = None, tag_names_path: Path | None = None):
         spec = json.loads(Path(path or HERE / "families.json").read_text())
@@ -322,12 +314,3 @@ class Families:
         return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted},
                 "unrated": {k: v for k, v in unrated.items() if k not in counted},
                 "not_counted": {k: v for k, v in not_counted.items() if k not in counted}}
-
-    def hands_hidden_seconds(self, d: dict) -> float | None:
-        """Seconds with at least one hand out of view in head-camera footage, from the dense timeline.
-        None for other rigs, where the question does not apply."""
-        if d.get("_rig") != "ego_head":
-            return None
-        return union_seconds([(float(e["t_s"]), float(e["end_s"])) for e in d.get("event_labels") or []
-                              if hands_out_of_view(e) and e.get("t_s") is not None
-                              and e.get("end_s") is not None])

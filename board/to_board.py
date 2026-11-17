@@ -287,6 +287,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
            and result['camera_observations'].get('version') == 1 else {}),
         "objects": objects,
         "event_labels": event_labels,
+        # head cameras: both hands, only the left and only the right out of frame (label/hand_visibility.py)
+        **({"hands_out": finite(copy.deepcopy(result["hands_out"]))}
+           if not failed and isinstance(result.get("hands_out"), dict) else {}),
         "key_events": key_events,
         "state_changes": labels.get("state_changes") or [],
         "scene_graph": labels.get("scene_graph") or [],
