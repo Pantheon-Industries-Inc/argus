@@ -514,7 +514,7 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     # a value the same at every frame is named once, on one line with the others like it, and a new policy names it
     # without its value (label/policy.py names_constants)
     assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table
-    assert ("Also recorded, each the same wherever it reads (values not given): observation.state.torso."
+    assert ("Never changing, values not given: observation.state.torso."
             in me.build_request(ep)["prompt"])
     assert "next.done (1 value): 0 to 1" in table
     assert "task_index" not in table and "  index" not in table and "timestamp" not in table

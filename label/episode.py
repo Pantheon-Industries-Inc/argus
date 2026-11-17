@@ -1748,10 +1748,10 @@ def _signals_table(ep: dict, pl: dict) -> str:
     if wherever:
         lines.append("  The same wherever it reads: " + "; ".join(wherever))
     if unchanging:
-        lines.append("  Also recorded, each the same wherever it reads (values not given): "
+        lines.append("  Never changing, values not given: "
                      + ", ".join(unchanging) + ".")
     if imu:
-        lines.append("  IMU streams also recorded, their readings not given here: " + ", ".join(imu) + ".")
+        lines.append("  IMU streams, readings not given: " + ", ".join(imu) + ".")
     if pl["spans"] and arrs:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")

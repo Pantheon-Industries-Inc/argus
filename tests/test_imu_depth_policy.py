@@ -43,7 +43,7 @@ def test_a_new_policy_names_the_ego_imu_streams_and_gives_none_of_their_rows():
     episode = _signals_text(*_ego())
     for name in EGO_IMU:
         assert f"    {name} x: " not in episode and f"  {name} (" not in episode
-    assert "IMU streams also recorded, their readings not given here: " + ", ".join(EGO_IMU) + "." in episode
+    assert "IMU streams, readings not given: " + ", ".join(EGO_IMU) + "." in episode
     assert "    glove.pressure_kpa: " in episode          # the other streams keep their rows
 
 
@@ -55,12 +55,12 @@ def test_imu_on_gives_the_ego_imu_rows_as_before():
     assert on == _signals_text(legacy_ep, pl)
     for name in EGO_IMU:
         assert f"    {name} x: " in on
-    assert "IMU streams also recorded" not in on
+    assert "IMU streams, readings not given" not in on
 
 
 def test_a_constant_stream_is_named_in_one_list_under_a_new_policy_and_keeps_its_value_line_otherwise():
     new = _signals_text(*_ego())
-    assert "Also recorded, each the same wherever it reads (values not given): recorder.gain." in new
+    assert "Never changing, values not given: recorder.gain." in new
     assert "The same at every frame: recorder.gain 4" not in new
     old = _signals_text(*_ego(imu="on", depth_pictures="on"))
     assert "The same at every frame: recorder.gain 4" in old and "values not given" not in old
@@ -68,7 +68,7 @@ def test_a_constant_stream_is_named_in_one_list_under_a_new_policy_and_keeps_its
 
 def test_imu_off_alone_or_depth_pictures_off_alone_names_the_constant_streams():
     for settings in ({"imu": "off", "depth_pictures": "on"}, {"imu": "on", "depth_pictures": "off"}):
-        assert "(values not given): recorder.gain." in _signals_text(*_ego(**settings))
+        assert "values not given: recorder.gain." in _signals_text(*_ego(**settings))
 
 
 def test_a_recording_with_no_imu_and_no_constant_stream_gets_the_prompt_it_got_before():
