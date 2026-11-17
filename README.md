@@ -270,6 +270,8 @@ A capped run uses verified model rates or a saved OpenRouter pricing quote and r
 **Other checks**
 
 [`checks.timebase scan`](checks/timebase.py) detects MolmoAct2 episodes that play faster than real time, and [`apply`](checks/timebase.py) adds its measurements and flags without changing their clocks. A check that stops with an error is reported as errored, never as clean. Optional hand pose uses [`board/hand_pose/modal_app.py`](board/hand_pose/modal_app.py) and [`board/hands.py`](board/hands.py), runs separately from annotation, and falls under the licenses below.
+A board can also draw hand geometry predicted by another model in the source camera's own pixels and depth: name its folder with `"hands": {"geometry": "PATH"}` in the board manifest, in the `board-hand-geometry/1` format that [`validate_geometry`](board/hands.py) documents and enforces. The viewer then offers Off, Skeleton and Mesh over head footage, loads only the chunks playback needs and never interpolates or invents missing hands. [`board static site --hide-model-attribution`](board/static.py) builds a public board that speaks as the owner and leaves out model names, comparisons and call costs.
+
 
 </details>
 
@@ -338,7 +340,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`board hands`](board/hands.py) | `--src`, `--qa`, `--clips`, `--episodes`, `--out`, `--jobs` |
 | [`board sensors`](board/sensors.py) | `--qa`, `--episodes`, `--out` |
 | [`board serve`](board/serve.py) | `--board`, `--clips`, `--host`, `--port`, `--title`, `--header`, `--allow-host`, `--publish-uploader-values`, `--dictionary-job` |
-| [`board static`](board/static.py) | `--board`, `--clips`, `--compare`, `--hands`, `--keypoints`, `--sensors`, `--out`, `--jobs`, `--threads`, `--limit-per-dataset`, `--dataset`, `--samples`, `--first`, `--public-base`, `--publish-uploader-values`, `--dictionary-job`, `--build-id`, `--force`, `--title`, `--header` |
+| [`board static`](board/static.py) | `--board`, `--clips`, `--compare`, `--hands`, `--keypoints`, `--sensors`, `--out`, `--jobs`, `--threads`, `--limit-per-dataset`, `--dataset`, `--samples`, `--first`, `--public-base`, `--publish-uploader-values`, `--hide-model-attribution`, `--compact-hand-geometry`, `--dictionary-job`, `--build-id`, `--force`, `--title`, `--header` |
 | [`board to_board`](board/to_board.py) | `--in-dir`, `--out-dir`, `--dataset` |
 | [`board.hand_pose.specs`](board/hand_pose/specs.py) | `--out` |
 | [`compare board`](compare/__main__.py) | `--entries`, `--out` |

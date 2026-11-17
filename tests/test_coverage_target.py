@@ -23,7 +23,7 @@ const railEps = () => ALL_EPS;
 const presentDatasets = eps => [...new Set(eps.map(e => e.dataset))];
 const datasetOf = e => e.dataset;
 const esc = String, dsLabel = String;
-const document = {body: {classList: {contains: () => false}}};
+const document = {body: {classList: {contains: () => false, toggle: () => {}}}, querySelectorAll: () => []};
 const requestAnimationFrame = f => f();
 const coverageEl = {innerHTML: '', querySelectorAll: () => [], querySelector: () => null};
 let currentDataset = 'yam';
@@ -31,7 +31,7 @@ let currentDataset = 'yam';
 const page = require('fs').readFileSync(require('path').join(process.argv[3], 'board', 'index.html'), 'utf8');
 const line = name => page.slice(page.indexOf(name), page.indexOf('\n', page.indexOf(name)) + 1);
 const code = stub + line('let TARGETS =') + line('const coverageWas =')
-  + ['fmtHours', 'fmtSpan', 'sumDur', 'fmtOf', 'fitLine', 'coverageBar', 'renderCoverage'].map(piece).join('')
+  + ['fmtHours', 'fmtSpan', 'sumDur', 'fmtOf', 'fitLine', 'coverageBar', 'renderDatasetHeadings', 'renderCoverage'].map(piece).join('')
   + 'renderCoverage("yam", ALL_EPS.filter(e => e.dataset === "yam")); coverageEl.innerHTML';
 console.log(JSON.stringify(eval(code)));
 '''
