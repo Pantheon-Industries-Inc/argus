@@ -91,10 +91,11 @@ const owner=new AbortController();
                 time.sleep(.05)
             result=js("""(async()=>{const videos=[...document.querySelectorAll('video')],times={mp4:[],hls:[]};let measure=true;
 for(const v of videos){const tick=(now,md)=>{if(measure){times[v.id].push(md.mediaTime);v.requestVideoFrameCallback(tick)}};v.requestVideoFrameCallback(tick);}
-await Promise.all(videos.map(v=>v.play()));await new Promise(r=>setTimeout(r,2100));measure=false;videos.forEach(v=>v.pause());
+const ev=[];const h0=document.getElementById('hls');for(const k of ['waiting','stalled','playing','play','pause','error','canplay','seeking','seeked','emptied','loadeddata'])h0.addEventListener(k,()=>ev.push([k,+performance.now().toFixed(0),h0.currentTime]));const t0=performance.now();await Promise.all(videos.map(v=>v.play()));const tplay=performance.now()-t0;await new Promise(r=>setTimeout(r,2100));measure=false;const diag={tplay,rs:h0.readyState,ns:h0.networkState,paused:h0.paused,ct:h0.currentTime,err:h0.error&&h0.error.code,buf:[...Array(h0.buffered.length).keys()].map(i=>[h0.buffered.start(i),h0.buffered.end(i)]),ev,mp4ct:document.getElementById('mp4').currentTime,ua:navigator.userAgent,hw:navigator.hardwareConcurrency};console.log('DIAG');window.__diag=diag;videos.forEach(v=>v.pause());
 const h=document.getElementById('hls'),ahead=h.buffered.end(h.buffered.length-1)-h.currentTime;
 const sought=new Promise(r=>h.requestVideoFrameCallback((now,md)=>r(md.mediaTime)));h.currentTime=18.4;
-const seekTime=await sought;owner.abort();return {times,ahead,seekTime,disposed:!h._hlsTransport,source:h.getAttribute('src')};})()""")
+const seekTime=await sought;owner.abort();return {times,ahead,seekTime,disposed:!h._hlsTransport,source:h.getAttribute('src'),diag:window.__diag};})()""")
+            print('HLSDIAG', json.dumps(result['diag']), 'counts', {k: len(v) for k, v in result['times'].items()})
             for mode,times in result['times'].items():
                 assert len(times)>=8 and times[-1]-times[0]>=1.5,(mode,times)
                 assert all(min(abs(t-want)for want in expected)<1e-6 for t in times),(mode,times)
