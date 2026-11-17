@@ -3793,7 +3793,7 @@ function matchesIssueFilter(e) {
   if (ISSUE_FILTER.startsWith(TAG_FILTER)) return (e.review_tags || []).includes(ISSUE_FILTER.slice(TAG_FILTER.length));
   if (ISSUE_FILTER === '__any__') return hasDataIssue(e);
   if (ISSUE_FILTER === '__anymistake__') return hasMistake(e);
-  if (ISSUE_FILTER.startsWith('__hands_')) return ((e.hands_out || {})[ISSUE_FILTER.slice(8, -2) + '_s'] || 0) > 0;
+  if (ISSUE_FILTER === '__hands__') return (e.hands_hidden_s || 0) > 0;
   return famsOf(e).includes(ISSUE_FILTER);
 }
 function buildIssueFilter(ds) {
@@ -3813,14 +3813,13 @@ function buildIssueFilter(ds) {
   const groups = [];
   const overview = [['All episodes', null, eps.length, ''], ['Any data issue', '__any__', withAny, 'data']];
   if (withMistake) overview.push(['Any operator mistake', '__anymistake__', withMistake, 'mistake']);
-  // head cameras: three separate figures from the labels (label/hand_visibility.py), each with its episodes and its
-  // share of the hours of the labels that record each hand; never one blended number
-  const handsOut = handsOutShares(eps);
-  if (handsOut) for (const [name, key] of [['Both hands out of view', 'both'], ['Only the left hand out of view',
-    'left_only'], ['Only the right hand out of view', 'right_only']]) {
-    const p = 100 * handsOut[key];
-    overview.push([name, '__hands_' + key + '__', eps.filter(e => ((e.hands_out || {})[key + '_s'] || 0) > 0).length, '',
-      `${p === 0 ? '0' : p < 1 ? p.toFixed(2) : p.toFixed(1)}% of ${(handsOut.seconds / 3600).toFixed(1)}h with per-hand labels`]);
+  // head cameras: the episodes where the wearer's hands leave the view, and how much of the footage that is
+  if (eps.some(e => e.hands_hidden_s != null)) {
+    const hid = eps.filter(e => (e.hands_hidden_s || 0) > 0);
+    const share = sumDur(eps) ? eps.reduce((a, e) => a + (e.hands_hidden_s || 0), 0) / sumDur(eps) : 0;
+    const p = 100 * share;
+    overview.push(['Hands out of view', '__hands__', hid.length, '', `${p === 0 ? '0' : p < 1 ? p.toFixed(2)
+      : p.toFixed(1)}% of recorded hours`]);
   }
   groups.push({key: 'overview', title: 'Overview', items: overview});
   if (tagCounts.size) groups.push({key: 'review', title: 'Why on this board',
@@ -4097,15 +4096,6 @@ function fmtSpan(sec, long) {
   return sec < 3600 ? [(sec / 60).toFixed(1), long ? 'minutes' : 'min'] : [fmtHours(sec), long ? 'hours' : 'h'];
 }
 function sumDur(list) { return list.reduce((a, e) => a + (e.duration_s || 0), 0); }
-// the share of the labelled hours with both hands, only the left and only the right out of frame, over the episodes
-// whose labels record each hand (hands_out from label/hand_visibility.py); null when none does
-function handsOutShares(list) {
-  const eps = list.filter(e => e.hands_out && Number(e.hands_out.episode_s) > 0);
-  const seconds = eps.reduce((a, e) => a + Number(e.hands_out.episode_s), 0);
-  if (!seconds) return null;
-  const share = key => eps.reduce((a, e) => a + (Number(e.hands_out[key + '_s']) || 0), 0) / seconds;
-  return {both: share('both'), left_only: share('left_only'), right_only: share('right_only'), seconds};
-}
 // a dataset's target from the manifest (board/serve.py targets): episodes and hours a run in progress is meant to label
 let TARGETS = (BOARD.targets && typeof BOARD.targets === 'object') ? BOARD.targets : {};
 // labelled seconds against a target in hours, both in the target's unit: [labelled, target, unit]
