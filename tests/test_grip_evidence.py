@@ -152,6 +152,12 @@ assert.equal(api.activeSensorEvidence(evidence,.7)?.visual,'Medium confidence');
 const panel=api.sensorEvidenceHtml(evidence,[]);
 assert(panel.includes('Tactile findings')&&panel.replace(/<[^>]*>/g,'').includes('Thumb response eases'));
 assert(panel.includes('Astra annotation'));
+const publicApi=new Function('esc','fmtT','BOARD',source.slice(begin,end)+'return {sensorEvidenceHtml};')(esc,fmtT,{model_attribution:false});
+const publicPanel=publicApi.sensorEvidenceHtml(evidence,[]);
+assert(publicPanel.includes('Assessment')&&publicPanel.includes('We interpreted'));
+assert(publicPanel.includes('<summary>Reasoning</summary>'));
+assert(!publicPanel.includes('Astra'));
+
 assert(panel.includes('aria-pressed="true"'),'the initial finding is selected and explained');
 assert(!panel.includes('sensor-phase-profile'),'whole-glove percentages are not the evidence for mapped findings');
 assert(!panel.includes('Rejected claim'),'a human rejection overrides the saved machine finding');

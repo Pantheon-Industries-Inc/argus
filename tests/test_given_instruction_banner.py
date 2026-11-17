@@ -17,7 +17,7 @@ const cut = (a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); if (i < 0 |
 const fn = name => cut(`function ${name}(`, '\n}\n') + '\n}\n';
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const src = fn('nameParts') + fn('whoOwn') + cut('  // Given or inferred. When the dataset ships', '  // Key events (milestone layer), sorted.');
-const banner = new Function('d', 'comp', 'meta', 'hasTasks', 'who', 'esc', src + 'return {bannerLabel, bannerBody};');
+const banner = new Function('d', 'comp', 'meta', 'hasTasks', 'who', 'esc', 'const BOARD = {};' + src + 'return {bannerLabel, bannerBody};');
 const cases = JSON.parse(process.argv[2]);
 console.log(JSON.stringify(cases.map(c => banner(c.d, c.d.completion || {}, c.meta, c.hasTasks, 'Astra', esc))));
 '''
@@ -56,7 +56,7 @@ const cut = (a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); if (i < 0 |
 const fn = name => cut(`function ${name}(`, '\n}\n') + '\n}\n';
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const src = fn('nameParts') + fn('whoOwn') + cut("  // the rule every outcome reader shares", '  // Key events (milestone layer), sorted.');
-const page = new Function('d', 'comp', 'meta', 'who', 'esc', src + 'return {shown: tasks.length, bannerLabel, bannerBody};');
+const page = new Function('d', 'comp', 'meta', 'who', 'esc', 'const BOARD = {};' + src + 'return {shown: tasks.length, bannerLabel, bannerBody};');
 console.log(JSON.stringify(JSON.parse(process.argv[2]).map(c => page(c.d, c.d.completion || {}, c.meta, 'Astra', esc))));
 '''
 TASK = {'start_s': 0, 'end_s': 9, 'task': 'stack the cups', 'outcome': 'success'}
@@ -121,7 +121,7 @@ def test_the_banner_shows_every_claim_the_dataset_makes_beside_the_models_readin
     assert steps['bannerLabel'].startswith("The dataset's timed steps and")
     assert 'wipe up' in steps['bannerBody'] and 'wipe the table' in steps['bannerBody']
     assert "only part of the dataset's steps" in steps['bannerBody']
-    assert 'success criterion' in neither['bannerBody'] and 'three cups stacked' in neither['bannerBody']
+    assert 'Success criterion' in neither['bannerBody'] and 'three cups stacked' in neither['bannerBody']
     body = both['bannerBody']
     assert body.index('given goal') < body.index('matches given goal') < body.index('timed steps')
 

@@ -173,10 +173,12 @@ const shown = P => ({active: P.ctx.__nav.active(), drawn: P.ctx.__nav.drawn(), s
     const P = failing(b.file);
     P.ctx.history.replaceState(null, '', '?ep=' + encodeURIComponent(a.file));
     await P.ctx.loadEpisodes(); await P.settle();
-    const drawnA = {drawn: P.ctx.__nav.drawn(), differs: diff(P.state(), R.state()).map(x => x.id)};
+    const drawnA = {drawn: P.ctx.__nav.drawn(),
+      overlay_canvas: P.doc.getElementById('left-col').innerHTML.includes('id="hp-canvas"'), differs: diff(P.state(), R.state()).map(x => x.id)};
     await P.ctx.setDataset(b.dataset, b.file); await P.settle();
     out.failed_after_drawn = {a: a.file, b: b.file, drawn_a: drawnA, reference_error: shown(R).error,
-      error: shown(P).error, drawn: P.ctx.__nav.drawn(), left: diff(P.state(), R.state())};
+      error: shown(P).error, drawn: P.ctx.__nav.drawn(),
+      overlay_canvas: P.doc.getElementById('left-col').innerHTML.includes('id="hp-canvas"'), left: diff(P.state(), R.state())};
     done(P); done(R);
   }
 
