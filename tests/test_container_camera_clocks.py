@@ -198,7 +198,7 @@ def test_hdf_actual_depth_ties_keep_capture_times_and_pair_every_depth_picture(t
     for k, array in got.items():
         np.testing.assert_array_equal(array, np.full((64, 64), 1000 + k * 10, np.uint16))
     assert entry['paired_camera'] == 'exo'
-    assert "Depth is placed using assumed presentation times" in episode.build_request(ep)["prompt"]
+    assert "Depth is placed using assumed presentation times" in episode.build_request(ep, depth_pictures="on")["prompt"]
 
 
 def test_hdf_depth_clock_is_qualified_when_colour_capture_clock_is_unique(tmp_path):

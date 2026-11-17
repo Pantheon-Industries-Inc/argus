@@ -146,7 +146,7 @@ def test_invalid_depth_clock_does_not_claim_shared_timestamps(tmp_path):
     assert ctx['depth_camera_clock']['exo']['clock_problem'] == 'nonfinite'
     with np.load(ep / 'recorded_container_times.npz') as z:
         np.testing.assert_array_equal(z['depth/timestamps'], raw)
-    req = episode.build_request(ep)
+    req = episode.build_request(ep, depth_pictures="on")    # the clock note qualifies the pictures
     assert 'Shared timestamps' not in req['prompt']
     assert 'unusable recorded clock' in req['prompt']
     assert req['depth_views'] == ['exo']
