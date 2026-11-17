@@ -291,6 +291,41 @@ def names_joints_or_state(name: str) -> bool:
             and not _names_word(name, COMMAND_WORDS))
 
 
+# An inertial sensor's own words, and the message type a ROS IMU is recorded as (sensor_msgs/msg/Imu, whose fields are
+# orientation, angular_velocity and linear_acceleration and their covariances)
+IMU_WORDS = ("imu", "gyro", "gyroscope")
+ACCEL_WORDS = ("accel", "accelerometer")
+# the words that make an acceleration a joint's, a gripper's or an end effector's (a joint_accel is the arm's motion,
+# not an inertial reading); an imu or gyro word, or the message type, still says IMU beside them (/gripper_left/imu)
+NOT_IMU_ACCEL_WORDS = ("joint", "qacc", "qvel", "gripper", "finger", "jaw", "ee", "eef", "effector")
+IMU_MESSAGE_TYPES = ("sensor_msgs/msg/Imu", "sensor_msgs/Imu")
+MCAP_SOURCE = "MCAP channel "
+
+
+def imu_topics(ctx: dict) -> frozenset:
+    """The MCAP topics whose message type is an IMU (IMU_MESSAGE_TYPES), from the field inventories preparation keeps
+    (prepare/formats.py retain_mcap_fields)."""
+    return frozenset(channel.get("topic") for archive in [ctx, *(ctx.get("recorded_sensor_fields") or [])]
+                     for channel in archive.get("mcap_field_inventory") or []
+                     if channel.get("schema") in IMU_MESSAGE_TYPES)
+
+
+def is_imu(name: str, source: str | None = None, imu_topics=frozenset()) -> bool:
+    """Whether a recorded stream is an IMU's readings: its MCAP topic's message type is an IMU (source "MCAP channel
+    <topic>" with the topic in imu_topics), so every field of it is one, or a word of its name (prepare/formats.py
+    word_tokens, as every name matcher reads it) is imu, gyro or gyroscope, or accel or accelerometer with no word of a
+    joint, gripper or end effector beside it. A command is never a reading. An IMU's fields (linear_acceleration,
+    angular_velocity, orientation) are IMU as part of a stream named or typed so; alone, and a joint's, a base's or a
+    gripper's velocity or acceleration, they are not."""
+    from prepare.formats import COMMAND_WORDS, _names_word
+    if isinstance(source, str) and source.startswith(MCAP_SOURCE) and source[len(MCAP_SOURCE):] in imu_topics:
+        return True
+    if _names_word(name, COMMAND_WORDS):
+        return False
+    return _names_word(name, IMU_WORDS) or (_names_word(name, ACCEL_WORDS)
+                                             and not _names_word(name, NOT_IMU_ACCEL_WORDS))
+
+
 def names_scalar_observed_state(name: str) -> bool:
     """A scalar can disprove absent arm state only when its name identifies a joint or observed arm state.
     Sensor readings, bookkeeping and commands do not establish that state, even under observation.*."""

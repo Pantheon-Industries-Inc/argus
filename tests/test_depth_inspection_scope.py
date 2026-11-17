@@ -1,5 +1,5 @@
 """Depth alone does not buy an evidence selection call under --inspection auto (label/evidence_access.py
-inspection_reason); its pictures still ride in the request, and --inspection all still inspects it. The dry run
+inspection_reason), with its pictures in the request (--depth-pictures on) or not, and --inspection all still inspects it. The dry run
 records why each unit will or will not be inspected, and review counts it before spending."""
 import argparse
 import json
@@ -30,7 +30,9 @@ def test_a_depth_recording_is_not_inspected_by_default_and_is_with_all(tmp_path)
     assert episode.load(home)['depth']
     auto = episode.build_request(home, inspect_evidence=True)
     assert auto['evidence_access'] is None and auto['inspection_reason'] is None
-    assert auto['depth_s'] and 'depth' in auto['blocks']    # its pictures still ride in the request
+    assert 'depth_s' not in auto and 'depth' in auto['blocks']    # a new policy sends the note, not the pictures
+    pictures = episode.build_request(home, inspect_evidence=True, depth_pictures='on')
+    assert pictures['depth_s'] and pictures['evidence_access'] is None    # nor do its pictures buy an inspection
     every = episode.build_request(home, inspect_evidence=True, inspection='all')
     assert every['evidence_access'] is not None and every['inspection_reason'] == 'all'
 

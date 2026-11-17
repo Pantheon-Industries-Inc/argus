@@ -533,10 +533,12 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                   reserve_final=None, reserve_selection=None, settle_selection=None, force_refresh=False,
                   settle_final=None,
                   sample_fps=None, task_mode=None, dataset_note=None, require_known_pricing=False,
-                  inspection_refresh_id=None, inspection=None, allow_unverified_fees=False) -> dict:
+                  inspection_refresh_id=None, inspection=None, allow_unverified_fees=False, imu=None,
+                  depth_pictures=None) -> dict:
     context = json.loads((Path(ep_dir) / 'context.json').read_text())
     resolved = policy.resolve(context, model=model, reasoning=reasoning, sample_fps=sample_fps,
-                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
+                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection,
+                              imu=imu, depth_pictures=depth_pictures)
     model, reasoning = resolved['model'], resolved['reasoning']
     if not dry_run and not is_openrouter_key(api_key) and not model.startswith('openai/'):
         raise ValueError(f'{model} requires an OpenRouter key; no request was dispatched.')
@@ -551,7 +553,8 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                                       service_tier='flex' if tier.reserves_flex() else None)
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                               cell_w=cell_w, example_dir=example_dir, sample_fps=sample_fps,
-                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
+                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection,
+                              imu=imu, depth_pictures=depth_pictures)
     if any(item.get('missing') for item in identity['source_proof']):
         raise RuntimeError('Request source inputs are missing; no paid request was dispatched.')
     billing = _billing_fields(out_path)
@@ -565,6 +568,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                            max_cell_w=route_w, example_dir=example_dir, inspect_evidence=True,
                            model=model, reasoning=reasoning, sample_fps=sample_fps,
                            task_mode=task_mode, dataset_note=dataset_note, inspection=policy.inspection_mode(resolved),
+                           imu=policy.imu_mode(resolved), depth_pictures=policy.depth_pictures_mode(resolved),
                            derived_dir=Path(out_path).parent / ".derived" / "jaws")
     pl = req["plan"]
     fields = {
@@ -669,7 +673,7 @@ def request_implementation(repository: Path) -> dict[Path, bytes]:
 
 def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int, cell_w: int,
                    example_dir: str | None, sample_fps=None, task_mode=None, dataset_note=None,
-                   inspection=None) -> dict:
+                   inspection=None, imu=None, depth_pictures=None) -> dict:
     """Bounded proof for source files and the settings that shape a paid annotation request."""
     from label.evidence_access import source_proof, reader_projection_identity
     ep_dir = Path(ep_dir)
@@ -686,7 +690,8 @@ def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int,
     if problem:
         raise RuntimeError(f'{ep_dir}: {problem}')
     resolved = policy.resolve(ctx, model=model, reasoning=reasoning, sample_fps=sample_fps,
-                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)
+                              task_mode=task_mode, dataset_note=dataset_note, inspection=inspection,
+                              imu=imu, depth_pictures=depth_pictures)
     me.require_request_window(ep_dir, {**ctx, 'annotation_policy': resolved})
     from label.dictionary_editor import for_episode
     owner = (ctx.get('piece') or {}).get('of') or (ctx.get('data_dictionary') or {}).get('episode_id') or ep_dir.name
@@ -1636,7 +1641,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                 cell_w=settings['cell_w'], example_dir=fields.get('example_dir'),
                 sample_fps=selected.get('sample_fps'), task_mode=selected.get('task_mode'),
                 dataset_note=selected.get('dataset_note'),
-                inspection=policy.inspection_mode(selected))
+                inspection=policy.inspection_mode(selected), imu=policy.imu_mode(selected),
+                depth_pictures=policy.depth_pictures_mode(selected))
             valid = same_input_identity(saved, current) and not any(item.get('missing') for item in current['source_proof'])
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
             valid = False
@@ -2195,7 +2201,8 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                                      example_dir=label_kw.get("example_dir"),
                                      sample_fps=label_kw.get('sample_fps'), task_mode=label_kw.get('task_mode'),
                                      dataset_note=label_kw.get('dataset_note'),
-                        inspection=label_kw.get('inspection'))
+                        inspection=label_kw.get('inspection'), imu=label_kw.get('imu'),
+                        depth_pictures=label_kw.get('depth_pictures'))
         except (OSError, ValueError, RuntimeError) as error:
             if never_dispatched:
                 saved_failures.add(ep.name)
@@ -2249,6 +2256,12 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                     # labelled before inspection could be set, when every recorded field was inspected
                     hint = (f'; it was labelled before inspection could be set, so add --inspection '
                             f'{policy.LEGACY_INSPECTION} to resume it as it was paid for')
+                now = (current.get('settings') or {}).get('annotation_policy') or {}
+                if (isinstance(saved_policy, dict) and not {'imu', 'depth_pictures'} & set(saved_policy)
+                        and policy.names_constants(now)):
+                    # labelled before the IMU and depth picture settings, when both were given
+                    hint += ('; it was labelled before IMU rows and depth pictures could be left out, so add --imu on '
+                             '--depth-pictures on to resume it as it was paid for')
                 mode = saved_policy.get('task_mode') if isinstance(saved_policy, dict) else None
                 if mode in policy.TASK_MODES:
                     # labelled in the episode or session mode, before every recording became a list of tasks
@@ -2412,7 +2425,8 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                         cell_w=label_kw.get('cell_w', 0), example_dir=label_kw.get('example_dir'),
                         sample_fps=label_kw.get('sample_fps'), task_mode=label_kw.get('task_mode'),
                         dataset_note=label_kw.get('dataset_note'),
-                        inspection=label_kw.get('inspection'))
+                        inspection=label_kw.get('inspection'), imu=label_kw.get('imu'),
+                        depth_pictures=label_kw.get('depth_pictures'))
                     if not same_input_identity(claim.get('input_identity'), current) or any(
                             item.get('missing') for item in current['source_proof']):
                         raise RuntimeError('Request inputs changed while waiting for spend allowance; no dispatch.')
@@ -2537,7 +2551,8 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                     max_tokens=label_kw.get('max_tokens', 64000), cell_w=label_kw.get('cell_w', 0),
                     example_dir=label_kw.get('example_dir'), sample_fps=label_kw.get('sample_fps'),
                     task_mode=label_kw.get('task_mode'), dataset_note=label_kw.get('dataset_note'),
-                        inspection=label_kw.get('inspection'))
+                        inspection=label_kw.get('inspection'), imu=label_kw.get('imu'),
+                        depth_pictures=label_kw.get('depth_pictures'))
             except (OSError, ValueError, RuntimeError):
                 pass
         requested_model = (previous.get('model') or
@@ -2708,7 +2723,7 @@ def main() -> int:
                     allow_unverified_fees=args.allow_unverified_fees, model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run,
                     sample_fps=args.sample_fps, dataset_note=args.dataset_note,
-                    inspection=args.inspection)
+                    inspection=args.inspection, imu=args.imu, depth_pictures=args.depth_pictures)
     if args.episode_dir:
         target = args.out or (args.episode_dir / 'labels.json')
         claim = target.with_name(f'noreply_{target.name}')
