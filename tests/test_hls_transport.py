@@ -68,7 +68,7 @@ def test_hls_browser_preserves_passthrough_pts_seek_and_bounded_buffer(tmp_path)
     source=Path('board/index.html').read_text()
     helpers=source[source.index('function isHlsSource('):source.index('function posterAttr(')]
     page='''<video id="mp4" src="clip.mp4" muted controls></video><video id="hls" data-hls-src="index.m3u8" muted controls></video><script>
-const append=document.head.appendChild.bind(document.head);document.head.appendChild=s=>{if(s.src.includes('hls.js@1.6.19/'))s.src='sdk.js';return append(s);};
+window.__errs=[];addEventListener('error',e=>window.__errs.push(String(e.message)+' @'+e.filename+':'+e.lineno));addEventListener('unhandledrejection',e=>window.__errs.push('rej '+String(e.reason&&e.reason.stack||e.reason)));const append=document.head.appendChild.bind(document.head);document.head.appendChild=s=>{if(s.src.includes('hls.js@1.6.19/'))s.src='sdk.js';return append(s);};
 const owner=new AbortController();
 '''+helpers+"attachVideoSources(document,owner.signal);</script>"
     (tmp_path/'page.html').write_text(page)
@@ -83,7 +83,9 @@ const owner=new AbortController();
             sid=send('Target.attachToTarget',{'targetId':tid,'flatten':True})['sessionId']
             def js(code):
                 result=send('Runtime.evaluate',{'expression':code,'returnByValue':True,'awaitPromise':True},sid,deadline=time.monotonic()+20)
-                assert 'exceptionDetails'not in result,result
+                if 'exceptionDetails' in result:
+                    ex = result['exceptionDetails']
+                    raise AssertionError('JSEXC ' + json.dumps({'text': ex.get('text'), 'desc': (ex.get('exception') or {}).get('description'), 'line': ex.get('lineNumber'), 'col': ex.get('columnNumber')}))
                 return result['result'].get('value')
             deadline=time.monotonic()+15
             while not js("[...document.querySelectorAll('video')].every(v=>v.readyState>=2)"):
@@ -91,11 +93,11 @@ const owner=new AbortController();
                 time.sleep(.05)
             result=js("""(async()=>{const videos=[...document.querySelectorAll('video')],times={mp4:[],hls:[]};let measure=true;
 for(const v of videos){const tick=(now,md)=>{if(measure){times[v.id].push(md.mediaTime);v.requestVideoFrameCallback(tick)}};v.requestVideoFrameCallback(tick);}
-const ev=[];const h0=document.getElementById('hls');for(const k of ['waiting','stalled','playing','play','pause','error','canplay','seeking','seeked','emptied','loadeddata'])h0.addEventListener(k,()=>ev.push([k,+performance.now().toFixed(0),h0.currentTime]));const t0=performance.now();await Promise.all(videos.map(v=>v.play()));const tplay=performance.now()-t0;await new Promise(r=>setTimeout(r,2100));measure=false;const diag={tplay,rs:h0.readyState,ns:h0.networkState,paused:h0.paused,ct:h0.currentTime,err:h0.error&&h0.error.code,buf:[...Array(h0.buffered.length).keys()].map(i=>[h0.buffered.start(i),h0.buffered.end(i)]),ev,mp4ct:document.getElementById('mp4').currentTime,ua:navigator.userAgent,hw:navigator.hardwareConcurrency};console.log('DIAG');window.__diag=diag;videos.forEach(v=>v.pause());
+const ev=[];const h0=document.getElementById('hls');window.__errs=window.__errs||[];for(const k of ['waiting','stalled','playing','play','pause','error','canplay','seeking','seeked','emptied','loadeddata'])h0.addEventListener(k,()=>ev.push([k,+performance.now().toFixed(0),h0.currentTime]));const t0=performance.now();await Promise.all(videos.map(v=>v.play()));const tplay=performance.now()-t0;await new Promise(r=>setTimeout(r,2100));measure=false;const diag={tplay,rs:h0.readyState,ns:h0.networkState,paused:h0.paused,ct:h0.currentTime,err:h0.error&&h0.error.code,buf:[...Array(h0.buffered.length).keys()].map(i=>[h0.buffered.start(i),h0.buffered.end(i)]),ev,mp4ct:document.getElementById('mp4').currentTime,ua:navigator.userAgent,hw:navigator.hardwareConcurrency};console.log('DIAG');window.__diag=diag;videos.forEach(v=>v.pause());
 const h=document.getElementById('hls'),ahead=h.buffered.end(h.buffered.length-1)-h.currentTime;
 const sought=new Promise(r=>h.requestVideoFrameCallback((now,md)=>r(md.mediaTime)));h.currentTime=18.4;
-const seekTime=await sought;owner.abort();return {times,ahead,seekTime,disposed:!h._hlsTransport,source:h.getAttribute('src'),diag:window.__diag};})()""")
-            import warnings; warnings.warn('HLSDIAG ' + json.dumps({'diag': result['diag'], 'counts': {k: len(v) for k, v in result['times'].items()}}))
+const seekTime=await sought;owner.abort();return {times,ahead,seekTime,disposed:!h._hlsTransport,source:h.getAttribute('src'),diag:window.__diag,errs:window.__errs,hasHls:!!window.Hls,transport:!!h._hlsTransport};})()""")
+            import warnings; warnings.warn('HLSDIAG ' + json.dumps({'errs': result.get('errs'), 'hasHls': result.get('hasHls'), 'diag': result['diag'], 'counts': {k: len(v) for k, v in result['times'].items()}}))
             for mode,times in result['times'].items():
                 assert len(times)>=8 and times[-1]-times[0]>=1.5,(mode,times)
                 assert all(min(abs(t-want)for want in expected)<1e-6 for t in times),(mode,times)
