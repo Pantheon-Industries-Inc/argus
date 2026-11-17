@@ -508,11 +508,14 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     assert [s["name"] for s in ctx["signals"]] == ["observation.state.chassis", "observation.state.torso", "next.done"]
     z = np.load(ep / "signals.npz")
     assert np.allclose(z[ctx["signals"][0]["key"]], base) and z["s2"].shape == (n, 1)
-    p = me.build_request(ep)["prompt"]
+    p = me.build_request(ep, imu="on", depth_pictures="on")["prompt"]
     table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
     assert "observation.state.chassis (3 unnamed values): 0 to 0.9, 0, 0 to 0.3" in table
-    # a value the same at every frame is named once, on one line with the others like it
+    # a value the same at every frame is named once, on one line with the others like it, and a new policy names it
+    # without its value (label/policy.py names_constants)
     assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table
+    assert ("Also recorded, each the same wherever it reads (values not given): observation.state.torso."
+            in me.build_request(ep)["prompt"])
     assert "next.done (1 value): 0 to 1" in table
     assert "task_index" not in table and "  index" not in table and "timestamp" not in table
     # an episode that records nothing else gets exactly the prompt it had before

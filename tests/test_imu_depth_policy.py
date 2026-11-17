@@ -71,6 +71,20 @@ def test_imu_off_alone_or_depth_pictures_off_alone_names_the_constant_streams():
         assert "(values not given): recorder.gain." in _signals_text(*_ego(**settings))
 
 
+def test_a_recording_with_no_imu_and_no_constant_stream_gets_the_prompt_it_got_before():
+    """An arm's joints and a base's odometry change, so a new policy leaves their signals block as it was."""
+    texts = []
+    for settings in ({}, {"imu": "on", "depth_pictures": "on"}):
+        ep, pl = CASES["teleop_video_only"]()
+        t = np.arange(len(ep["state"])) / 30.0
+        ep["signals"] = {"left_joint_pos": np.stack([0.3 * np.sin(0.4 * t + j) for j in range(6)], axis=1),
+                         "base.odom": np.stack([0.01 * t, 0 * t, 0.002 * t], axis=1)}
+        ep["signal_meta"] = {"left_joint_pos": {}, "base.odom": {"names": ["x", "y", "yaw"]}}
+        ep["context"]["annotation_policy"] = policy.resolve(ep["context"], **settings)
+        texts.append(_signals_text(ep, pl))
+    assert texts[0] == texts[1] and "    base.odom x: " in texts[0]
+
+
 @pytest.mark.parametrize("name, source", [
     ("ego.accel_mps2", None), ("left_wrist.gyro_rads_std", None), ("observation.base.imu", None),
     ("observation.state.chassis.imu", None), ("/robot0/sensor/imu angular_velocity", "MCAP channel /robot0/sensor/imu"),

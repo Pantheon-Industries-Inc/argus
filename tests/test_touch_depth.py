@@ -459,7 +459,7 @@ def test_unmatched_hdf_depth_keeps_its_source_identity_in_annotation(tmp_path, m
         headers.append(text)
         return original_text(self, xy, text, *args, **kwargs)
     monkeypatch.setattr(ImageDraw.ImageDraw, 'text', record_header)
-    request = me.build_request(ep['dir'], inspect_evidence=True)
+    request = me.build_request(ep['dir'], inspect_evidence=True, depth_pictures='on')
     assert any('depth_wrist (unpaired depth)' in text for text in headers)
     assert request['depth_s']
     assert any('stream depth_wrist (unpaired depth)' in part.get('text', '') for part in request['content'])

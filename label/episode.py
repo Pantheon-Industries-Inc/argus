@@ -1773,7 +1773,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
                            "They are not interpreted for you: read what each is from its name and the robot's description above. ")
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
             "name, with the range each of its values takes over the episode ("
-            + ("one that never changes is only named" if unchanging is not None else
+            + ("one that never changes is only named" if unchanging else
                "one that never changes is given as its value")
             + "). " + interpretation_note + "Like the rest of the recording they are claims to check against the video; a camera carried by "
             "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
