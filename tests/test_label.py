@@ -263,7 +263,7 @@ def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig,
     columns = ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation",
                "contribution", "progress"]
     if rig == "ego_head":
-        columns += ["hands_visible", "hands_wearing"]
+        columns += ["hands_visible", "left_hand_visible", "right_hand_visible", "hands_wearing"]
     columns += ["notes"]
     for text in (recorded, video):
         offered = json.loads(re.search(r'"timeline_columns": (\[[^\]]+\])', text).group(1))
