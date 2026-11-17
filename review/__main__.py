@@ -2,7 +2,7 @@
 
     python -m review --data PATH_OR_URL --rig teleop_arms|handheld_gripper|ego_head --out JOB \\
         [--dataset NAME] [--free] [--cap 20] [--concurrency N] [--max-minutes M] [--grouping JSON]
-        [--inspection auto|all|off] [--signals auto|all|off] [--field-dictionary on|off]
+        [--inspection auto|all|off] [--field-dictionary on|off]
 
 PATH_OR_URL is a folder, a file or an archive, or an http(s) URL of a file or an archive, which is downloaded into
 JOB/upload first. Everything else is written under JOB, and the data itself is never edited. These are the stages
@@ -383,7 +383,7 @@ def main() -> int:
     if a.max_tokens is not None and a.max_tokens <= 0:
         ap.error('--max-tokens must be positive')
     overrides = {key: getattr(a, key) for key in ("model", "reasoning", "sample_fps", "dataset_note", "inspection",
-                                                  "field_dictionary", "signals")}
+                                                  "field_dictionary")}
     policy.resolve({"profile": a.rig}, **overrides)
 
     if a.force and a.retry_received:
