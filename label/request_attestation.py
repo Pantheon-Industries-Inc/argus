@@ -52,7 +52,7 @@ def matches(record: dict, current: dict, ep_dir: Path, out_dir: Path, *, example
             grid_cols=harness.GRID_COLS, cell_w=settings['cell_w'] or None, max_cell_w=route_width,
             example_dir=example_dir, inspect_evidence=True, model=settings['model'], reasoning=settings['reasoning'],
             sample_fps=policy.get('sample_fps'), task_mode=policy.get('task_mode'), dataset_note=policy.get('dataset_note'),
-            inspection=harness.policy.inspection_mode(policy), signals=harness.policy.signals_mode(policy),
+            inspection=harness.policy.inspection_mode(policy),
             derived_dir=Path(out_dir) / '.derived' / 'jaws', read_only=True)
         for key, field in (('cell', 'cell'), ('grid_cols', 'grid_cols'), ('timesteps_s', 'timesteps'),
                            ('views', 'views'), ('cam_labels', 'cam_labels')):

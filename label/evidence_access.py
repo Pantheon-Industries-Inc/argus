@@ -666,13 +666,7 @@ class Access:
                     **({'action_semantics': semantics} if semantics else {}),
                     **{key: proof[key] for key in ('names', 'units') if key in proof},
                     'interpretation': prepared_interpretation(ctx, kind, kind)})
-        # every stream the signals policy keeps fetchable (label/policy.py SIGNAL_TREATMENT inspection), whatever the
-        # main prompt carries of it: a constant setting or bookkeeping has nothing to fetch under auto and off
-        from label.episode import signal_treatments
-        fetchable = signal_treatments(self.ep) if self.ep.get('signals') else {}
         for name, a in self.ep.get('signals', {}).items():
-            if not fetchable[name]['inspection']:
-                continue
             meta = self.ep.get('signal_meta', {}).get(name, {})
             private = {}
             stored = next((m for m in ctx.get('signals') or [] if m['name'] == name), {})

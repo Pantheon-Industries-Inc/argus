@@ -42,8 +42,7 @@ def landed(tmp_path_factory):
         assert not rep["failed"], (name, rep["failed"])
         ep = root / "eps" / name / rep["episodes"][0]["episode_id"]
         ctx = json.loads((ep / "context.json").read_text())
-        # the module fixture is made before tests/conftest.py pins the signals setting, so it names all itself
-        req = me.build_request(ep, signals="all")
+        req = me.build_request(ep)
         prompt = req["prompt"].split("THE EPISODE TO LABEL.", 1)[1]
         board = {}
         # the request stands in for the labelling result: it holds the contacts it found when the context has none
