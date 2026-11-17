@@ -43,15 +43,6 @@ def test_invalid_visibility_stays_unknown_and_legacy_export_stays_legacy():
     assert 'left_hand_visible' not in event and 'right_hand_visible' not in event
 
 
-def test_visibility_filter_includes_either_hand_and_does_not_guess_unknown():
-    d = {'_rig':'ego_head','duration_s':4,'event_labels':[
-        {'t_s':0,'end_s':1,'left_hand_visible':False,'right_hand_visible':True},
-        {'t_s':1,'end_s':2,'left_hand_visible':True,'right_hand_visible':False},
-        {'t_s':2,'end_s':3,'hands_visible':False},
-        {'t_s':3,'end_s':4,'left_hand_visible':None,'right_hand_visible':None,'hands_visible':False}]}
-    assert Families().hands_hidden_seconds(d) == 3
-
-
 def test_canonical_badge_labels_and_legacy_fallback():
     subprocess.run(['node','-e',r'''
 const assert=require('node:assert/strict'),{piece}=require('./tests/page_functions')();

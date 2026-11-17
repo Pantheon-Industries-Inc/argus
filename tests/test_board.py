@@ -251,10 +251,6 @@ def test_families_classify_and_the_counting_rule():
     assert cam("Persistent glare obscures the circuit board.") == "low-light"
     assert cam("an issue") == "d:Camera fault"
     assert fam.catalog()["camera-fault"]["name"] == "Camera turned away or covered"
-    ego = {"_rig": "ego_head", "event_labels": [{"t_s": 0.0, "end_s": 4.0, "hands_visible": False},
-                                                {"t_s": 2.0, "end_s": 6.0, "hands_visible": False},
-                                                {"t_s": 6.0, "end_s": 9.0, "hands_visible": True}]}
-    assert fam.hands_hidden_seconds(ego) == 6.0 and fam.hands_hidden_seconds({"_rig": "teleop_arms"}) is None
 
 
 def test_capture_check_names_come_from_the_code():
@@ -1050,12 +1046,6 @@ def test_a_dataset_label_with_no_time_is_kept_untimed_and_never_breaks_the_build
     assert d["dataset_labels"] == [{"t0": None, "t1": None, "label": "wipe the table", "step": 1},
                                    {"t0": None, "t1": 3.0, "label": "odd start", "step": 2},
                                    {"t0": 2.0, "t1": 2.0, "label": "open", "step": 3}]
-
-
-def test_an_untimed_step_never_breaks_the_hands_out_of_view_total():
-    d = {"_rig": "ego_head", "event_labels": [{"t_s": None, "end_s": 4.0, "hands_visible": False},
-                                              {"t_s": 1.0, "end_s": 3.0, "hands_visible": False}]}
-    assert Families().hands_hidden_seconds(d) == 2.0
 
 
 def test_the_page_lists_untimed_steps_rules_set_aside_and_withheld_checks():

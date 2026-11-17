@@ -1811,8 +1811,8 @@ def _rail_record(p: Path, d: dict) -> dict:
         # which problems the episode has (board/families.py): the families that count, and those it has only
         # below the counting bar
         **_families(d),
-        # head cameras only: seconds in which the wearer's hands are out of view (None on any other rig)
-        "hands_hidden_s": FAMILIES.hands_hidden_seconds(d),
+        # head cameras: the label's seconds with both hands, only the left and only the right out of frame
+        **({"hands_out": d["hands_out"]} if isinstance(d.get("hands_out"), dict) else {}),
         # the board's own model reply gave no labels (board/to_board.py label_failed): unparsed or cut_off
         **({"label_failed": d["_label_failed"].get("status")} if isinstance(d.get("_label_failed"), dict) else {}),
         # a long recording labelled in parts, some of which gave no labels (label/pieces.py stitch_run)

@@ -46,7 +46,7 @@ import numpy as np
 
 from board.label_projection import LABEL_SCHEMA, recording_completion
 from label.atomic import write_atomic
-from label import policy, wording
+from label import hand_visibility, policy, wording
 from label.task_claims import claims as task_claims
 from prepare.frame_rate import episode_seconds
 
@@ -819,6 +819,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path, src: Path | None
                 # issues of one category that report one condition or one event, grouped with every report kept
                 # (label/issue_groups.py); the answers are kept in job/issue_groups.json, so a later stitch reuses them
                 issue_groups.apply_in_stitch(result, Path(job) / "issue_groups.json", grouping_budget)
+            # the hands-out-of-frame figures over the whole recording, never a part's own (label/hand_visibility.py)
+            hand_visibility.attach(result, hand_visibility.episode_length(Path(eps) / ep))
             # last, after every rule that reads what the parts wrote: no wording about the labelling (label/wording.py)
             write_atomic(out / f"{ep}.json", wording.normalize_result(result), indent=None)
             res["stitched"] += 1
