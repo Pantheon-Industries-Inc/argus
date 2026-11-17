@@ -88,6 +88,10 @@ image = (
     .add_local_file(HERE / "core.py", "/opt/ace/ace_core.py", copy=True)
     .add_local_file(HERE.parent.parent / "prepare" / "display.py", "/opt/ace/display.py", copy=True)
     .add_local_file(HERE / "sync.py", "/opt/ace/hand_pose_sync.py", copy=True)
+    .add_local_file(HERE.parent.parent / "label" / "__init__.py", "/opt/ace/label/__init__.py", copy=True)
+    .add_local_file(HERE.parent.parent / "label" / "atomic.py", "/opt/ace/label/atomic.py", copy=True)
+    .add_local_file(HERE.parent.parent / "prepare" / "__init__.py", "/opt/ace/prepare/__init__.py", copy=True)
+    .add_local_file(HERE.parent.parent / "prepare" / "tools.py", "/opt/ace/prepare/tools.py", copy=True)
 )
 
 WINDOW, STRIDE = 22, 11                  # latents per window, and the step between windows (half overlap)
