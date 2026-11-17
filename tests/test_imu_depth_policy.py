@@ -103,8 +103,11 @@ def test_the_imu_topics_are_read_from_the_mcap_message_types():
     ctx = {"mcap_field_inventory": [{"topic": "/camera/camera/accel/sample", "schema": "sensor_msgs/msg/Imu"},
                                     {"topic": "/livox/imu", "schema": "sensor_msgs/Imu"},
                                     {"topic": "/camera/camera/infra1/camera_info", "schema": "sensor_msgs/msg/CameraInfo"},
-                                    {"topic": "/tf", "schema": None}]}
-    assert sg.imu_topics(ctx) == {"/camera/camera/accel/sample", "/livox/imu"}
+                                    {"topic": "/tf", "schema": None},
+                                    {"topic": "/robot0/sensor/imu", "schema": "foxglove.IMUMeasurement"},
+                                    {"topic": "/robot0/sensor/magnetic_encoder",
+                                     "schema": "foxglove.MagneticEncoderMeasurement"}]}
+    assert sg.imu_topics(ctx) == {"/camera/camera/accel/sample", "/livox/imu", "/robot0/sensor/imu"}
 
 
 def test_a_new_policy_sends_no_depth_picture_and_keeps_the_depth_note(tmp_path):

@@ -291,14 +291,14 @@ def names_joints_or_state(name: str) -> bool:
             and not _names_word(name, COMMAND_WORDS))
 
 
-# An inertial sensor's own words, and the message type a ROS IMU is recorded as (sensor_msgs/msg/Imu, whose fields are
-# orientation, angular_velocity and linear_acceleration and their covariances)
+# An inertial sensor's own words, and the message types an IMU is recorded as in MCAP (ROS sensor_msgs/msg/Imu, whose
+# fields are orientation, angular_velocity and linear_acceleration and their covariances, and Foxglove's)
 IMU_WORDS = ("imu", "gyro", "gyroscope")
 ACCEL_WORDS = ("accel", "accelerometer")
 # the words that make an acceleration a joint's, a gripper's or an end effector's (a joint_accel is the arm's motion,
 # not an inertial reading); an imu or gyro word, or the message type, still says IMU beside them (/gripper_left/imu)
 NOT_IMU_ACCEL_WORDS = ("joint", "qacc", "qvel", "gripper", "finger", "jaw", "ee", "eef", "effector")
-IMU_MESSAGE_TYPES = ("sensor_msgs/msg/Imu", "sensor_msgs/Imu")
+IMU_MESSAGE_TYPES = ("sensor_msgs/msg/Imu", "sensor_msgs/Imu", "foxglove.IMUMeasurement")   # the last: RealOmin
 MCAP_SOURCE = "MCAP channel "
 
 
