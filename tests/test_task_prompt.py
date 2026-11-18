@@ -45,7 +45,7 @@ def main(rig, recorded=True):
             text = text.replace(old, new)
     if rig in TWO_ACTORS:
         assert text.count(TWO_ACTORS_BEFORE) == 1
-        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + TWO_ACTORS_BEFORE)
+        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + CONTACT[rig] + TWO_ACTORS_BEFORE)
     return text
 
 
@@ -558,3 +558,13 @@ def test_a_robot_with_no_arms_has_no_such_rule_and_a_humanoid_keeps_it():
     assert 'When two arms act at the same moment' not in legged
     assert 'Every timeline step has arm "body"' in legged
     assert flat(TWO_ACTORS['teleop_arms']) in humanoid
+
+
+# An approved edit (2026-11-18) to every rig's timeline note: each contact names the part of the object it is at, when
+# the frames show it plainly. The test holds its own copy, as for the edits above.
+CONTACT = {rig: f"""- Name the part of the object each contact is at. In a step where the {actor} touches an object (grasping,
+  pushing, pressing, pulling, placing, turning or any other contact), name the part it touches when the frames show
+  it plainly: the middle, an edge or a corner of a card; the cap, body or base of a bottle; the ears, head or body of
+  a stuffed animal; the handle or tip of a tool. For example "grasp the card by its corner", "push the bottle at its
+  base". Leave the part out when it is not plain; do not work it out.
+""" for rig, actor in {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}.items()}

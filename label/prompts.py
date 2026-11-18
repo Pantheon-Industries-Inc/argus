@@ -1182,6 +1182,19 @@ def two_actors_note(actor: str) -> str:
 """
 
 
+# Which part of an object a contact is at: a step's action named the object but not where it was taken or touched
+# ("grasp card" for a card taken by its corner, "grasp bottle" for one taken by the cap). Every contact verb and every
+# rig, but only the part and only when plain: asking also for the direction of each contact raised Sol 6.1's reasoning,
+# and its cost per take by about 15 to 50% (2026-11-18). It goes just before the terse rule.
+def contact_note(actor: str) -> str:
+    return f"""- Name the part of the object each contact is at. In a step where the {actor} touches an object (grasping,
+  pushing, pressing, pulling, placing, turning or any other contact), name the part it touches when the frames show
+  it plainly: the middle, an edge or a corner of a card; the cap, body or base of a bottle; the ears, head or body of
+  a stuffed animal; the handle or tip of a tool. For example "grasp the card by its corner", "push the bottle at its
+  base". Leave the part out when it is not plain; do not work it out.
+"""
+
+
 def lean(r: str, has_instruction: bool = True) -> str:
     """The note that keeps the timeline at the level of action phases, with the acting part named as the rig
     names it, and the sections it leaves unchanged named as the request asks for them."""
@@ -1189,16 +1202,16 @@ def lean(r: str, has_instruction: bool = True) -> str:
                           "frames that are the same ongoing action." + UNHELD_CONTACT_NOTE)
     if r == "handheld_gripper":
         s = _replace_once(robot, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
-        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("gripper") + TWO_ACTORS_BEFORE)
+        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("gripper") + contact_note("gripper") + TWO_ACTORS_BEFORE)
     elif r == "ego_head":
         s = _replace_once(LEAN_NOTE, "by ONE arm", "by ONE hand").replace("acting arm", "acting hand")
-        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("hand") + TWO_ACTORS_BEFORE)
+        s = _replace_once(s, TWO_ACTORS_BEFORE, two_actors_note("hand") + contact_note("hand") + TWO_ACTORS_BEFORE)
         return _replace_once(s, "(completion, goal_alignment, key_events, data_issues, recovery,\n  state_changes, "
                                 "scene)",
                              "(tasks, goal_alignment, key_events, data_issues, operator_mistakes,\n  recovery, "
                              "state_changes, scene)")
     else:
-        s = _replace_once(robot, TWO_ACTORS_BEFORE, two_actors_note("arm") + TWO_ACTORS_BEFORE)
+        s = _replace_once(robot, TWO_ACTORS_BEFORE, two_actors_note("arm") + contact_note("arm") + TWO_ACTORS_BEFORE)
     return _replace_once(s, "(completion, goal_alignment,", "(completion, tasks, goal_alignment," if has_instruction
                          else "(tasks, goal_alignment,")
 
