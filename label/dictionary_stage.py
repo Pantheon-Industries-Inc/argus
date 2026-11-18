@@ -61,7 +61,8 @@ def remaining_label_budget(job: Path, cap: float) -> float:
 
 
 def _label_receipts(out: Path):
-    from label.harness import episode_cost, billing_record, final_history_complete, auxiliary_history_complete, inspection_billed
+    from label.harness import (episode_cost, billing_record, charge_settled, final_history_complete,
+                               auxiliary_history_complete, inspection_billed)
     from label.evidence_access import recover_selection_reservations
     out = Path(out)
     if not out.exists():
@@ -81,7 +82,7 @@ def _label_receipts(out: Path):
                     raise ValueError('saved label cost is not verified')
                 value = episode_cost(record)
                 complete = (final_history_complete(record) and auxiliary_history_complete(record)
-                            and record.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+                            and charge_settled(record)
                             and not ((record.get('config') or {}).get('resolution_route') or {}).get(
                                 'cost_is_conservative_estimate')
                             and not (record.get('evidence_inspection') or {}).get('cost_is_conservative_estimate'))

@@ -15,10 +15,12 @@ def _uploads_read_in_this_process(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _automatic_resends_without_waiting(monkeypatch):
-    """A unit the provider failed is sent again after a backoff (label/harness.py AUTO_RESEND_DELAYS_S); tests send it
-    again at once."""
+    """A unit the provider failed is sent again after a backoff (label/harness.py AUTO_RESEND_DELAYS_S), and a batch
+    waits for OpenRouter to publish a cut-off reply's generation record (GENERATION_RECORD_WAITS_S); tests do both
+    at once."""
     from label import harness
     monkeypatch.setattr(harness, 'AUTO_RESEND_DELAYS_S', (0.0,) * len(harness.AUTO_RESEND_DELAYS_S))
+    monkeypatch.setattr(harness, 'GENERATION_RECORD_WAITS_S', (0.0,) * len(harness.GENERATION_RECORD_WAITS_S))
 
 
 @pytest.fixture

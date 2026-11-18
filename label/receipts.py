@@ -50,6 +50,10 @@ def billing_summary(annotation: dict, path=None) -> dict:
         outcome = invoice.get('final_dispatch_outcome')
         if outcome == 'not dispatched' or invoice.get('dry_run'):
             return
+        if outcome in ('claimed', 'unverified') and invoice.get('final_reserved_source') == 'generation lookup':
+            # the hold was replaced by what OpenRouter billed for the generation (harness.resolve_unanswered_charges)
+            billed += _amount(invoice.get('final_reserved_usd')) or 0.0
+            return
         if outcome in ('claimed', 'unverified'):
             complete = False
             reserved += _amount(invoice.get('final_reserved_usd')) or 0.0
