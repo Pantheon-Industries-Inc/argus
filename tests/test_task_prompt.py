@@ -45,10 +45,20 @@ def main(rig, recorded=True):
             text = text.replace(old, new)
     if rig in TWO_ACTORS:
         assert text.count(TWO_ACTORS_BEFORE) == 1
-        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + CONTACT[rig] + TWO_ACTORS_BEFORE)
+        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + DIRECTION[rig] + CONTACT[rig] + TWO_ACTORS_BEFORE)
     return text
 
 
+
+
+# An approved edit (2026-11-18) to every rig's timeline note: a step names which way the actor or the object moves, in
+# the actor's own frame, when the frames show it plainly. The test holds its own copy, as for the edits below.
+_FRAME = {'arm': "the robot's own frame", 'gripper': 'the frame of the person holding the gripper',
+          'hand': "the wearer's own frame"}
+DIRECTION = {rig: f"""- Name the direction of motion when the frames show it plainly. When a step moves the {actor} or an object,
+  say which way in {_FRAME[actor]} (left or right, forward or back, up or down), never in a camera's frame.
+  Leave it out when it is not plain; do not work it out.
+""" for rig, actor in {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}.items()}
 
 # An approved edit (2026-11-18) to every rig's naming rules: on ABC-130k episode_ce55ec68 the labels called a black
 # jar cap dark green. Asked plainly about the same images, the model said black; in the larger views the camera's
