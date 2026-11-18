@@ -1090,6 +1090,43 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     assert board["event_labels"][0]["verb_class"] == "reach" and board["completion"]["task_completed"] == "success"
 
 
+CLAUDE, SOL = "anthropic/claude-fable-5.2", "openai/gpt-6.1-sol"
+
+
+def test_claude_requests_step_down_under_openrouters_30mb_image_cap(tmp_path, monkeypatch):
+    """OpenRouter refuses an Anthropic request over 30MB of images with HTTP 413 (issue #266). A request whose images
+    count between the 30MB and 50MB caps is stepped down for Claude and left alone for OpenAI."""
+    counted = 40_000_000
+    assert me.image_limit_bytes(CLAUDE) == 30_000_000 < counted < me.image_limit_bytes(SOL) == 50 * 1024 * 1024
+    assert me.image_limit_bytes(None) == me.image_limit_bytes("openai/gpt-6-astra") == me.IMAGE_LIMIT_BYTES
+    ep, _ = _packed_episode(tmp_path)
+    sol, claude = me.build_request(ep, model=SOL), me.build_request(ep, model=CLAUDE)
+    assert sol["cell"][0] == claude["cell"][0] == me.GRID_CELL_W_BY_RIG["teleop_arms"]
+    # the same request in miniature: both caps scaled down by one factor, so this episode's images count between them,
+    # with the room kept for the full-resolution detail views set to what this episode's two views take
+    scale = claude["image_bytes"] * me.IMAGE_SIZE_INFLATION / counted
+    parts = claude["content"]
+    detail = sum(len(base64.b64decode(p["image_url"]["url"].split(",", 1)[1])) for t, p in zip(parts, parts[1:])
+                 if t["type"] == "text" and t["text"].startswith("=== detail view") and p["type"] == "image_url")
+    assert 0 < detail < claude["image_bytes"]
+    monkeypatch.setattr(me, "DETAIL_VIEW_BYTES_MAX", detail)
+    monkeypatch.setattr(me, "IMAGE_LIMIT_BYTES", 50 * 1024 * 1024 * scale)
+    monkeypatch.setattr(me, "ANTHROPIC_IMAGE_LIMIT_BYTES", 30_000_000 * scale)
+    assert me.build_request(ep, model=SOL)["content"] == sol["content"]
+    # this fixture's flat grey frames compress to the same bytes at every width, so only the step down is checked here
+    assert me.build_request(ep, model=CLAUDE)["cell"][0] < claude["cell"][0]
+    # the harness refuses to send a Claude request over its cap, and never refuses an OpenAI one on the 30MB cap
+    out = tmp_path / "out" / "episode_000007.json"
+    out.parent.mkdir()
+    send = dict(fields={}, reasoning="high", api_key="sk-or-x", max_tokens=100, timeout=1, dry_run=True)
+    with pytest.raises(RuntimeError, match="image-size cap"):
+        harness._call_and_record(ep, out, claude["content"], claude["image_bytes"], model=CLAUDE, **send)
+    try:
+        harness._call_and_record(ep, out, sol["content"], sol["image_bytes"], model=SOL, **send)
+    except Exception as error:
+        assert "image-size cap" not in str(error)
+
+
 def test_request_body_is_what_the_harness_docstring_says(monkeypatch):
     """The body sent: model, reasoning effort, output limit, JSON mode, a cache breakpoint closing the shared
     instructions and the billed usage; no temperature, top_p, seed or provider pin."""

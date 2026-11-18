@@ -74,6 +74,16 @@ DETAIL_VIEW_BYTES_MAX = 2_000_000   # room kept under the cap for the two full-r
 # inflated size is bounded with a margin.
 IMAGE_LIMIT_BYTES = 50 * 1024 * 1024
 IMAGE_SIZE_INFLATION = 1.85
+# OpenRouter refuses an Anthropic request whose downloaded image content exceeds 30MB (HTTP 413), so Claude requests
+# get the lower cap, counted the same way. The decimal 30,000,000 sits under either reading of "30MB".
+ANTHROPIC_IMAGE_LIMIT_BYTES = 30_000_000
+
+
+def image_limit_bytes(model) -> float:
+    """The image-size cap of one request to this model, as the provider counts it (raw bytes x IMAGE_SIZE_INFLATION)."""
+    return ANTHROPIC_IMAGE_LIMIT_BYTES if str(model or '').startswith('anthropic/') else IMAGE_LIMIT_BYTES
+
+
 # The first and last instant are also sent larger, for small detail (lettering, a display, fine
 # alignment). Image tokens scale with pixel area, so each camera is capped at this width: 768 px is above
 # MolmoAct2's native 640 px (where lettering and displays read fine), while native 1920 px frames would
@@ -3148,7 +3158,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     scene_parts, scene_pairing, scene_bytes = sensor_scene.collect(ep, pl['sensor_evidence'],
         shown=pairing_shown, gate=gate, width=max(widths), grid_cols=grid_cols,
         quality=grid_quality, detail=detail)
-    budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX - array_bytes - native_bytes
+    budget = (image_limit_bytes(ep['context']['annotation_policy']['model']) / IMAGE_SIZE_INFLATION
+              - DETAIL_VIEW_BYTES_MAX - array_bytes - native_bytes
               - scene_bytes - sum(len(j) for _, _, j in contact))
     # the blocks follow from the episode and its plan, never from the cell width: found once, for every width and the
     # record

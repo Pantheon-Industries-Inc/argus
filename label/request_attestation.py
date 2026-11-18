@@ -64,7 +64,7 @@ def matches(record: dict, current: dict, ep_dir: Path, out_dir: Path, *, example
         if access is not None:
             doc, extra = ea.replay_selection(access, record.get('evidence_inspection'))
             content, _, _ = ea.final_content(content, request['image_bytes'], access, doc, extra,
-                image_limit=harness.MAX_IMAGES, image_bytes_limit=harness.IMAGE_LIMIT_BYTES,
+                image_limit=harness.MAX_IMAGES, image_bytes_limit=harness.me.image_limit_bytes(settings['model']),
                 image_inflation=harness.IMAGE_SIZE_INFLATION)
         analysis = sa.build(content, request['sensor_evidence'], config={
             **(record.get('config') or {}), 'model': settings['model'], 'reasoning': settings['reasoning'],
