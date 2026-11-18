@@ -45,7 +45,7 @@ def main(rig, recorded=True):
             text = text.replace(old, new)
     if rig in TWO_ACTORS:
         assert text.count(TWO_ACTORS_BEFORE) == 1
-        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + TWO_ACTORS_BEFORE)
+        text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + CONTACT[rig] + TWO_ACTORS_BEFORE)
     return text
 
 
@@ -558,3 +558,16 @@ def test_a_robot_with_no_arms_has_no_such_rule_and_a_humanoid_keeps_it():
     assert 'When two arms act at the same moment' not in legged
     assert 'Every timeline step has arm "body"' in legged
     assert flat(TWO_ACTORS['teleop_arms']) in humanoid
+
+
+# An approved edit (2026-11-18) to every rig's timeline note: each contact names the part of the object it is at and
+# the direction it comes from, where the frames show them. The test holds its own copy, as for the edits above.
+CONTACT = {rig: f"""- Name how each contact is made. In a step where the {actor} touches an object (grasping, pushing, pressing,
+  pulling, placing, inserting, turning, wiping or any other contact), the action says which part of the object it
+  touches and, where the frames show it, from which direction: the middle, an edge or a corner of a flat object such
+  as a card or a sheet; the cap, neck, body or base of a bottle; the head, an ear, a leg or the body of a toy figure;
+  the handle, blade or tip of a tool; from above, from the side, from below or end-on. For example "grasp the card by
+  its near edge from above", "push the block from its left side", "press the button at its centre". Name only what
+  the frames show, and leave the part or direction out when it cannot be made out. One short phrase is enough; this is
+  the one place an action string may run longer than terse.
+""" for rig, actor in {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}.items()}
