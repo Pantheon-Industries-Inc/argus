@@ -1,13 +1,14 @@
 'use strict';
 const fs = require('fs');
 const assert = require('assert');
-const source = require('./page_functions')(process.argv[2]).src;
+const {src: source, piece} = require('./page_functions')(process.argv[2]);
 const begin = source.indexOf('// ================= sensor evidence:');
 const end = source.indexOf('// ================= touch:', begin);
 assert(begin >= 0 && end > begin, 'sensor evidence presentation is missing');
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 const fmtT = t => t.toFixed(1) + 's';
-const E = new Function('esc', 'fmtT', source.slice(begin, end)
+// the phase labels name each step with the page's stepPhrase
+const E = new Function('esc', 'fmtT', piece('stepPhrase') + source.slice(begin, end)
   + 'return {sensorEvidence, activeSensorEvidence, sensorEvidenceHtml, sensorEvidenceOverlayHtml, setupSensorEvidence, '
   + 'sensorProfiles, sensorProfileAt, sensorProfileHtml, sensorPhasesHtml, sensorMedianTrace, sensorTraceHtml, sensorDistributionHtml, gripFindingStripHtml, gripEvidencePanelHtml};')(esc, fmtT);
 const c = {id:'c1', hand:'right', start_s:0, end_s:4, from_start:true, to_end:true, dips_s:[], shown:true,
