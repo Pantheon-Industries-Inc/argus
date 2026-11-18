@@ -204,6 +204,11 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
 Rules:
 - Name objects by what you actually see. There is no fixed vocabulary.
   If you cannot tell what something is, describe it by shape/colour.
+- When you name an object's colour, be sure of it: name it from the clearest, closest view of it you have,
+  since a small or dark object in a low-resolution cell can look tinted.
+- Some objects look alike or are identical. Refer to each one consistently, in whatever way works, but
+  everything you say about an object must be true of it: never give it a property it does not have just to
+  tell it apart.
 - Ground visual annotations in the frames; when unsure, say so in notes rather than guessing.
   Separate sensor_findings can describe information supported by supplied sensor readings even when RGB does not
   show it. Keep the stated measurement limits.
@@ -561,6 +566,11 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
 Rules:
 - Name objects by what you actually see. There is no fixed vocabulary.
   If you cannot tell what something is, describe it by shape/colour.
+- When you name an object's colour, be sure of it: name it from the clearest, closest view of it you have,
+  since a small or dark object in a low-resolution cell can look tinted.
+- Some objects look alike or are identical. Refer to each one consistently, in whatever way works, but
+  everything you say about an object must be true of it: never give it a property it does not have just to
+  tell it apart.
 - Ground visual annotations in the frames; when unsure, say so in notes rather than guessing.
   Separate sensor_findings can describe information supported by supplied sensor readings even when RGB does not
   show it. Keep the stated measurement limits.
