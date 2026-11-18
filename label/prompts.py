@@ -1182,20 +1182,16 @@ def two_actors_note(actor: str) -> str:
 """
 
 
-# Which part of an object a contact is at, and from which direction: a step's action named the object but not where
-# it was taken or touched ("grasp card" for a card taken by its near corner, "grasp bottle" for one taken by the cap),
-# which loses what a policy needs to learn the contact. Every contact verb, every rig, and only what the frames show,
-# since a part or direction that cannot be seen is left out rather than guessed. It goes just before the terse rule,
-# whose one exception it is.
+# Which part of an object a contact is at: a step's action named the object but not where it was taken or touched
+# ("grasp card" for a card taken by its corner, "grasp bottle" for one taken by the cap). Every contact verb and every
+# rig, but only the part and only when plain: asking also for the direction of each contact raised Sol 6.1's reasoning,
+# and its cost per take by about 15 to 50% (2026-11-18). It goes just before the terse rule.
 def contact_note(actor: str) -> str:
-    return f"""- Name how each contact is made. In a step where the {actor} touches an object (grasping, pushing, pressing,
-  pulling, placing, inserting, turning, wiping or any other contact), the action says which part of the object it
-  touches and, where the frames show it, from which direction: the middle, an edge or a corner of a flat object such
-  as a card or a sheet; the cap, neck, body or base of a bottle; the head, an ear, a leg or the body of a toy figure;
-  the handle, blade or tip of a tool; from above, from the side, from below or end-on. For example "grasp the card by
-  its near edge from above", "push the block from its left side", "press the button at its centre". Name only what
-  the frames show, and leave the part or direction out when it cannot be made out. One short phrase is enough; this is
-  the one place an action string may run longer than terse.
+    return f"""- Name the part of the object each contact is at. In a step where the {actor} touches an object (grasping,
+  pushing, pressing, pulling, placing, turning or any other contact), name the part it touches when the frames show
+  it plainly: the middle, an edge or a corner of a card; the cap, body or base of a bottle; the ears, head or body of
+  a stuffed animal; the handle or tip of a tool. For example "grasp the card by its corner", "push the bottle at its
+  base". Leave the part out when it is not plain; do not work it out.
 """
 
 
