@@ -3043,7 +3043,7 @@ function vdStepAt(d, t) {
   if (k < 0) return null;
   const e = ev[k];
   const t1 = (e.end_s != null && e.end_s > e.t_s) ? e.end_s : (ev[k + 1] ? ev[k + 1].t_s : e.t_s + 1);
-  return {t0: Number(e.t_s), t1: Number(t1), what: e.verb_class || ''};
+  return {t0: Number(e.t_s), t1: Number(t1), what: e.verb_class ? stepPhrase(e) : ''};
 }
 function buildVideoMenu() {
   if (!_vdEp) return;
@@ -4402,12 +4402,47 @@ function showEpisodeError(file, err) {
     + `(${esc(err && err.message || 'no response')}). Open it again to retry.</div>`;
 }
 
+// A step's text: the model's phrase for it (verb_class), with the step's object put in when the phrase leaves it out.
+// GPT models usually write the object into the phrase ("release chess piece to right"), and Fable 5.2 often writes
+// bare verbs with the object only in its own column ("carry to centre" with object "playing card"), which read with
+// no object at all (2026-11-18). The object is put in only where it cannot read wrong: the phrase does not name it
+// already, every word before the first preposition is one of the words below, and the last of them is a verb that acts
+// on an object ("carry", "release"). A phrase with a noun of its own ("grasp the two handles" of a rolling pin), a
+// gripper's own motion ("return to cup", "reach for red connector") or a particle ("pull back") is shown as written.
+// The object goes before that preposition ("carry the playing card to centre") or last ("reach and grasp the playing
+// card"), with "the" unless it has a determiner already.
+function stepPhrase(e) {
+  const preps = new Set(['to', 'into', 'onto', 'on', 'in', 'at', 'from', 'toward', 'towards', 'between', 'beside',
+    'over', 'under', 'across', 'near', 'with', 'through', 'along', 'around', 'behind', 'above', 'below',
+    'against', 'inside', 'by', 'for', 'until', 'past']);
+  // verbs whose object is the thing handled, never the gripper itself
+  const acts = new Set(['release', 'carry', 'grasp', 'regrasp', 're-grasp', 'lift', 'lower', 'raise', 'place', 'set',
+    'put', 'lay', 'push', 'pull', 'hold', 'slide', 'turn', 'rotate', 'flip', 'tilt', 'twist', 'pick', 'drop', 'press',
+    'insert', 'stack', 'hand', 'pass', 'take', 'bring', 'transfer', 'shake', 'toss', 'throw', 'fold', 'unfold',
+    'steady', 'squeeze', 'pinch', 'grab', 'catch', 'seat', 'drag', 'roll', 'spin', 'tuck', 'thread', 'hang', 'carry,']);
+  // words that may come between those verbs: the reach before a grasp, and how a thing is laid
+  const between = new Set(['and', 'then', 'again', 'reach', 'flat', 'upright', 'briefly', 'slowly', 'gently', 'fully']);
+  const v = String((e && e.verb_class) || '').trim();
+  const o = String((e && e.object) || '').trim();
+  if (!v) return o ? 'handle the ' + o : 'move';
+  if (!o) return v;
+  const said = v.toLowerCase();
+  const named = (o.toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => w.length > 2);
+  if (named.some(w => new RegExp('(^|[^a-z0-9])' + w).test(said))) return v;
+  const toks = v.split(/\s+/);
+  const word = t => t.toLowerCase().replace(/[^a-z-]/g, '');
+  let at = toks.findIndex((t, i) => i > 0 && preps.has(word(t)));
+  if (at < 0) at = toks.length;
+  const head = toks.slice(0, at).map(word);
+  if (!head.length || !acts.has(head[head.length - 1]) || !head.every(w => acts.has(w) || between.has(w))) return v;
+  const noun = /^(the|a|an|this|that|these|those|its|their|each|both|all|one|two|three|four|\d+)\s/i.test(o) ? o : 'the ' + o;
+  return [...toks.slice(0, at), noun, ...toks.slice(at)].join(' ');
+}
+
 function buildPhrase(e) {
-  // verb_class is the model's full phrase for the step (e.g. "Raise and rotate the empty wrists into working
-  // orientations"), so it is rendered as it is. object usually repeats a noun already in the phrase, so it is not
-  // appended. carry_phase (a destination, prefixed "-> ") becomes a separate chip without its arrow, so the chip
-  // reads as a place.
-  const v = e.verb_class || (e.object ? ('handle the ' + e.object) : 'move');
+  // the step's phrase (stepPhrase) is rendered as it is. carry_phase (a destination, prefixed "-> ") becomes a
+  // separate chip without its arrow, so the chip reads as a place.
+  const v = stepPhrase(e);
   let chipHtml = '';
   let carry = (e.carry_phase || '').trim();
   if (carry) {
@@ -5991,7 +6026,7 @@ function sensorProfiles(d, D) {
       values.sort((a, b) => a - b);
       const middle = values.length >> 1;
       const median = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
-      p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class || 'Action').replace(/[\u2013\u2014]/g, '-'),
+      p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class ? stepPhrase(e) : 'Action').replace(/[\u2013\u2014]/g, '-'),
         percent: Math.round(100 * median / p.peak), samples: values.length, total: total.length});
     }
     p.traceIndex = out.length;
@@ -7480,7 +7515,7 @@ function renderEp(d, opts) {
     if (e.t_s == null) continue;
     const pct = (onTl(e.t_s) / duration) * 100;
     const cls = contribClass(e.contribution);
-    const tip = `${fmtT(e.t_s)}   ${esc(e.verb_class || '')}`;
+    const tip = `${fmtT(e.t_s)}   ${e.verb_class ? stepPhrase(e) : ''}`;
     markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${esc(e.t_s)}"><div class="tip">${esc(tip)}`
       + `</div></div>`;
   }

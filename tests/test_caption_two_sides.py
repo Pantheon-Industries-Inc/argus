@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(not shutil.which('node'), reason='no node')
 SCRIPT = r'''
 const {piece} = require(process.argv[1])();
 const [steps, times] = JSON.parse(process.argv[2]);
-const code = "let ARM_NOUN = 'grippers';\n" + ['esc', 'fmtT', 'armLabel', 'contribText', 'contribClass', 'buildPhrase',
+const code = "let ARM_NOUN = 'grippers';\n" + ['esc', 'fmtT', 'armLabel', 'contribText', 'contribClass', 'stepPhrase', 'buildPhrase',
   'captionSteps', 'captionRowHtml', 'captionHtml'].map(piece).join('')
   + `const w = ${JSON.stringify(steps)}.map((e, i) => ({t0: e.t_s, t1: e.end_s != null ? e.end_s : e.t_s + 1.0,
        ev: {...e, event_idx: i}})).sort((a, b) => a.t0 - b.t0);
