@@ -210,7 +210,11 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "arm": s.get("arm") or "",
             "verb_class": s.get("action") or "",
             "object": s.get("object") or "",
+            # carry_phase keeps its "-> <destination>" form (the board caption and lerobot_export.step_text parse it),
+            # so a step with both a destination and a relation ("wire basket", "inside basket") carries the relation
+            # in its own field rather than losing it
             "carry_phase": (f"-> {dest}" if dest else ""),
+            "spatial_relation": s.get("spatial_relation") or "",
             "contribution": s.get("contribution") or "",
             **({'activity_scope': s['activity_scope']} if s.get('activity_scope') else {}),
             "progress": s.get("progress"),

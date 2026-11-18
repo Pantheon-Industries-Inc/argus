@@ -245,5 +245,6 @@
  "tests/test_whole_body_prompt.py": 2.0,
  "tests/test_wording.py": 0.5,
  "tests/test_worker_deaths.py": 2.6,
- "tests/test_zip_recovery.py": 3.0
+ "tests/test_zip_recovery.py": 3.0,
+ "tests/test_spatial_relation_export.py": 0.3
 }
