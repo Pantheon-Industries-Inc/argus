@@ -37,6 +37,8 @@ def main(rig, recorded=True):
     text = text.replace(*IDLE_LOW)
     assert text.count(FACE_TIMED[0]) == 1
     text = text.replace(*FACE_TIMED)
+    assert text.count(NAMING[0]) == 1
+    text = text.replace(*NAMING)
     if rig != 'ego_head':
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
@@ -46,6 +48,23 @@ def main(rig, recorded=True):
         text = text.replace(TWO_ACTORS_BEFORE, TWO_ACTORS[rig] + TWO_ACTORS_BEFORE)
     return text
 
+
+
+# An approved edit (2026-11-18) to every rig's naming rules: on ABC-130k episode_ce55ec68 the labels called a black
+# jar cap dark green. Asked plainly about the same images, the model said black; in the larger views the camera's
+# green cast on black objects shows, and in a scene of five similar containers each was named by its cap colour.
+# The edit asks for colours judged from the clearest view, and lets look-alike or identical objects be told apart
+# by any consistent reference without giving one a property it does not have. The test holds its own copy.
+NAMING = (
+    "  If you cannot tell what something is, describe it by shape/colour.\n- Ground visual",
+    """  If you cannot tell what something is, describe it by shape/colour.
+- When you name an object's colour, be sure of it: name it from the clearest, closest view of it you have,
+  since a small or dark object in a low-resolution cell can look tinted.
+- Some objects look alike or are identical. Refer to each one consistently, in whatever way works, but
+  everything you say about an object must be true of it: never give it a property it does not have just to
+  tell it apart.
+- Ground visual""",
+)
 
 # An approved edit (2026-11-03) to every rig's timeline note: over 1,043 real steps of 12 UMI windows only 9
 # left and right steps overlapped in time, so when the two grippers did different things at once (the left grasps one
