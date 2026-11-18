@@ -267,7 +267,7 @@ A request refused with a transient status (408, 409, 425, 429, 500, 502, 503 or 
 
 **Cost caps**
 
-A capped run uses verified model rates or a saved OpenRouter pricing quote and refuses unknown prices. Until a bill arrives, Argus reserves an upper bound from the request's text and images plus its full output limit, about $3.70 for a short teleop episode on the default model. A request killed before its reply keeps its reservation until the next run or [`--resume`](label/run.py) asks OpenRouter what it billed. Field interpretation and teleop image routing always use `openai/gpt-6-sol` and count against the cap. A cap refusal exits nonzero and keeps each unfinished unit for resume.
+A capped run uses verified model rates or a saved OpenRouter pricing quote and refuses unknown prices. Until a bill arrives, Argus reserves an upper bound from the request's text and images plus its full output limit, about $3.70 for a short teleop episode on the default model. A request whose reply never arrives keeps its reservation until Argus asks OpenRouter what it billed, before resending it, at the end of the batch, or on [`--resume`](label/run.py). Field interpretation and teleop image routing always use `openai/gpt-6-sol` and count against the cap. A cap refusal exits nonzero and keeps each unfinished unit for resume.
 
 **Other checks**
 

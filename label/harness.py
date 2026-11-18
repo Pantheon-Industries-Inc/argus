@@ -842,10 +842,16 @@ def final_history_cost(record: dict) -> float:
     return sum(_history_cost(invoice) for invoice in history)
 
 
+def charge_settled(invoice: dict) -> bool:
+    """Whether an attempt's charge is known: it got a priced reply, was never dispatched, or its hold was replaced by
+    what OpenRouter billed for its generation (resolve_unanswered_charges)."""
+    return (invoice.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+            or invoice.get('final_reserved_source') == 'generation lookup')
+
+
 def final_history_complete(record: dict) -> bool:
     final_history_cost(record)
-    return all(invoice.get('final_dispatch_outcome') not in ('claimed', 'unverified')
-               for invoice in record.get('final_cost_history', []))
+    return all(charge_settled(invoice) for invoice in record.get('final_cost_history', []))
 
 
 def auxiliary_cost(value: dict, *, routing=False) -> float:
@@ -1020,18 +1026,25 @@ def _settled_generation_cost(data) -> float | None:
     return float(cost) if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0 else None
 
 
-def resolve_unanswered_charges(out_dir: Path, keys, *, lookup=None) -> dict:
+# How long to wait, in turn, for OpenRouter to publish the record of a generation whose reply was cut off, before a
+# batch ends with its hold. The record appears seconds after the generation finishes; a missing one may only be late.
+GENERATION_RECORD_WAITS_S = (5.0, 15.0, 40.0)
+
+
+def resolve_unanswered_charges(out_dir: Path, keys, *, lookup=None, names=None) -> dict:
     """Replace the hold of each final call that never got its reply with what OpenRouter billed for it.
 
     A claimed or unverified final call holds final_cost_bound, the price of its whole prompt and its full output
     limit, because the provider may still bill it. When the claim names its generation (final_generation_id, saved
     from the response headers) and OpenRouter has that generation, the hold becomes its billed total_cost, in the
     claim and in every later receipt's final_cost_history. A call with no saved id, or one OpenRouter has no record of,
-    keeps its full hold: a missing record may only be late."""
+    keeps its full hold: a missing record may only be late (counted in pending). names, when given, limits it to
+    those episodes' files (eg {'episode_000007.json'})."""
     out_dir, lookup = Path(out_dir), lookup or openrouter_generation
-    found, resolved, released, unresolved = {}, 0, 0.0, 0
+    found, resolved, released, unresolved, pending = {}, 0, 0.0, 0, 0
     for path in sorted(out_dir.glob('*episode_*.json')):
-        if not path.name.removeprefix('failed_').removeprefix('noreply_').startswith('episode_'):
+        name = path.name.removeprefix('failed_').removeprefix('noreply_')
+        if not name.startswith('episode_') or (names is not None and name not in names):
             continue
         try:
             record = json.loads(path.read_text())
@@ -1054,6 +1067,7 @@ def resolve_unanswered_charges(out_dir: Path, keys, *, lookup=None) -> dict:
             cost = _settled_generation_cost(found[generation])
             if cost is None:
                 unresolved += 1
+                pending += 1
                 continue
             hold = invoice.get('final_reserved_usd')
             released += (float(hold) if type(hold) in (int, float) else 0.0) - cost
@@ -1065,7 +1079,7 @@ def resolve_unanswered_charges(out_dir: Path, keys, *, lookup=None) -> dict:
             changed = True
         if changed:
             write_atomic(path, record)
-    return {'resolved': resolved, 'released_usd': released, 'unresolved': unresolved}
+    return {'resolved': resolved, 'released_usd': released, 'unresolved': unresolved, 'pending': pending}
 
 
 def has_dispatch_receipt(record: dict) -> bool:
@@ -2520,7 +2534,11 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                       f'{delay:g}s (automatic, at most {AUTO_RESENDS + 1} sends)', file=sys.stderr, flush=True)
                 if stopping.wait(delay):
                     break
+                # a reply cut off in transit (eg IncompleteRead) was still finished and billed by OpenRouter: count
+                # the attempt at what its generation cost, not its hold, before the unit is paid for again
+                settled = resolve_unanswered_charges(out_dir, keys, names={out_for(ep).name})
                 with spend_lock:
+                    spent['usd'] -= settled['released_usd']
                     pending[ep] = 0.0
                     spend_lock.notify_all()
                 result = work_claimed(ep)
@@ -2609,6 +2627,15 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
         return 130
     finally:
         ex.shutdown(wait=True, cancel_futures=True)
+    if not dry:
+        # each attempt whose reply never arrived but whose generation OpenRouter finished is counted at what it billed,
+        # so the run's cost is complete; a record OpenRouter has not published yet is waited for a little
+        settled = resolve_unanswered_charges(out_dir, keys)
+        for delay in GENERATION_RECORD_WAITS_S:
+            if not settled['pending']:
+                break
+            time.sleep(delay)
+            settled = resolve_unanswered_charges(out_dir, keys)
     print(f"\ndone={done} failed={failed} skipped={skipped} "
           f"total_cost=${total_cost:.2f} out_dir={out_dir} retired_keys={len(pool.dead)}", flush=True)
     if fails:
