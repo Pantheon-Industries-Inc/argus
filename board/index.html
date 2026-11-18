@@ -3043,7 +3043,7 @@ function vdStepAt(d, t) {
   if (k < 0) return null;
   const e = ev[k];
   const t1 = (e.end_s != null && e.end_s > e.t_s) ? e.end_s : (ev[k + 1] ? ev[k + 1].t_s : e.t_s + 1);
-  return {t0: Number(e.t_s), t1: Number(t1), what: e.verb_class || ''};
+  return {t0: Number(e.t_s), t1: Number(t1), what: e.verb_class ? stepPhrase(e) : ''};
 }
 function buildVideoMenu() {
   if (!_vdEp) return;
@@ -4402,12 +4402,26 @@ function showEpisodeError(file, err) {
     + `(${esc(err && err.message || 'no response')}). Open it again to retry.</div>`;
 }
 
+// A step's text: the model's phrase for it (verb_class), with the step's object after it when the phrase does not
+// already name it. GPT models usually write the object into the phrase ("release chess piece to right"), but a third
+// of Sol 6.1's steps and 42% of Fable 5.2's leave it to the object column ("carry" with object "soccer ball"), and
+// shown alone those read as "carry" with no object (2026-11-18). The phrase names the object when any word of three
+// or more letters of the object starts a word of the phrase.
+function stepPhrase(e) {
+  const v = String((e && e.verb_class) || '').trim();
+  const o = String((e && e.object) || '').trim();
+  if (!v) return o ? 'handle the ' + o : 'move';
+  if (!o) return v;
+  const said = v.toLowerCase();
+  const words = (o.toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => w.length > 2);
+  if (words.some(w => new RegExp('(^|[^a-z0-9])' + w).test(said))) return v;
+  return v + ' ' + o;
+}
+
 function buildPhrase(e) {
-  // verb_class is the model's full phrase for the step (e.g. "Raise and rotate the empty wrists into working
-  // orientations"), so it is rendered as it is. object usually repeats a noun already in the phrase, so it is not
-  // appended. carry_phase (a destination, prefixed "-> ") becomes a separate chip without its arrow, so the chip
-  // reads as a place.
-  const v = e.verb_class || (e.object ? ('handle the ' + e.object) : 'move');
+  // the step's phrase (stepPhrase) is rendered as it is. carry_phase (a destination, prefixed "-> ") becomes a
+  // separate chip without its arrow, so the chip reads as a place.
+  const v = stepPhrase(e);
   let chipHtml = '';
   let carry = (e.carry_phase || '').trim();
   if (carry) {
@@ -5991,7 +6005,7 @@ function sensorProfiles(d, D) {
       values.sort((a, b) => a - b);
       const middle = values.length >> 1;
       const median = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
-      p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class || 'Action').replace(/[\u2013\u2014]/g, '-'),
+      p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class ? stepPhrase(e) : 'Action').replace(/[\u2013\u2014]/g, '-'),
         percent: Math.round(100 * median / p.peak), samples: values.length, total: total.length});
     }
     p.traceIndex = out.length;
@@ -7480,7 +7494,7 @@ function renderEp(d, opts) {
     if (e.t_s == null) continue;
     const pct = (onTl(e.t_s) / duration) * 100;
     const cls = contribClass(e.contribution);
-    const tip = `${fmtT(e.t_s)}   ${esc(e.verb_class || '')}`;
+    const tip = `${fmtT(e.t_s)}   ${e.verb_class ? stepPhrase(e) : ''}`;
     markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${esc(e.t_s)}"><div class="tip">${esc(tip)}`
       + `</div></div>`;
   }
