@@ -248,5 +248,6 @@
  "tests/test_zip_recovery.py": 3.0,
  "tests/test_spatial_relation_export.py": 0.3,
  "tests/test_step_phrase.py": 0.3,
- "tests/test_naming_colour_and_lookalikes.py": 0.3
+ "tests/test_naming_colour_and_lookalikes.py": 0.3,
+ "tests/test_motion_direction_frame.py": 0.3
 }
